@@ -14,6 +14,9 @@ importers:
       '@tauri-apps/plugin-http':
         specifier: ^2.8.3
         version: 2.8.3
+      lucide-react:
+        specifier: ^1.59.0
+        version: 1.59.0(@types/react@19.3.0)(react@19.3.1)
       react:
         specifier: ^19.1.0
         version: 19.3.1
@@ -23,6 +26,9 @@ importers:
       youtubei.js:
         specifier: ^18.1.0
         version: 18.1.0
+      zustand:
+        specifier: ^5.0.15
+        version: 5.0.15(@types/react@19.3.0)(react@19.3.1)
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4.3.3
@@ -659,6 +665,15 @@ packages:
     resolution: {integrity: sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg==}
     engines: {node: 20 || >=22}
 
+  lucide-react@1.59.0:
+    resolution: {integrity: sha512-5qgMyyCPU6OvnKpLS2t693+ZtiqA8oaSweWoUows0BLFKFf6V75m4+CptpmohZHpD5IuOVIBXHBBiv2vpLJmtw==}
+    peerDependencies:
+      '@types/react': '*'
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -824,6 +839,24 @@ packages:
 
   youtubei.js@18.1.0:
     resolution: {integrity: sha512-4Goo3ZeO6/kE8Mq67eC8Z9K1rijeqRwyKxf/YM4lqf8bB4r/s8JC0V3YFx7+l/AJR3LnAsulTsiIj+AFe0cduA==}
+
+  zustand@5.0.15:
+    resolution: {integrity: sha512-MpSEjRiBkA9crSYeOUH32rJC7SVqAbm0Fqcqge/bUi2PPoLcBWKOsG+C8mevmpr8TwXHBVkChbbJiyvkE+i/3A==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@types/react': '>=18.0.0'
+      immer: '>=9.0.6'
+      react: '>=18.0.0'
+      use-sync-external-store: '>=1.2.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      immer:
+        optional: true
+      react:
+        optional: true
+      use-sync-external-store:
+        optional: true
 
 snapshots:
 
@@ -1253,6 +1286,12 @@ snapshots:
 
   lru-cache@11.5.3: {}
 
+  lucide-react@1.59.0(@types/react@19.3.0)(react@19.3.1):
+    dependencies:
+      react: 19.3.1
+    optionalDependencies:
+      '@types/react': 19.3.0
+
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.6.0
@@ -1380,3 +1419,8 @@ snapshots:
       '@bufbuild/protobuf': 2.16.0
       fflate: 0.8.3
       meriyah: 7.4.0
+
+  zustand@5.0.15(@types/react@19.3.0)(react@19.3.1):
+    optionalDependencies:
+      '@types/react': 19.3.0
+      react: 19.3.1

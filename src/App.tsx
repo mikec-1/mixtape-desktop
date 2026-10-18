@@ -1,91 +1,107 @@
-import { useRef, useState } from "react";
-import { fetchAudio, playAudio, search, type Track } from "./yt";
-
-// YT Music thumbnails come at 60px; ask for a sharper size.
-const big = (url?: string) => url?.replace(/=w\d+-h\d+/, "=w544-h544");
+import { useEffect, type CSSProperties } from "react";
+import { ChevronLeft, Disc3, LoaderCircle, Pause, Play, Search as SearchIcon, SkipBack, SkipForward, Volume2, VolumeX, type LucideIcon } from "lucide-react";
+import { audio, back, home, next, prev, toggle, useAudio, useStore } from "./store";
+import { Artist, Artists, NowPlaying, Search } from "./views";
+import { art } from "./yt";
 
 export default function App() {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Track[]>([]);
-  const [current, setCurrent] = useState<Track>();
-  const [status, setStatus] = useState("");
-  const audio = useRef<HTMLAudioElement>(null);
-  const latest = useRef<string>("");
+  const stack = useStore((s) => s.stack);
+  const nowPlaying = useStore((s) => s.nowPlaying);
 
-  async function onSearch(e: React.FormEvent) {
-    e.preventDefault();
-    if (!query.trim()) return;
-    setStatus("Searching…");
-    try {
-      setResults(await search(query));
-      setStatus("");
-    } catch (err) {
-      setStatus(String(err));
-    }
-  }
-
-  async function play(t: Track) {
-    latest.current = t.id;
-    setCurrent(t);
-    setStatus("Loading stream…");
-    try {
-      const track = await fetchAudio(t.id);
-      if (latest.current !== t.id) return; // user already picked another song
-      await playAudio(audio.current!, track);
-      setStatus("");
-    } catch (err) {
-      setStatus(String(err));
-    }
-  }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.target instanceof HTMLInputElement) return;
+      e.preventDefault();
+      toggle();
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
 
   return (
-    <div className="min-h-screen bg-neutral-50 text-neutral-900 antialiased">
-      <main className="mx-auto max-w-3xl px-6 pt-14 pb-40">
-        <h1 className="text-5xl font-bold tracking-tight">Search</h1>
-        <form onSubmit={onSearch} className="mt-6">
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Songs, artists…"
-            className="w-full rounded-2xl border border-neutral-200 bg-white px-5 py-3.5 text-lg shadow-sm outline-none transition focus:border-neutral-400 focus:shadow-md"
-          />
-        </form>
-        {status && <p className="mt-4 text-sm text-neutral-500">{status}</p>}
+    <div className="flex h-full">
+      {/* macOS draws the traffic lights over this strip (titleBarStyle: Overlay). */}
+      <div data-tauri-drag-region className="fixed inset-x-0 top-0 z-50 h-11" />
 
-        <ul className="mt-6 space-y-1">
-          {results.map((t) => (
-            <li key={t.id}>
-              <button
-                onClick={() => play(t)}
-                className={`flex w-full items-center gap-4 rounded-xl p-2 text-left transition hover:bg-neutral-200/60 active:scale-[0.99] ${current?.id === t.id ? "bg-neutral-200/60" : ""}`}
-              >
-                <img src={t.thumb} alt="" className="size-12 rounded-lg object-cover" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium">{t.title}</div>
-                  <div className="truncate text-sm text-neutral-500">{t.artists}</div>
-                </div>
-                <span className="text-sm tabular-nums text-neutral-400">{t.duration}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+      <nav className="flex w-[76px] shrink-0 flex-col items-center gap-1 pt-20">
+        <RailButton icon={SearchIcon} label="Search" active={!nowPlaying} onClick={home} />
+        <RailButton icon={Disc3} label="Now Playing" active={nowPlaying} onClick={() => useStore.setState((s) => ({ nowPlaying: !s.nowPlaying }))} />
+      </nav>
+
+      <main className="relative min-w-0 flex-1">
+        {/* Every view in the stack stays mounted, so going back keeps its results and scroll position. */}
+        {stack.map((view, i) => (
+          <div key={i + view.name + ("id" in view ? view.id : "")} hidden={i !== stack.length - 1} className="absolute inset-0 overflow-y-auto pb-36">
+            {view.name === "search" ? <Search /> : <Artist id={view.id} />}
+          </div>
+        ))}
+        {stack.length > 1 && (
+          <button onClick={back} aria-label="Back" className="glass absolute top-12 left-6 z-20 grid size-9 place-items-center rounded-full transition active:scale-95">
+            <ChevronLeft size={20} strokeWidth={2.4} />
+          </button>
+        )}
       </main>
 
-      <div className="fixed inset-x-0 bottom-5 flex justify-center px-5">
-        <div className="flex w-full max-w-3xl items-center gap-4 rounded-2xl border border-white/60 bg-white/70 p-3 shadow-xl shadow-black/10 backdrop-blur-xl">
-          {current ? (
-            <>
-              <img src={big(current.thumb)} alt="" className="size-12 rounded-lg object-cover" />
-              <div className="min-w-0 w-48">
-                <div className="truncate font-medium">{current.title}</div>
-                <div className="truncate text-sm text-neutral-500">{current.artists}</div>
-              </div>
-            </>
-          ) : (
-            <div className="w-64 pl-2 text-sm text-neutral-400">Nothing playing</div>
-          )}
-          <audio ref={audio} controls className="h-10 flex-1" />
+      {nowPlaying && <NowPlaying />}
+      <PlayerBar />
+    </div>
+  );
+}
+
+function RailButton({ icon: Icon, label, active, onClick }: { icon: LucideIcon; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} aria-label={label} title={label} className={`grid size-11 place-items-center rounded-xl transition hover:text-ink ${active ? "text-ink" : "text-muted"}`}>
+      <Icon size={22} strokeWidth={active ? 2.4 : 2} />
+    </button>
+  );
+}
+
+const fmt = (s: number) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "–:––");
+const fill = (v: number, max: number) => ({ "--p": `${(v / max) * 100 || 0}%` }) as CSSProperties;
+
+function PlayerBar() {
+  const track = useStore((s) => s.queue[s.index]);
+  const loading = useStore((s) => s.loading);
+  const error = useStore((s) => s.error);
+  const { paused, time, duration, volume, muted } = useAudio();
+
+  return (
+    <div className="fixed right-4 bottom-4 left-[76px] z-40">
+      <div className="glass relative isolate overflow-hidden rounded-[22px]">
+        {/* The only colour in the UI: the artwork, blurred behind the glass. */}
+        {track && <img src={art(track.thumb, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover opacity-45 blur-2xl" />}
+        <div className="grid grid-cols-[1fr_minmax(0,1.5fr)_1fr] items-center gap-6 py-2.5 pr-5 pl-2.5">
+          <div className="flex min-w-0 items-center gap-3">
+            <button onClick={() => useStore.setState((s) => ({ nowPlaying: !s.nowPlaying }))} aria-label="Now Playing" disabled={!track} className="size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] shadow-md shadow-black/15 transition active:scale-95">
+              {track && <img src={art(track.thumb, 120)} alt="" className="size-full object-cover" />}
+            </button>
+            <div className="min-w-0">
+              <div className="truncate font-semibold">{track?.title ?? "Not playing"}</div>
+              <div className="truncate text-sm text-ink/55">{error ? <span className="text-red-700">{error}</span> : track && <Artists list={track.artists} />}</div>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-center gap-0.5">
+            <div className="flex items-center gap-5">
+              <button onClick={prev} aria-label="Previous" className="transition active:scale-90"><SkipBack size={20} className="fill-current" /></button>
+              <button onClick={toggle} aria-label={paused ? "Play" : "Pause"} className="grid size-10 place-items-center rounded-full bg-ink text-paper transition active:scale-90">
+                {loading ? <LoaderCircle size={18} className="animate-spin" /> : paused ? <Play size={18} className="ml-0.5 fill-current" /> : <Pause size={18} className="fill-current" />}
+              </button>
+              <button onClick={next} aria-label="Next" className="transition active:scale-90"><SkipForward size={20} className="fill-current" /></button>
+            </div>
+            <div className="flex w-full items-center gap-3 text-[11px] font-medium text-ink/50 tabular-nums">
+              <span className="w-9 text-right">{fmt(time)}</span>
+              <input type="range" aria-label="Seek" min={0} max={duration || 0} step={0.1} value={time} onChange={(e) => (audio.currentTime = +e.target.value)} style={fill(time, duration)} className="flex-1" />
+              <span className="w-9">{fmt(duration)}</span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2.5">
+            <button onClick={() => (audio.muted = !muted)} aria-label={muted ? "Unmute" : "Mute"} className="text-ink/60">
+              {muted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+            </button>
+            <input type="range" aria-label="Volume" min={0} max={1} step={0.01} value={muted ? 0 : volume} onChange={(e) => ((audio.volume = +e.target.value), (audio.muted = false))} style={fill(muted ? 0 : volume, 1)} className="w-28" />
+          </div>
         </div>
       </div>
     </div>

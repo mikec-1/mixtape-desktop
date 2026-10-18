@@ -1,0 +1,31 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        {
+          "url": "https://*.youtube.com/*"
+        },
+        {
+          "url": "https://*.googlevideo.com/*"
+        },
+        {
+          "url": "https://*.google.com/*"
+        },
+        {
+          "url": "https://*.ytimg.com/*"
+        },
+        {
+          "url": "https://*.googleapis.com/*"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "potoken",
+  "description": "Hidden youtube.com window that mints PO tokens and sends them to the main window",
+  "windows": ["potoken"],
+  "remote": { "urls": ["https://www.youtube.com/*"] },
+  "permissions": ["core:event:default"]
+}

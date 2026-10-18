@@ -29,7 +29,7 @@ const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
       ? [{
           id: s.id,
           title: s.title ?? "",
-          artists: s.artists?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [],
+          artists: (s.artists ?? s.authors)?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [], // videos have authors
           album: s.album?.name,
           thumb: s.thumbnails?.[0]?.url,
           duration: s.duration?.text,
@@ -52,22 +52,30 @@ export async function search(query: string) {
   return { top, songs: toTracks(songs.songs?.contents?.filterType(YTNodes.MusicResponsiveListItem)) };
 }
 
-// The YT Music start page: its first home shelves (songs, new albums) plus Explore's new releases.
+export type Shelf = { title: string; tracks: Track[]; albums: Album[] };
+
+// The YT Music start page: its home shelves (two pages of them) followed by Explore's.
 let homeFeed: ReturnType<typeof loadHome> | undefined;
 // Fetched once per launch, so going back Home is instant. A failed load is retried next time.
 export const home = () => (homeFeed ??= loadHome().catch((e) => ((homeFeed = undefined), Promise.reject(e))));
 
-async function loadHome() {
+async function loadHome(): Promise<Shelf[]> {
   const music = (await yt).music;
-  const [feed, explore] = await Promise.all([music.getHomeFeed(), music.getExplore()]);
-  const shelves = [...(feed.sections ?? []), ...(explore.sections ?? [])].filter((s) => s.is(YTNodes.MusicCarouselShelf));
-  const find = (title: string) => shelves.find((s) => s.header?.title?.text === title)?.contents;
-  return {
-    picks: toTracks(find("Quick picks")?.filterType(YTNodes.MusicResponsiveListItem)),
-    trending: toTracks(find("Trending songs for you")?.filterType(YTNodes.MusicResponsiveListItem)),
-    releases: toAlbums(find("New releases")?.filterType(YTNodes.MusicTwoRowItem)),
-    more: toAlbums(find("New albums & singles")?.filterType(YTNodes.MusicTwoRowItem)),
-  };
+  const [feed, explore] = await Promise.all([
+    music.getHomeFeed().then(async (f) => [f, f.has_continuation ? await f.getContinuation().catch(() => undefined) : undefined]),
+    music.getExplore(),
+  ]);
+  const sections = [...feed.flatMap((f) => f?.sections ?? []), ...(explore.sections ?? [])];
+  return sections.flatMap((s) => {
+    if (!s.is(YTNodes.MusicCarouselShelf)) return [];
+    const shelf = {
+      title: s.header?.title?.text ?? "",
+      tracks: toTracks(s.contents.filterType(YTNodes.MusicResponsiveListItem)),
+      // Only things with a page of tracks: no artists, music videos or genre buttons.
+      albums: toAlbums(s.contents.filterType(YTNodes.MusicTwoRowItem).filter((i) => i.item_type === "album" || i.item_type === "playlist")),
+    };
+    return shelf.tracks.length || shelf.albums.length ? [shelf] : [];
+  });
 }
 
 export async function artist(id: string) {
@@ -85,18 +93,40 @@ export async function artist(id: string) {
   };
 }
 
-// Album tracks carry neither artwork nor artists; both come from the album header.
-export async function albumTracks(id: string): Promise<Track[]> {
-  const a = await (await yt).music.getAlbum(id);
-  const header = a.header?.as(YTNodes.MusicResponsiveHeader);
-  const run = header?.strapline_text_one.runs?.[0] as Misc.TextRun | undefined;
-  const by = { name: header?.strapline_text_one.text ?? "", id: run?.endpoint?.payload?.browseId };
-  return toTracks(a.contents).map((t) => ({
-    ...t,
-    artists: t.artists.length ? t.artists : [by],
-    album: header?.title.text,
-    thumb: header?.thumbnail?.contents?.[0]?.url,
-  }));
+export type Collection = { title: string; by?: Artist; kind?: string; meta: string[]; about?: string; thumb?: string; tracks: Track[] };
+
+// An album (MPRE… ids) or a playlist (VL…/PL… ids): both pages share YT Music's responsive header.
+export async function collection(id: string): Promise<Collection> {
+  const music = (await yt).music;
+  const album = id.startsWith("MPRE") ? await music.getAlbum(id) : undefined;
+  const page = album ?? (await music.getPlaylist(id));
+  const header = page.header?.as(YTNodes.MusicResponsiveHeader);
+  const run = header?.strapline_text_one?.runs?.[0] as Misc.TextRun | undefined;
+  const by = header?.strapline_text_one?.text ? { name: header.strapline_text_one.text, id: run?.endpoint?.payload?.browseId } : undefined;
+  const thumb = header?.thumbnail?.contents?.[0]?.url;
+  const [kind, year] = header?.subtitle?.text?.split(" • ") ?? [];
+  let tracks: Track[];
+  if (album) {
+    // Album tracks carry neither artwork nor artists; both come from the header.
+    tracks = toTracks(album.contents?.filterType(YTNodes.MusicResponsiveListItem)).map((t) => ({ ...t, artists: t.artists.length || !by ? t.artists : [by], album: header?.title.text, thumb }));
+  } else {
+    // ponytail: first 5 pages (~500 tracks); page in on scroll if huge playlists matter.
+    let p = page as Awaited<ReturnType<typeof music.getPlaylist>>;
+    tracks = toTracks(p.items?.filterType(YTNodes.MusicResponsiveListItem));
+    for (let i = 0; i < 4 && p.has_continuation; i++) {
+      p = await p.getContinuation();
+      tracks.push(...toTracks(p.items?.filterType(YTNodes.MusicResponsiveListItem)));
+    }
+  }
+  return {
+    title: header?.title.text ?? "",
+    by,
+    kind,
+    meta: [year, header?.second_subtitle?.text].filter((x): x is string => !!x),
+    about: header?.description?.description?.text,
+    thumb,
+    tracks,
+  };
 }
 
 // Without a proof-of-origin token googlevideo only serves the first ~1 MB of a stream. Tokens are bound

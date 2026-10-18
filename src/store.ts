@@ -1,8 +1,10 @@
 import { useSyncExternalStore } from "react";
 import { create } from "zustand";
-import { art, fetchAudio, playAudio, type Track } from "./yt";
+import { persist } from "zustand/middleware";
+import { art, fetchAudio, playAudio, type Album, type Track } from "./yt";
 
-export type View = { name: "home" } | { name: "search" } | { name: "artist"; id: string };
+// "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
+export type View = { name: "home" | "search" | "library" } | { name: "artist" | "collection" | "playlist"; id: string };
 
 type State = {
   stack: View[];
@@ -25,9 +27,28 @@ const { setState: set, getState: get } = useStore;
 
 export const open = (view: View) => set((s) => ({ stack: [...s.stack, view], nowPlaying: false }));
 export const back = () => set((s) => ({ stack: s.stack.slice(0, Math.max(1, s.stack.length - 1)) }));
-export const home = () => set({ stack: [{ name: "home" }], nowPlaying: false });
-export const searchView = () => set({ stack: [{ name: "search" }], nowPlaying: false });
+export const go = (name: "home" | "search" | "library") => set({ stack: [{ name }], nowPlaying: false });
 export const report = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e), loading: false });
+
+// Your library. ponytail: localStorage caps near 5 MB (tens of thousands of tracks); move to
+// tauri-plugin-sql when imports outgrow it.
+export type Playlist = { id: string; name: string; tracks: Track[] };
+type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[] };
+export const useLibrary = create<Library>()(persist((): Library => ({ liked: [], saved: [], playlists: [] }), { name: "library" }));
+const lib = useLibrary.setState;
+const toggleIn = <T extends { id: string }>(list: T[], x: T) => (list.some((y) => y.id === x.id) ? list.filter((y) => y.id !== x.id) : [x, ...list]);
+export const toggleLike = (t: Track) => lib((s) => ({ liked: toggleIn(s.liked, t) }));
+export const toggleSave = (a: Album) => lib((s) => ({ saved: toggleIn(s.saved, a) }));
+const edit = (id: string, fn: (p: Playlist) => Partial<Playlist>) => lib((s) => ({ playlists: s.playlists.map((p) => (p.id === id ? { ...p, ...fn(p) } : p)) }));
+export const addToPlaylist = (id: string, tracks: Track[]) => edit(id, (p) => ({ tracks: [...p.tracks, ...tracks] }));
+export const removeFromPlaylist = (id: string, index: number) => edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => i !== index) }));
+export const renamePlaylist = (id: string, name: string) => edit(id, () => ({ name }));
+export const deletePlaylist = (id: string) => lib((s) => ({ playlists: s.playlists.filter((p) => p.id !== id) }));
+export function newPlaylist(tracks: Track[] = []) {
+  const p = { id: crypto.randomUUID(), name: `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks };
+  lib((s) => ({ playlists: [...s.playlists, p] }));
+  return p.id;
+}
 
 export const audio = new Audio();
 

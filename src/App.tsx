@@ -1,7 +1,7 @@
 import { useEffect, type CSSProperties } from "react";
-import { ChevronLeft, Disc3, House, LoaderCircle, Pause, Play, Search as SearchIcon, SkipBack, SkipForward, Volume2, VolumeX, type LucideIcon } from "lucide-react";
-import { audio, back, home, next, prev, searchView, toggle, useAudio, useStore } from "./store";
-import { Artist, Artists, Home, NowPlaying, Search } from "./views";
+import { ChevronLeft, Disc3, Heart, House, Library as LibraryIcon, LoaderCircle, Pause, Play, Search as SearchIcon, SkipBack, SkipForward, Volume2, VolumeX, type LucideIcon } from "lucide-react";
+import { audio, back, go, next, prev, toggle, toggleLike, useAudio, useLibrary, useStore } from "./store";
+import { Artist, Artists, CollectionPage, Home, Library, NowPlaying, PlaylistPage, Search, trackMenu } from "./views";
 import { art } from "./yt";
 
 export default function App() {
@@ -26,8 +26,9 @@ export default function App() {
       <div data-tauri-drag-region className="fixed inset-x-0 top-0 z-50 h-11" />
 
       <nav className="flex w-[76px] shrink-0 flex-col items-center gap-1 pt-20">
-        <RailButton icon={House} label="Home" active={!nowPlaying && root === "home"} onClick={home} />
-        <RailButton icon={SearchIcon} label="Search" active={!nowPlaying && root === "search"} onClick={searchView} />
+        <RailButton icon={House} label="Home" active={!nowPlaying && root === "home"} onClick={() => go("home")} />
+        <RailButton icon={SearchIcon} label="Search" active={!nowPlaying && root === "search"} onClick={() => go("search")} />
+        <RailButton icon={LibraryIcon} label="Library" active={!nowPlaying && root === "library"} onClick={() => go("library")} />
         <RailButton icon={Disc3} label="Now Playing" active={nowPlaying} onClick={() => useStore.setState((s) => ({ nowPlaying: !s.nowPlaying }))} />
       </nav>
 
@@ -35,7 +36,9 @@ export default function App() {
         {/* Every view in the stack stays mounted, so going back keeps its results and scroll position. */}
         {stack.map((view, i) => (
           <div key={i + view.name + ("id" in view ? view.id : "")} hidden={i !== stack.length - 1} className="absolute inset-0 overflow-y-auto pb-36">
-            {view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : <Artist id={view.id} />}
+            {"id" in view ? (
+              view.name === "artist" ? <Artist id={view.id} /> : view.name === "playlist" ? <PlaylistPage id={view.id} /> : <CollectionPage id={view.id} />
+            ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : <Library />}
           </div>
         ))}
         {stack.length > 1 && (
@@ -67,6 +70,7 @@ function PlayerBar() {
   const loading = useStore((s) => s.loading);
   const error = useStore((s) => s.error);
   const { paused, time, duration, volume, muted } = useAudio();
+  const liked = useLibrary((s) => !!track && s.liked.some((t) => t.id === track.id));
 
   return (
     <div className="fixed right-4 bottom-4 left-[76px] z-40">
@@ -74,7 +78,7 @@ function PlayerBar() {
         {/* The artwork's colour washes the glass, strongest behind the artwork. */}
         <div className="absolute inset-0 -z-10 bg-linear-to-r from-accent/30 via-accent/12 to-accent/5 transition-opacity duration-500" style={{ opacity: track ? 1 : 0 }} />
         <div className="grid grid-cols-[1fr_minmax(0,1.5fr)_1fr] items-center gap-6 py-2.5 pr-5 pl-2.5">
-          <div className="flex min-w-0 items-center gap-3">
+          <div onContextMenu={(e) => track && (e.preventDefault(), trackMenu(track))} className="flex min-w-0 items-center gap-3">
             <button onClick={() => useStore.setState((s) => ({ nowPlaying: !s.nowPlaying }))} aria-label="Now Playing" disabled={!track} className="press size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] shadow-md shadow-black/15">
               {track && <img src={art(track.thumb, 120)} alt="" className="size-full object-cover" />}
             </button>
@@ -82,6 +86,11 @@ function PlayerBar() {
               <div className="truncate font-semibold">{track?.title ?? "Not playing"}</div>
               <div className="truncate text-sm text-ink/55">{error ? <span title={error} className="text-red-700">Couldn't play this track. Try it again or pick another.</span> : track && <Artists list={track.artists} />}</div>
             </div>
+            {track && (
+              <button onClick={() => toggleLike(track)} aria-label={liked ? "Unlike" : "Like"} aria-pressed={liked} className="press grid size-8 shrink-0 place-items-center rounded-full text-ink/50 hover:text-ink">
+                <Heart size={18} className={liked ? "fill-accent text-accent" : ""} />
+              </button>
+            )}
           </div>
 
           <div className="flex flex-col items-center gap-0.5">

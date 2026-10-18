@@ -1,14 +1,14 @@
 # Sleeve roadmap
 
-Goal: everything Spotify does, free, on macOS, Windows and the web first (mobile after), plus ideas Spotify doesn't have. Snappiness and the editorial look come first in every phase.
+Goal: everything Spotify does, free, on macOS, Windows and the web first (mobile after), plus ideas Spotify doesn't have. Snappiness and the look (v1's colour and big display headers in a compact frame: a resizable sidebar that collapses to an icon rail, one rounded content card, player bar; colour pulled from the artwork; fun and familiar, not sterile) come first in every phase.
 
 Size: **S** ≈ a day · **M** ≈ a few days · **L** ≈ a week or more.
 
 ## Where it stands (Oct 2026)
 
-Done: search (songs + top artist), Home (YT Music shelves), artist, album and playlist pages, Now Playing sheet, glass player bar with artwork accent colour, likes, saved albums, your own playlists (create, rename, delete, add and remove tracks), undoable toasts, media keys, accessibility pass.
+Done: compact layout (sidebar with Home, Search, Library and Settings that collapses to an icon rail (⌘B) and resizes by dragging its edge; one rounded content card with a Back pill; player bar with an artwork-colour wash), search (songs + top artist, Browse All genres), Home (YT Music shelves), artist, album and playlist pages, Now Playing sheet, docked player bar with artwork accent colour, likes, saved albums, your own playlists (create, rename, delete, add and remove tracks), undoable toasts, media keys, accessibility pass.
 
-Missing: everything below. Notable gaps today: no queue controls, no shuffle or repeat, light theme only, library lives in localStorage, macOS only tested, no web build.
+Missing: everything below. Notable gaps today: no queue controls, no shuffle or repeat, macOS only tested, no web build.
 
 ---
 
@@ -16,9 +16,10 @@ Missing: everything below. Notable gaps today: no queue controls, no shuffle or 
 Done first, because everything else builds on them.
 
 - [x] **Library to IndexedDB.** No 5 MB cap, no new dependency, and it works in the web build. Existing libraries migrate on their first write. Move to per-row SQLite if imports reach ~100k tracks. **M**
-- [x] **Dark mode** following the system. The manual light/dark override comes with Settings (Phase 7). **M**
+- [x] **Dark mode** following the system, or forced light/dark in Settings. **M**
 - [x] **Offline and error states.** Offline banner; Home and Search retry on reconnect; Home has a Try Again button and draws last launch's feed instantly. **S**
 - [x] **Keyboard shortcuts:** ⌘K/⌘F search, ⌘1–3 tabs, ⌘N new playlist, ⌘L like, ⌘←/→ previous/next, ⌘↑/↓ volume, ←/→ seek 5 s, Space, Esc. A full command palette waits until there are enough commands to need one. **S**
+- [x] **Settings page** (in the rail, ⌘,): panes like System Settings; theme and colour picked from live previews, library counts with export and restore, shortcut list, version. Later phases add their sections to it (Phase 7). **S**
 - [x] **Smoke test:** `node scripts/yt-check.mjs` checks search, Home, Explore, an artist page, an album and a full stream download. **S**
 
 ## Phase 2: Playback (Spotify parity)
@@ -41,7 +42,7 @@ Done first, because everything else builds on them.
 - [ ] *Ours:* word-by-word karaoke highlighting where enhanced LRC is available. **M**
 
 ## Phase 4: Library and playlists (Spotify parity)
-- [ ] Library filters (Playlists / Albums / Artists / Songs), sort, search inside, grid and list views, pinning. **M**
+- [ ] Library filters (~~Playlists / Albums~~ done; Artists / Songs), sort, search inside, grid and list views, pinning. **M**
 - [ ] Follow artists. Followed artists drive Release Radar. **S**
 - [ ] Playlist editing: drag to reorder, description, custom cover image, sort, duplicate, folders. **M**
 - [ ] Recently played and listening history (stored locally). **S**
@@ -69,15 +70,17 @@ Done first, because everything else builds on them.
 - [ ] Delete account and export data. **S**
 
 ## Phase 7: Settings
+The page and its first sections exist (Phase 1). These fill it in as each feature lands.
+
 - [ ] **Account:** profile, linked services (Spotify, YT Music, Deezer, Last.fm), sign out, delete. **M**
 - [ ] **Playback:** quality, crossfade, gapless, normalisation, autoplay, EQ. **S**
-- [ ] **Appearance:** light, dark or system; accent from artwork on or off; reduce motion; UI zoom. **S**
-- [ ] **Library:** local folders, storage and cache size, clear cache, import history. **S**
+- [ ] **Appearance:** ~~light, dark or system; accent from artwork on or off~~ (done); reduce motion; UI zoom. **S**
+- [ ] **Library:** ~~export, restore~~ (done); local folders, storage and cache size, import history. **S**
 - [ ] **Lyrics:** source, translation language. **S**
 - [ ] **Privacy:** private session, listening history on or off, crash reports on or off. **S**
-- [ ] **Shortcuts:** list and remap. **S**
+- [ ] **Shortcuts:** ~~list~~ (done); remap. **S**
 - [ ] **Startup:** launch at login, open minimised, close to tray. **S**
-- [ ] **About:** version, check for updates, licences. **S**
+- [ ] **About:** ~~version~~ (done); check for updates, licences. **S**
 
 ## Phase 8: Discovery (Spotify parity)
 - [ ] Search: tabs for Songs, Albums, Artists, Playlists and Videos; recent searches; suggestions as you type. **M**

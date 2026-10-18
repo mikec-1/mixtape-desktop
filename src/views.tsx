@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { AudioLines, Check, ChevronDown, Ellipsis, Heart, Music, Play, Plus, Shuffle } from "lucide-react";
+import { AudioLines, Check, ChevronDown, Download, Ellipsis, Heart, Music, Play, Plus, Shuffle, Upload } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
-import { addToPlaylist, back, deletePlaylist, newPlaylist, open, play, removeFromPlaylist, renamePlaylist, report, toggleLike, toggleSave, useLibrary, useOnline, useStore } from "./store";
+import { addToPlaylist, back, deletePlaylist, newPlaylist, notify, open, play, removeFromPlaylist, renamePlaylist, report, restoreLibrary, toggleLike, toggleSave, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { art, artist, collection, home, lastHome, search, type Album, type Track } from "./yt";
+import { version } from "../package.json";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
 function useAsync<T>(fn: () => Promise<T> | undefined, deps: unknown[]) {
@@ -21,8 +22,24 @@ function useAsync<T>(fn: () => Promise<T> | undefined, deps: unknown[]) {
   return state;
 }
 
+// A tile per genre that searches for it.
+const genres = [
+  ["Pop", "#dc148c"],
+  ["Hip-Hop", "#ba5d07"],
+  ["Rock", "#e91429"],
+  ["Indie", "#608108"],
+  ["Electronic", "#0d73ec"],
+  ["R&B", "#8c1932"],
+  ["Jazz", "#8d67ab"],
+  ["Classical", "#7d4b32"],
+  ["K-Pop", "#148a08"],
+  ["Chill", "#477d95"],
+  ["Metal", "#503750"],
+  ["Latin", "#1e3264"],
+] as const;
+
 export function Search() {
-  const [query, setQuery] = useState("");
+  const query = useStore((s) => s.query);
   const [term, setTerm] = useState("");
   useEffect(() => {
     const t = setTimeout(() => setTerm(query.trim()), 250);
@@ -33,12 +50,12 @@ export function Search() {
   const top = data?.top;
 
   return (
-    <div className="animate-enter px-12 pt-24">
+    <div className="animate-enter px-8 pt-14">
       {/* The placeholder doubles as the page title. */}
       <input
         autoFocus
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => useStore.setState({ query: e.target.value })}
         placeholder="Search"
         aria-label="Search"
         name="q"
@@ -46,18 +63,34 @@ export function Search() {
         spellCheck={false}
         className="w-full bg-transparent text-display outline-none placeholder:text-ink"
       />
-      {!query && <p className="mt-4 text-lg text-muted">Songs and artists from everywhere.</p>}
+      {!query && (
+        <>
+          <p className="mt-3 text-lg text-muted">Songs and artists from everywhere.</p>
+          <div className="mt-10 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+            {genres.map(([name, colour]) => (
+              <button
+                key={name}
+                onClick={() => useStore.setState({ query: `${name} hits` })}
+                style={{ background: colour }}
+                className="press relative aspect-[16/10] overflow-hidden rounded-2xl p-4 text-left text-xl font-extrabold tracking-tight text-white hover:brightness-110"
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       {error && <p title={error} className="mt-6 text-muted">Search didn’t go through. Check your connection and try again.</p>}
 
       {data && term && (
         <div aria-busy={loading} className={`transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>
           {top && (
-            <button onClick={() => open({ name: "artist", id: top.id })} className="group mt-14 flex items-center gap-8 text-left">
-              <div className="size-40 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
+            <button onClick={() => open({ name: "artist", id: top.id })} className="group mt-10 flex items-center gap-6 text-left">
+              <div className="size-32 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
                 <img src={art(top.thumb, 400)} alt="" className="size-full object-cover" />
               </div>
               <div>
-                <div className="text-6xl font-extrabold tracking-[-0.04em]">{top.name}</div>
+                <div className="text-5xl font-extrabold tracking-[-0.04em]">{top.name}</div>
                 <div className="mt-2 text-muted">{top.about}</div>
               </div>
             </button>
@@ -103,28 +136,31 @@ const albumMenu = (a: Album) =>
   ]);
 
 const LIKED = "bg-linear-to-br from-[#ff375f] to-[#b80f3c]";
-const TITLE = "line-clamp-2 text-[clamp(40px,5.5vw,88px)] leading-[0.92] font-extrabold tracking-[-0.04em]";
+// A playlist with no artwork yet still gets its own colour, picked from its id.
+const tints = ["from-[#ff375f] to-[#ff9f0a]", "from-[#0a84ff] to-[#30d158]", "from-[#bf5af2] to-[#ff375f]", "from-[#ff9f0a] to-[#ffd60a]", "from-[#5e5ce6] to-[#64d2ff]", "from-[#30d158] to-[#0a84ff]"];
+const tint = (id: string) => `bg-linear-135 ${tints[[...id].reduce((n, c) => n + c.charCodeAt(0), 0) % tints.length]}`;
+const TITLE = "line-clamp-2 text-[clamp(36px,6.5cqw,80px)] leading-[0.92] font-extrabold tracking-[-0.04em]";
 
 // The top of every album and playlist page: cover and title over the artwork's own blur.
-function Masthead({ cover, bg, tint = "bg-neutral-800", title, sub, meta, children }: { cover: ReactNode; bg?: string; tint?: string; title: ReactNode; sub?: ReactNode; meta: string; children: ReactNode }) {
+function Masthead({ cover, bg, fill = "bg-neutral-800", title, sub, meta, children }: { cover: ReactNode; bg?: string; fill?: string; title: ReactNode; sub?: ReactNode; meta: string; children: ReactNode }) {
   return (
-    <header className="relative isolate overflow-hidden px-12 pt-28 pb-12 text-white [--color-ink:white]">
-      {bg ? <img src={art(bg, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover blur-3xl saturate-150" /> : <div className={`absolute inset-0 -z-10 ${tint}`} />}
+    <header className="relative isolate overflow-hidden px-8 pt-20 pb-8 text-white [--color-ink:white]">
+      {bg ? <img src={art(bg, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover blur-3xl saturate-150" /> : <div className={`absolute inset-0 -z-10 ${fill}`} />}
       <div className="absolute inset-0 -z-10 bg-linear-to-r from-black/70 via-black/45 to-black/20" />
-      <div className="flex items-end gap-10">
-        <div className="size-[clamp(180px,22vw,280px)] shrink-0 overflow-hidden rounded-2xl bg-white/10 shadow-2xl shadow-black/40">{cover}</div>
+      <div className="flex items-end gap-8">
+        <div className="size-[clamp(150px,20cqw,232px)] shrink-0 overflow-hidden rounded-2xl bg-white/10 shadow-2xl shadow-black/40">{cover}</div>
         <div className="min-w-0 flex-1">
           {title}
-          {sub && <div className="mt-4 truncate text-xl font-semibold">{sub}</div>}
-          <div className="mt-1.5 truncate text-white/80">{meta}</div>
-          <div className="mt-7 flex gap-3">{children}</div>
+          {sub && <div className="mt-3 truncate text-lg font-semibold">{sub}</div>}
+          <div className="mt-1 truncate text-white/80">{meta}</div>
+          <div className="mt-6 flex gap-2.5">{children}</div>
         </div>
       </div>
     </header>
   );
 }
 
-const pill = "press flex h-11 items-center gap-2 rounded-full px-6 font-semibold";
+const pill = "press flex h-10 items-center gap-2 rounded-full px-5 font-semibold";
 function PlayButtons({ tracks }: { tracks: Track[] }) {
   return (
     <>
@@ -147,7 +183,7 @@ const Skeleton = ({ className }: { className: string }) => (
 // YT Music's own start page, artwork first.
 export function Home() {
   return (
-    <div className="animate-enter px-12 pt-24">
+    <div className="animate-enter px-8 pt-14">
       <h1 className="text-display">Home</h1>
       <Shelves />
     </div>
@@ -172,8 +208,8 @@ function Shelves() {
     return (
       <div role="status" className="animate-pulse">
         <span className="sr-only">Loading…</span>
-        <div className="mt-12 h-[clamp(300px,42vh,440px)] rounded-[28px] bg-ink/[0.05]" />
-        <div className="mt-16 h-64 rounded-2xl bg-ink/[0.04]" />
+        <div className="mt-8 h-[clamp(260px,38vh,380px)] rounded-3xl bg-ink/[0.05]" />
+        <div className="mt-12 h-56 rounded-2xl bg-ink/[0.04]" />
       </div>
     );
 
@@ -183,22 +219,18 @@ function Shelves() {
   return (
     <div className="animate-enter">
       {hero && (
-        <div className="group relative isolate mt-12 flex h-[clamp(300px,42vh,440px)] items-center overflow-hidden rounded-[28px] text-white">
+        <div className="group relative isolate mt-8 flex h-[clamp(260px,38vh,380px)] items-center overflow-hidden rounded-3xl text-white">
           <button onClick={() => open({ name: "collection", id: hero.id })} aria-label={`Open ${hero.title}`} className="hit" />
           <img src={art(hero.thumb, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover blur-3xl saturate-150" />
           <div className="absolute inset-0 -z-10 bg-linear-to-r from-black/60 via-black/30 to-black/0" />
-          <div className="pointer-events-none min-w-0 flex-1 p-10 lg:p-14">
-            <h2 className="line-clamp-3 text-[clamp(40px,5.5vw,84px)] leading-[0.92] font-extrabold tracking-[-0.04em]">{hero.title}</h2>
-            <div className="mt-4 truncate text-lg text-white/80">{hero.by}</div>
-            <button onClick={() => playCollection(hero.id)} className="press pointer-events-auto mt-8 inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 font-semibold text-black hover:bg-white/85">
+          <div className="pointer-events-none min-w-0 flex-1 p-8 @4xl:p-10">
+            <h2 className="line-clamp-3 text-[clamp(36px,6cqw,76px)] leading-[0.92] font-extrabold tracking-[-0.04em]">{hero.title}</h2>
+            <div className="mt-3 truncate text-lg text-white/80">{hero.by}</div>
+            <button onClick={() => playCollection(hero.id)} className={`${pill} pointer-events-auto mt-6 inline-flex bg-white text-black hover:bg-white/85`}>
               <Play size={16} className="fill-current" /> Play
             </button>
           </div>
-          <img
-            src={art(hero.thumb, 900)}
-            alt=""
-            className="pointer-events-none mr-10 aspect-square h-[78%] shrink-0 rounded-2xl object-cover shadow-2xl shadow-black/40 lg:mr-14"
-          />
+          <img src={art(hero.thumb, 900)} alt="" className="pointer-events-none mr-8 aspect-square h-[78%] shrink-0 rounded-2xl object-cover shadow-2xl shadow-black/40 @4xl:mr-10" />
         </div>
       )}
       {data.map((shelf, i) => {
@@ -219,8 +251,8 @@ function Shelves() {
 export function CollectionPage({ id }: { id: string }) {
   const { data, error } = useAsync(() => collection(id), [id]);
   const saved = useLibrary((s) => s.saved.some((a) => a.id === id));
-  if (error) return <p className="px-12 pt-28 text-muted">Couldn’t open this. Go back and try again.</p>;
-  if (!data) return <Skeleton className="h-[440px] bg-ink/[0.04]" />;
+  if (error) return <p className="px-8 pt-20 text-muted">Couldn’t open this. Go back and try again.</p>;
+  if (!data) return <Skeleton className="h-[380px] bg-ink/[0.04]" />;
   const isAlbum = id.startsWith("MPRE");
 
   return (
@@ -233,13 +265,13 @@ export function CollectionPage({ id }: { id: string }) {
         meta={[data.kind, ...data.meta].filter(Boolean).join(" · ")}
       >
         <PlayButtons tracks={data.tracks} />
-        <button onClick={() => toggleSave({ id, title: data.title, by: data.by?.name, thumb: data.thumb })} aria-pressed={saved} className={`${pill} bg-white/20 px-5 hover:bg-white/30`}>
+        <button onClick={() => toggleSave({ id, title: data.title, by: data.by?.name, thumb: data.thumb })} aria-pressed={saved} className={`${pill} bg-white/20 px-4 hover:bg-white/30`}>
           {saved ? <Check size={16} strokeWidth={2.6} /> : <Plus size={16} strokeWidth={2.6} />} {saved ? "Saved" : "Save"}
         </button>
       </Masthead>
-      <div className="px-12">
-        {data.about && <p className="mt-8 line-clamp-2 max-w-2xl text-[15px] leading-relaxed text-ink/65">{data.about}</p>}
-        <div className="mt-8">
+      <div className="px-8">
+        {data.about && <p className="mt-6 line-clamp-2 max-w-2xl text-[15px] leading-relaxed text-ink/65">{data.about}</p>}
+        <div className="mt-6">
           <TrackList tracks={data.tracks} numbered={isAlbum} plain={isAlbum} />
         </div>
       </div>
@@ -251,53 +283,53 @@ export function CollectionPage({ id }: { id: string }) {
 export function Library() {
   const { liked, saved, playlists } = useLibrary();
   return (
-    <div className="animate-enter px-12 pt-24">
+    <div className="animate-enter px-8 pt-14">
       <h1 className="text-display">Library</h1>
-      <div className={`group relative isolate mt-12 flex min-h-[clamp(260px,34vh,360px)] items-end overflow-hidden rounded-[28px] p-10 text-white lg:p-14 ${LIKED}`}>
+      <div className={`group relative isolate mt-8 flex min-h-[clamp(230px,30vh,320px)] items-end overflow-hidden rounded-3xl p-8 text-white @4xl:p-10 ${LIKED}`}>
         <button onClick={() => open({ name: "playlist", id: "liked" })} aria-label="Open Liked Songs" className="hit" />
         <div className="pointer-events-none min-w-0 flex-1">
-          <Heart className="size-10 fill-white" strokeWidth={0} />
-          <h2 className="mt-5 text-[clamp(40px,5.5vw,84px)] leading-[0.92] font-extrabold tracking-[-0.04em]">Liked Songs</h2>
-          <div className="mt-3 text-lg text-white/80">{liked.length ? count(liked.length) : "Tap the heart on any song."}</div>
+          <Heart className="size-9 fill-white" strokeWidth={0} />
+          <h2 className="mt-4 text-[clamp(36px,6cqw,76px)] leading-[0.92] font-extrabold tracking-[-0.04em]">Liked Songs</h2>
+          <div className="mt-2 text-lg text-white/80">{liked.length ? count(liked.length) : "Tap the heart on any song."}</div>
           {liked.length > 0 && (
-            <button onClick={() => play(liked, 0)} className={`${pill} pointer-events-auto mt-7 bg-white text-black hover:bg-white/85`}>
+            <button onClick={() => play(liked, 0)} className={`${pill} pointer-events-auto mt-6 bg-white text-black hover:bg-white/85`}>
               <Play size={16} className="fill-current" /> Play
             </button>
           )}
         </div>
         {/* The latest likes, stacked like sleeves pulled from a crate. */}
-        <div className="pointer-events-none absolute top-1/2 right-10 hidden -translate-y-1/2 lg:right-14 lg:flex">
+        <div className="pointer-events-none absolute top-1/2 right-8 hidden -translate-y-1/2 @3xl:flex @4xl:right-10">
           {liked.slice(0, 4).map((t, i) => (
             <img
               key={t.id}
               src={art(t.thumb, 400)}
               alt=""
               style={{ zIndex: 4 - i, rotate: `${i * 4 - 3}deg` }}
-              className="-ml-28 size-[clamp(150px,20vh,210px)] rounded-xl object-cover shadow-2xl shadow-black/40 transition-[rotate] duration-300 ease-(--ease-out) first:ml-0 group-hover:rotate-0"
+              className="-ml-24 size-[clamp(130px,18vh,190px)] rounded-xl object-cover shadow-2xl shadow-black/40 transition-[rotate] duration-300 ease-(--ease-out) first:ml-0 group-hover:rotate-0"
             />
           ))}
         </div>
       </div>
 
       <Section title="Playlists">
-        <div className="-mx-12 -mt-1 flex gap-6 overflow-x-auto px-12 pt-1 pb-2 [scrollbar-width:none]">
-          <button onClick={() => open({ name: "playlist", id: newPlaylist() })} className="press w-48 shrink-0 text-left">
+        <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
+          <button onClick={() => open({ name: "playlist", id: newPlaylist() })} className="press w-44 shrink-0 text-left">
             <div className="grid aspect-square place-items-center rounded-xl border-2 border-dashed border-ink/15 text-muted transition-colors hover:border-ink/35 hover:text-ink">
-              <Plus size={36} strokeWidth={1.75} />
+              <Plus size={32} strokeWidth={1.75} />
             </div>
-            <div className="mt-3 font-semibold">New Playlist</div>
+            <div className="mt-2.5 font-semibold">New Playlist</div>
           </button>
           {[...playlists].reverse().map((p) => (
             <button
               key={p.id}
               onClick={() => open({ name: "playlist", id: p.id })}
               onContextMenu={(e) => (e.preventDefault(), popup([{ text: "Delete Playlist", action: () => deletePlaylist(p.id) }]))}
-              className="press w-48 shrink-0 text-left"
+              className="press w-44 shrink-0 text-left"
             >
               <div className="aspect-square overflow-hidden rounded-xl bg-ink/[0.06]">
                 <PlaylistCover id={p.id} tracks={p.tracks} />
               </div>
-              <div className="mt-3 truncate font-semibold">{p.name}</div>
+              <div className="mt-2.5 truncate font-semibold">{p.name}</div>
               <div className="truncate text-sm text-muted">{count(p.tracks.length)}</div>
             </button>
           ))}
@@ -327,7 +359,7 @@ function PlaylistCover({ id, tracks }: { id: string; tracks: Track[] }) {
     );
   if (thumbs[0]) return <img src={art(thumbs[0], 600)} alt="" className="size-full object-cover" />;
   return (
-    <div className="grid size-full place-items-center text-ink/35">
+    <div className={`grid size-full place-items-center text-white/85 ${tint(id)}`}>
       <Music className="size-1/3" strokeWidth={1.5} />
     </div>
   );
@@ -336,7 +368,7 @@ function PlaylistCover({ id, tracks }: { id: string; tracks: Track[] }) {
 export function PlaylistPage({ id }: { id: string }) {
   const liked = useLibrary((s) => s.liked);
   const playlist = useLibrary((s) => s.playlists.find((p) => p.id === id));
-  if (id !== "liked" && !playlist) return <p className="px-12 pt-28 text-muted">This playlist was deleted.</p>;
+  if (id !== "liked" && !playlist) return <p className="px-8 pt-20 text-muted">This playlist was deleted.</p>;
   const tracks = playlist?.tracks ?? liked;
 
   return (
@@ -344,7 +376,7 @@ export function PlaylistPage({ id }: { id: string }) {
       <Masthead
         cover={<PlaylistCover id={id} tracks={tracks} />}
         bg={playlist && tracks[0]?.thumb}
-        tint={playlist ? undefined : LIKED}
+        fill={playlist ? tint(id) : LIKED}
         title={
           playlist ? (
             <h1>
@@ -372,13 +404,13 @@ export function PlaylistPage({ id }: { id: string }) {
             aria-label="More"
             title="More"
             aria-haspopup="menu"
-            className="press grid size-11 place-items-center rounded-full bg-white/20 hover:bg-white/30"
+            className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30"
           >
             <Ellipsis size={20} />
           </button>
         )}
       </Masthead>
-      <div className="mt-8 px-12">
+      <div className="mt-6 px-8">
         {tracks.length ? (
           <TrackList tracks={tracks} playlist={playlist?.id} />
         ) : (
@@ -393,15 +425,15 @@ export function PlaylistPage({ id }: { id: string }) {
 function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }) {
   const current = useStore((s) => s.queue[s.index]?.id);
   return (
-    <ol className="-mx-12 grid auto-cols-[clamp(280px,31%,380px)] grid-flow-col grid-rows-4 gap-x-4 overflow-x-auto px-9 pb-2 [scrollbar-width:none]">
+    <ol className="-mx-8 grid auto-cols-[clamp(260px,31%,360px)] grid-flow-col grid-rows-4 gap-x-3 overflow-x-auto px-6 pb-2 [scrollbar-width:none]">
       {tracks.map((t, i) => (
-        <li key={t.id + i} onContextMenu={(e) => (e.preventDefault(), trackMenu(t))} className="group relative flex items-center gap-3.5 rounded-2xl p-2 transition-colors hover:bg-ink/[0.04]">
+        <li key={t.id + i} onContextMenu={(e) => (e.preventDefault(), trackMenu(t))} className="group relative flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-ink/[0.04]">
           <button onClick={() => play(tracks, i)} aria-label={`Play ${t.title}`} className="hit" />
-          {numbered && <span className="w-7 shrink-0 text-center text-2xl font-extrabold tracking-tight text-muted tabular-nums">{i + 1}</span>}
-          <div className="relative size-14 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] pointer-events-none">
+          {numbered && <span className="w-7 shrink-0 text-center text-xl font-extrabold tracking-tight text-muted tabular-nums">{i + 1}</span>}
+          <div className="pointer-events-none relative size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06]">
             <img src={art(t.thumb, 120)} alt="" loading="lazy" className="size-full object-cover" />
             <div className={`absolute inset-0 grid place-items-center bg-black/35 text-white transition-opacity duration-150 ${current === t.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-              {current === t.id ? <AudioLines size={20} /> : <Play size={18} className="fill-current" />}
+              {current === t.id ? <AudioLines size={18} /> : <Play size={16} className="fill-current" />}
             </div>
           </div>
           <div className="min-w-0">
@@ -416,34 +448,50 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
   );
 }
 
+// The banner runs edge to edge and fades into the page; the about text floats on it.
 export function Artist({ id }: { id: string }) {
   const { data, error } = useAsync(() => artist(id), [id]);
-  if (error) return <p title={error} className="px-12 pt-28 text-muted">Couldn’t load this artist. Go back and try again.</p>;
-  if (!data) return <Skeleton className="h-[min(68vh,620px)] bg-ink/[0.03]" />;
+  const [all, setAll] = useState(false);
+  if (error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t load this artist. Go back and try again.</p>;
+  if (!data) return <Skeleton className="h-[min(60vh,540px)] bg-ink/[0.03]" />;
 
   return (
     <div className="animate-enter">
-      <header className={`relative flex items-end ${data.banner ? "h-[min(68vh,620px)]" : "pt-32"}`}>
+      <header className={`relative flex items-end gap-8 px-8 ${data.banner ? "h-[min(60vh,540px)]" : "pt-24"}`}>
         {data.banner && (
           <img
             src={art(data.banner, 2160, 900)}
             alt=""
-            className="absolute inset-0 size-full object-cover object-[50%_25%] [mask-image:linear-gradient(to_bottom,black_40%,transparent)]"
+            className="absolute inset-0 size-full object-cover object-[50%_25%] [mask-image:linear-gradient(to_bottom,black_45%,transparent)]"
           />
         )}
-        <div className="relative px-12">
+        <div className="relative min-w-0 flex-1">
           <h1 className="text-display">{data.name}</h1>
-          <button onClick={() => play(data.songs, 0)} disabled={!data.songs.length} className="press mt-7 flex h-11 items-center gap-2 rounded-full bg-accent px-6 font-semibold text-paper disabled:opacity-50">
-            <Play size={16} className="fill-current" /> Play
-          </button>
+          <div className="mt-6 flex gap-2.5">
+            <button onClick={() => play(data.songs, 0)} disabled={!data.songs.length} className={`${pill} bg-accent text-paper disabled:opacity-50`}>
+              <Play size={16} className="fill-current" /> Play
+            </button>
+            <button onClick={() => play(shuffled(data.songs), 0)} disabled={!data.songs.length} aria-label="Shuffle" title="Shuffle" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
+              <Shuffle size={17} />
+            </button>
+          </div>
         </div>
+        {data.about && (
+          <aside className="glass relative mb-1 hidden w-72 shrink-0 rounded-2xl p-5 @3xl:block">
+            <h2 className="font-bold">About</h2>
+            <p className="mt-1.5 line-clamp-5 text-sm leading-relaxed text-ink/75">{data.about}</p>
+          </aside>
+        )}
       </header>
 
-      <div className="px-12">
-        {data.about && <p className="mt-10 line-clamp-3 max-w-2xl text-[15px] leading-relaxed text-ink/65">{data.about}</p>}
+      <div className="px-8">
+        {data.about && <p className="mt-8 line-clamp-3 max-w-2xl text-[15px] leading-relaxed text-ink/65 @3xl:hidden">{data.about}</p>}
         {data.songs.length > 0 && (
-          <Section title="Top Songs">
-            <TrackList tracks={data.songs} numbered />
+          <Section
+            title="Popular Songs"
+            action={data.songs.length > 5 && <button onClick={() => setAll(!all)} className="press text-sm font-semibold text-muted hover:text-ink">{all ? "Show less" : "Show all"}</button>}
+          >
+            <TrackList tracks={all ? data.songs : data.songs.slice(0, 5)} numbered onPlay={(i) => play(data.songs, i)} />
           </Section>
         )}
         {data.albums.length > 0 && (
@@ -531,10 +579,203 @@ export function NowPlaying() {
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+const isMac = /Mac/.test(navigator.userAgent);
+const mod = isMac ? "⌘" : "Ctrl+";
+// ponytail: mirrors the bindings in App.tsx by hand; generate both from one table when remapping lands.
+const keys: [string, string[]][] = [
+  ["Play or pause", ["Space"]],
+  ["Back or forward 5 seconds", ["←", "→"]],
+  ["Previous or next song", [`${mod}←`, `${mod}→`]],
+  ["Volume down or up", [`${mod}↓`, `${mod}↑`]],
+  ["Like the playing song", [`${mod}L`]],
+  ["Search", [`${mod}K`]],
+  ["Go back or forward", [`${mod}[`, `${mod}]`]],
+  ["Home, Search, Library", [`${mod}1`, `${mod}2`, `${mod}3`]],
+  ["New playlist", [`${mod}N`]],
+  ["Settings", [`${mod},`]],
+  ["Show or hide the sidebar", [`${mod}B`]],
+  ["Close full screen", ["Esc"]],
+];
+
+// The file comes from anywhere, so check its shape before it replaces the library.
+async function restore(file: File) {
+  const ids = (x: unknown) => Array.isArray(x) && x.every((y) => typeof y?.id === "string");
+  try {
+    const { liked, saved, playlists } = JSON.parse(await file.text());
+    if (!ids(liked) || !ids(saved) || !ids(playlists) || !playlists.every((p: { tracks: unknown }) => ids(p.tracks))) throw 0;
+    restoreLibrary({ liked, saved, playlists });
+  } catch {
+    notify({ text: "Couldn’t Restore", detail: `${file.name} isn’t a Sleeve library export` });
+  }
+}
+
+const panes = [
+  { id: "appearance", label: "Appearance" },
+  { id: "library", label: "Library" },
+  { id: "shortcuts", label: "Shortcuts" },
+  { id: "about", label: "About" },
+] as const;
+
+const btn = "press flex h-9 items-center gap-2 rounded-full px-4 text-sm font-semibold disabled:opacity-50";
+const solid = `${btn} bg-ink text-paper`;
+const quiet = `${btn} bg-ink/[0.07] hover:bg-ink/[0.12]`;
+
+// Its own list of panes beside the content, like System Settings.
+export function Settings() {
+  const [pane, setPane] = useState<(typeof panes)[number]["id"]>("appearance");
   return (
-    <section className="mt-16">
-      <h2 className="mb-5 text-2xl font-bold tracking-tight">{title}</h2>
+    <div className="animate-enter px-8 pt-14">
+      <h1 className="text-display">Settings</h1>
+      <div className="mt-10 flex items-start gap-10">
+        <nav aria-label="Settings" className="sticky top-14 flex w-40 shrink-0 flex-col gap-1">
+          {panes.map(({ id, label }) => (
+            <button key={id} onClick={() => setPane(id)} aria-current={pane === id ? "page" : undefined} className={`flex h-9 items-center rounded-xl px-3 font-semibold transition-colors ${pane === id ? "bg-ink/[0.08]" : "text-muted hover:bg-ink/[0.04] hover:text-ink"}`}>
+              {label}
+            </button>
+          ))}
+        </nav>
+        <div key={pane} className="max-w-3xl min-w-0 flex-1 animate-enter">
+          {pane === "appearance" ? <Appearance /> : pane === "library" ? <LibraryPane /> : pane === "shortcuts" ? <Shortcuts /> : <About />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Appearance() {
+  const { theme, artworkAccent } = useSettings();
+  const set = useSettings.setState;
+  return (
+    <>
+      <Group title="Theme">
+        <Choice label="System" on={theme === "system"} onPick={() => set({ theme: "system" })}>
+          <Preview scheme="light" />
+          <div className="absolute inset-0 [clip-path:inset(0_0_0_50%)]"><Preview scheme="dark" /></div>
+        </Choice>
+        <Choice label="Light" on={theme === "light"} onPick={() => set({ theme: "light" })}><Preview scheme="light" /></Choice>
+        <Choice label="Dark" on={theme === "dark"} onPick={() => set({ theme: "dark" })}><Preview scheme="dark" /></Choice>
+      </Group>
+      <Group title="Colour">
+        <Choice label="From Artwork" on={artworkAccent} onPick={() => set({ artworkAccent: true })}><Preview tint="#ff8a3d" /></Choice>
+        <Choice label="Sleeve Pink" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Preview /></Choice>
+      </Group>
+    </>
+  );
+}
+
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="mb-10">
+      <h2 className="mb-3 text-xl font-bold tracking-tight">{title}</h2>
+      <div role="radiogroup" aria-label={title} className="grid grid-cols-3 gap-4">{children}</div>
+    </section>
+  );
+}
+
+function Choice({ label, on, onPick, children }: { label: string; on: boolean; onPick: () => void; children: ReactNode }) {
+  return (
+    <button role="radio" aria-checked={on} onClick={onPick} className="group text-left">
+      <div className={`relative aspect-[16/10] overflow-hidden rounded-xl ring-1 ring-ink/10 outline-offset-2 transition-[outline-color] ${on ? "outline-2 outline-accent" : "outline-2 outline-transparent group-hover:outline-ink/20"}`}>
+        {children}
+      </div>
+      <div className={`mt-2 text-sm ${on ? "font-bold" : "text-muted"}`}>{label}</div>
+    </button>
+  );
+}
+
+// Sleeve in miniature: the icon rail, the page with its big title and coloured card, the player.
+// Tokens are light-dark(), so a color-scheme here repaints it; tint stands in for the artwork colour.
+function Preview({ scheme, tint = "#ff375f" }: { scheme?: "light" | "dark"; tint?: string }) {
+  return (
+    <div style={{ colorScheme: scheme }} className="absolute inset-0 flex gap-[2.5%] bg-base p-[2.5%] text-ink">
+      <div className="flex w-[9%] flex-col items-center gap-[8%] rounded-[4px] bg-paper pt-[30%]">
+        {[1, 0.25, 0.25].map((o, i) => <div key={i} className="aspect-square w-[40%] rounded-full bg-ink" style={{ opacity: o }} />)}
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-[3%]">
+        <div className="flex-1 rounded-[4px] bg-paper p-[5%]">
+          <div className="h-[16%] w-[45%] rounded-[2px] bg-ink" />
+          <div className="mt-[6%] flex h-[48%] items-center justify-end rounded-[4px] p-[4%]" style={{ background: `linear-gradient(135deg, ${tint}, color-mix(in oklab, ${tint} 55%, black))` }}>
+            <div className="aspect-square h-full rounded-[2px] bg-white/30" />
+          </div>
+        </div>
+        <div className="flex h-[13%] items-center gap-[4%] rounded-[4px] bg-paper px-[3%]" style={{ backgroundImage: `linear-gradient(to right, color-mix(in oklab, ${tint} 30%, transparent), transparent)` }}>
+          <div className="aspect-square h-[60%] rounded-[2px]" style={{ background: tint }} />
+          <div className="aspect-square h-[55%] rounded-full" style={{ background: tint }} />
+          <div className="h-[12%] flex-1 rounded-full bg-ink/20" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function exportLibrary() {
+  const { liked, saved, playlists } = useLibrary.getState();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify({ liked, saved, playlists })], { type: "application/json" }));
+  a.download = `Sleeve Library ${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  notify({ text: "Library Exported", detail: "Saved to your Downloads folder" });
+}
+
+function LibraryPane() {
+  const { liked, saved, playlists } = useLibrary();
+  const file = useRef<HTMLInputElement>(null);
+  const stats = [["Liked songs", liked.length, LIKED], ["Playlists", playlists.length, tint("a")], ["Albums", saved.length, tint("b")]] as const;
+  return (
+    <>
+      <dl className="grid grid-cols-3 gap-3">
+        {stats.map(([label, n, bg]) => (
+          <div key={label} className={`flex flex-col-reverse rounded-2xl p-5 text-white ${bg}`}>
+            <dt className="mt-1 font-semibold text-white/85">{label}</dt>
+            <dd className="text-5xl font-extrabold tracking-[-0.04em] tabular-nums">{n}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="mt-6 flex gap-2">
+        <button onClick={exportLibrary} className={solid}>
+          <Download size={16} /> Export
+        </button>
+        <button onClick={() => file.current?.click()} className={quiet}>
+          <Upload size={16} /> Restore from File…
+        </button>
+        <input ref={file} type="file" accept=".json,application/json" hidden onChange={(e) => (e.target.files?.[0] && restore(e.target.files[0]), (e.target.value = ""))} />
+      </div>
+    </>
+  );
+}
+
+function Shortcuts() {
+  return (
+    <div className="divide-y divide-ink/10">
+      {keys.map(([label, combo]) => (
+        <div key={label} className="flex h-12 items-center justify-between gap-6">
+          <span>{label}</span>
+          <span className="flex gap-1.5">
+            {combo.map((k) => <kbd key={k} className="min-w-7 rounded-md bg-ink/[0.07] px-2 py-0.5 text-center font-mono text-xs">{k}</kbd>)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function About() {
+  return (
+    <div>
+      <div className="text-5xl font-extrabold tracking-[-0.04em]">Sleeve</div>
+      <div className="mt-2 text-muted">Version {version}</div>
+    </div>
+  );
+}
+
+function Section({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="mt-12">
+      <div className="mb-4 flex items-baseline justify-between gap-4">
+        <h2 className="text-2xl font-bold tracking-tight">{title}</h2>
+        {action}
+      </div>
       {children}
     </section>
   );
@@ -563,7 +804,7 @@ function TrackList({ tracks, numbered, plain, playlist, onPlay = (i) => play(tra
         <li
           key={t.id + i}
           onContextMenu={(e) => (e.preventDefault(), trackMenu(t, playlist ? { playlist, index: i } : undefined))}
-          className={`group relative grid items-center gap-4 rounded-2xl px-3 py-2 transition-colors [contain-intrinsic-size:auto_60px] [content-visibility:auto] hover:bg-ink/[0.04] ${plain ? "grid-cols-[28px_1fr_32px_48px]" : numbered ? "grid-cols-[28px_40px_1fr_1fr_32px_48px]" : "grid-cols-[40px_1fr_1fr_32px_48px]"}`}
+          className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors [contain-intrinsic-size:auto_56px] [content-visibility:auto] hover:bg-ink/[0.04] ${plain ? "grid-cols-[28px_1fr_32px_48px]" : numbered ? "grid-cols-[28px_40px_1fr_1fr_32px_48px]" : "grid-cols-[40px_1fr_1fr_32px_48px]"}`}
         >
           <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
           {numbered && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
@@ -599,20 +840,21 @@ function LikeButton({ track }: { track: Track }) {
 
 function Albums({ items }: { items: Album[] }) {
   return (
-    <div className="-mx-12 -mt-1 flex gap-6 overflow-x-auto px-12 pt-1 pb-2 [scrollbar-width:none]">
+    <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
       {items.map((a) => (
-        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative w-48 shrink-0">
+        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative w-44 shrink-0">
           <button onClick={() => open({ name: "collection", id: a.id })} className="press block w-full rounded-xl text-left">
             <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
               <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
             </div>
-            <div className="mt-3 truncate font-semibold">{a.title}</div>
+            <div className="mt-2.5 truncate font-semibold">{a.title}</div>
             <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>
           </button>
+          {/* Sits on the cover's bottom-right corner: 176px cover − 44px button − 8px inset. */}
           <button
             onClick={() => playCollection(a.id)}
             aria-label={`Play ${a.title}`}
-            className="absolute top-[140px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+            className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
           >
             <Play size={18} className="ml-0.5 fill-current" />
           </button>

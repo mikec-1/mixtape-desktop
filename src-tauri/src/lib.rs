@@ -5,6 +5,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .setup(|app| {
+            // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
+            // WKWebView cancels them without a handler.
+            WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
+                .on_download(|_, _| true)
+                .build()?;
             // YouTube's BotGuard only issues real integrity tokens on www.youtube.com, so PO tokens are
             // minted in a hidden window there; robots.txt is the lightest page on that origin.
             WebviewWindowBuilder::new(app, "potoken", WebviewUrl::External("https://www.youtube.com/robots.txt".parse()?))

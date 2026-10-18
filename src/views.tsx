@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { AudioLines, Check, ChevronDown, Ellipsis, Heart, Music, Play, Plus, Shuffle } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import { addToPlaylist, back, deletePlaylist, newPlaylist, open, play, removeFromPlaylist, renamePlaylist, report, toggleLike, toggleSave, useLibrary, useStore } from "./store";
@@ -39,18 +39,21 @@ export function Search() {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search"
+        aria-label="Search"
+        name="q"
+        autoComplete="off"
         spellCheck={false}
         className="w-full bg-transparent text-display outline-none placeholder:text-ink"
       />
       {!query && <p className="mt-4 text-lg text-muted">Songs and artists from everywhere.</p>}
-      {error && <p className="mt-6 text-muted">{error}</p>}
+      {error && <p title={error} className="mt-6 text-muted">Search didn’t go through. Check your connection and try again.</p>}
 
       {data && term && (
-        <div className={`transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>
+        <div aria-busy={loading} className={`transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>
           {top && (
             <button onClick={() => open({ name: "artist", id: top.id })} className="group mt-14 flex items-center gap-8 text-left">
               <div className="size-40 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
-                <img src={art(top.thumb, 400)} alt="" className="size-full object-cover transition-transform duration-300 ease-(--ease-out) group-hover:scale-[1.03]" />
+                <img src={art(top.thumb, 400)} alt="" className="size-full object-cover" />
               </div>
               <div>
                 <div className="text-6xl font-extrabold tracking-[-0.04em]">{top.name}</div>
@@ -98,7 +101,7 @@ const albumMenu = (a: Album) =>
     { text: useLibrary.getState().saved.some((x) => x.id === a.id) ? "Remove from Library" : "Add to Library", action: () => toggleSave(a) },
   ]);
 
-const LIKED = "bg-linear-to-br from-[#ff375f] via-[#c2185b] to-[#4c1d95]";
+const LIKED = "bg-linear-to-br from-[#ff375f] to-[#b80f3c]";
 const TITLE = "line-clamp-2 text-[clamp(40px,5.5vw,88px)] leading-[0.92] font-extrabold tracking-[-0.04em]";
 
 // The top of every album and playlist page: cover and title over the artwork's own blur.
@@ -106,13 +109,13 @@ function Masthead({ cover, bg, tint = "bg-neutral-800", title, sub, meta, childr
   return (
     <header className="relative isolate overflow-hidden px-12 pt-28 pb-12 text-white [--color-ink:white]">
       {bg ? <img src={art(bg, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover blur-3xl saturate-150" /> : <div className={`absolute inset-0 -z-10 ${tint}`} />}
-      <div className="absolute inset-0 -z-10 bg-linear-to-r from-black/65 via-black/40 to-black/15" />
+      <div className="absolute inset-0 -z-10 bg-linear-to-r from-black/70 via-black/45 to-black/20" />
       <div className="flex items-end gap-10">
         <div className="size-[clamp(180px,22vw,280px)] shrink-0 overflow-hidden rounded-2xl bg-white/10 shadow-2xl shadow-black/40">{cover}</div>
         <div className="min-w-0 flex-1">
           {title}
           {sub && <div className="mt-4 truncate text-xl font-semibold">{sub}</div>}
-          <div className="mt-1.5 truncate text-white/70">{meta}</div>
+          <div className="mt-1.5 truncate text-white/80">{meta}</div>
           <div className="mt-7 flex gap-3">{children}</div>
         </div>
       </div>
@@ -124,7 +127,7 @@ const pill = "press flex h-11 items-center gap-2 rounded-full px-6 font-semibold
 function PlayButtons({ tracks }: { tracks: Track[] }) {
   return (
     <>
-      <button onClick={() => play(tracks, 0)} disabled={!tracks.length} className={`${pill} bg-white text-black disabled:opacity-50`}>
+      <button onClick={() => play(tracks, 0)} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
         <Play size={16} className="fill-current" /> Play
       </button>
       <button onClick={() => play(shuffled(tracks), 0)} disabled={!tracks.length} className={`${pill} bg-white/20 hover:bg-white/30 disabled:opacity-50`}>
@@ -133,6 +136,12 @@ function PlayButtons({ tracks }: { tracks: Track[] }) {
     </>
   );
 }
+
+const Skeleton = ({ className }: { className: string }) => (
+  <div role="status" className={`animate-pulse ${className}`}>
+    <span className="sr-only">Loading…</span>
+  </div>
+);
 
 // YT Music's own start page, artwork first.
 export function Home() {
@@ -146,10 +155,11 @@ export function Home() {
 
 function Shelves() {
   const { data, error } = useAsync(home, []);
-  if (error) return <p className="mt-6 text-muted">Couldn't load your start page. Search still works.</p>;
+  if (error) return <p className="mt-6 text-muted">Couldn’t load your start page. Search still works.</p>;
   if (!data)
     return (
-      <div className="animate-pulse">
+      <div role="status" className="animate-pulse">
+        <span className="sr-only">Loading…</span>
         <div className="mt-12 h-[clamp(300px,42vh,440px)] rounded-[28px] bg-ink/[0.05]" />
         <div className="mt-16 h-64 rounded-2xl bg-ink/[0.04]" />
       </div>
@@ -162,20 +172,20 @@ function Shelves() {
     <div className="animate-enter">
       {hero && (
         <div className="group relative isolate mt-12 flex h-[clamp(300px,42vh,440px)] items-center overflow-hidden rounded-[28px] text-white">
-          <button onClick={() => open({ name: "collection", id: hero.id })} aria-label={`Open ${hero.title}`} className="absolute inset-0 rounded-[28px]" />
+          <button onClick={() => open({ name: "collection", id: hero.id })} aria-label={`Open ${hero.title}`} className="hit" />
           <img src={art(hero.thumb, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover blur-3xl saturate-150" />
           <div className="absolute inset-0 -z-10 bg-linear-to-r from-black/60 via-black/30 to-black/0" />
           <div className="pointer-events-none min-w-0 flex-1 p-10 lg:p-14">
             <h2 className="line-clamp-3 text-[clamp(40px,5.5vw,84px)] leading-[0.92] font-extrabold tracking-[-0.04em]">{hero.title}</h2>
             <div className="mt-4 truncate text-lg text-white/80">{hero.by}</div>
-            <button onClick={() => playCollection(hero.id)} className="press pointer-events-auto mt-8 inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 font-semibold text-black">
+            <button onClick={() => playCollection(hero.id)} className="press pointer-events-auto mt-8 inline-flex h-11 items-center gap-2 rounded-full bg-white px-6 font-semibold text-black hover:bg-white/85">
               <Play size={16} className="fill-current" /> Play
             </button>
           </div>
           <img
             src={art(hero.thumb, 900)}
             alt=""
-            className="pointer-events-none mr-10 aspect-square h-[78%] shrink-0 rounded-2xl object-cover shadow-2xl shadow-black/40 transition-transform duration-300 ease-(--ease-out) group-hover:scale-[1.02] lg:mr-14"
+            className="pointer-events-none mr-10 aspect-square h-[78%] shrink-0 rounded-2xl object-cover shadow-2xl shadow-black/40 lg:mr-14"
           />
         </div>
       )}
@@ -197,8 +207,8 @@ function Shelves() {
 export function CollectionPage({ id }: { id: string }) {
   const { data, error } = useAsync(() => collection(id), [id]);
   const saved = useLibrary((s) => s.saved.some((a) => a.id === id));
-  if (error) return <p className="px-12 pt-28 text-muted">Couldn't open this. Go back and try again.</p>;
-  if (!data) return <div className="h-[440px] animate-pulse bg-ink/[0.04]" />;
+  if (error) return <p className="px-12 pt-28 text-muted">Couldn’t open this. Go back and try again.</p>;
+  if (!data) return <Skeleton className="h-[440px] bg-ink/[0.04]" />;
   const isAlbum = id.startsWith("MPRE");
 
   return (
@@ -231,14 +241,14 @@ export function Library() {
   return (
     <div className="animate-enter px-12 pt-24">
       <h1 className="text-display">Library</h1>
-      <div className={`group relative isolate mt-12 flex h-[clamp(260px,34vh,360px)] items-end overflow-hidden rounded-[28px] p-10 text-white lg:p-14 ${LIKED}`}>
-        <button onClick={() => open({ name: "playlist", id: "liked" })} aria-label="Open Liked Songs" className="absolute inset-0 rounded-[28px]" />
+      <div className={`group relative isolate mt-12 flex min-h-[clamp(260px,34vh,360px)] items-end overflow-hidden rounded-[28px] p-10 text-white lg:p-14 ${LIKED}`}>
+        <button onClick={() => open({ name: "playlist", id: "liked" })} aria-label="Open Liked Songs" className="hit" />
         <div className="pointer-events-none min-w-0 flex-1">
           <Heart className="size-10 fill-white" strokeWidth={0} />
           <h2 className="mt-5 text-[clamp(40px,5.5vw,84px)] leading-[0.92] font-extrabold tracking-[-0.04em]">Liked Songs</h2>
           <div className="mt-3 text-lg text-white/80">{liked.length ? count(liked.length) : "Tap the heart on any song."}</div>
           {liked.length > 0 && (
-            <button onClick={() => play(liked, 0)} className={`${pill} pointer-events-auto mt-7 bg-white text-black`}>
+            <button onClick={() => play(liked, 0)} className={`${pill} pointer-events-auto mt-7 bg-white text-black hover:bg-white/85`}>
               <Play size={16} className="fill-current" /> Play
             </button>
           )}
@@ -258,7 +268,7 @@ export function Library() {
       </div>
 
       <Section title="Playlists">
-        <div className="-mx-12 flex gap-6 overflow-x-auto px-12 pb-2 [scrollbar-width:none]">
+        <div className="-mx-12 -mt-1 flex gap-6 overflow-x-auto px-12 pt-1 pb-2 [scrollbar-width:none]">
           <button onClick={() => open({ name: "playlist", id: newPlaylist() })} className="press w-48 shrink-0 text-left">
             <div className="grid aspect-square place-items-center rounded-xl border-2 border-dashed border-ink/15 text-muted transition-colors hover:border-ink/35 hover:text-ink">
               <Plus size={36} strokeWidth={1.75} />
@@ -325,14 +335,18 @@ export function PlaylistPage({ id }: { id: string }) {
         tint={playlist ? undefined : LIKED}
         title={
           playlist ? (
-            <input
-              value={playlist.name}
-              onChange={(e) => renamePlaylist(id, e.target.value)}
-              onBlur={(e) => !e.target.value.trim() && renamePlaylist(id, "Untitled Playlist")}
-              aria-label="Playlist name"
-              spellCheck={false}
-              className={`${TITLE} -my-2 w-full bg-transparent py-2 caret-white outline-none`}
-            />
+            <h1>
+              <input
+                value={playlist.name}
+                onChange={(e) => renamePlaylist(id, e.target.value)}
+                onBlur={(e) => !e.target.value.trim() && renamePlaylist(id, "Untitled Playlist")}
+                aria-label="Playlist name"
+                name="playlist-name"
+                autoComplete="off"
+                spellCheck={false}
+                className={`${TITLE} -my-2 w-full bg-transparent py-2 caret-white outline-none`}
+              />
+            </h1>
           ) : (
             <h1 className={TITLE}>Liked Songs</h1>
           )
@@ -344,6 +358,8 @@ export function PlaylistPage({ id }: { id: string }) {
           <button
             onClick={() => popup([{ text: "Delete Playlist", action: () => (back(), deletePlaylist(id)) }])}
             aria-label="More"
+            title="More"
+            aria-haspopup="menu"
             className="press grid size-11 place-items-center rounded-full bg-white/20 hover:bg-white/30"
           >
             <Ellipsis size={20} />
@@ -367,11 +383,11 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
   return (
     <ol className="-mx-12 grid auto-cols-[clamp(280px,31%,380px)] grid-flow-col grid-rows-4 gap-x-4 overflow-x-auto px-9 pb-2 [scrollbar-width:none]">
       {tracks.map((t, i) => (
-        <li key={t.id + i} onContextMenu={(e) => (e.preventDefault(), trackMenu(t))} className="group relative flex items-center gap-3.5 rounded-xl p-2 transition-colors hover:bg-ink/[0.04]">
-          <button onClick={() => play(tracks, i)} aria-label={`Play ${t.title}`} className="absolute inset-0 rounded-xl" />
+        <li key={t.id + i} onContextMenu={(e) => (e.preventDefault(), trackMenu(t))} className="group relative flex items-center gap-3.5 rounded-2xl p-2 transition-colors hover:bg-ink/[0.04]">
+          <button onClick={() => play(tracks, i)} aria-label={`Play ${t.title}`} className="hit" />
           {numbered && <span className="w-7 shrink-0 text-center text-2xl font-extrabold tracking-tight text-muted tabular-nums">{i + 1}</span>}
           <div className="relative size-14 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] pointer-events-none">
-            <img src={art(t.thumb, 120)} alt="" className="size-full object-cover" />
+            <img src={art(t.thumb, 120)} alt="" loading="lazy" className="size-full object-cover" />
             <div className={`absolute inset-0 grid place-items-center bg-black/35 text-white transition-opacity duration-150 ${current === t.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
               {current === t.id ? <AudioLines size={20} /> : <Play size={18} className="fill-current" />}
             </div>
@@ -390,8 +406,8 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
 
 export function Artist({ id }: { id: string }) {
   const { data, error } = useAsync(() => artist(id), [id]);
-  if (error) return <p className="px-12 pt-28 text-muted">{error}</p>;
-  if (!data) return <div className="h-[min(68vh,620px)] animate-pulse bg-ink/[0.03]" />;
+  if (error) return <p title={error} className="px-12 pt-28 text-muted">Couldn’t load this artist. Go back and try again.</p>;
+  if (!data) return <Skeleton className="h-[min(68vh,620px)] bg-ink/[0.03]" />;
 
   return (
     <div className="animate-enter">
@@ -405,7 +421,7 @@ export function Artist({ id }: { id: string }) {
         )}
         <div className="relative px-12">
           <h1 className="text-display">{data.name}</h1>
-          <button onClick={() => play(data.songs, 0)} className="press mt-7 flex h-11 items-center gap-2 rounded-full bg-accent px-6 font-semibold text-white">
+          <button onClick={() => play(data.songs, 0)} disabled={!data.songs.length} className="press mt-7 flex h-11 items-center gap-2 rounded-full bg-accent px-6 font-semibold text-white disabled:opacity-50">
             <Play size={16} className="fill-current" /> Play
           </button>
         </div>
@@ -414,7 +430,7 @@ export function Artist({ id }: { id: string }) {
       <div className="px-12">
         {data.about && <p className="mt-10 line-clamp-3 max-w-2xl text-[15px] leading-relaxed text-ink/65">{data.about}</p>}
         {data.songs.length > 0 && (
-          <Section title="Top songs">
+          <Section title="Top Songs">
             <TrackList tracks={data.songs} numbered />
           </Section>
         )}
@@ -441,10 +457,22 @@ export function NowPlaying() {
   const index = useStore((s) => s.index);
   const track = queue[index];
   const upNext = queue.slice(index + 1);
+  const close = useRef<HTMLButtonElement>(null);
+
+  // Focus moves into the sheet, and back to wherever it was when the sheet closes.
+  useEffect(() => {
+    if (!open) return;
+    const was = document.activeElement as HTMLElement | null;
+    close.current?.focus({ preventScroll: true });
+    return () => was?.focus({ preventScroll: true });
+  }, [open]);
 
   return (
     <div
       inert={!open}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Now Playing"
       className={`fixed inset-0 z-30 overflow-hidden bg-accent ${
         open
           ? "visible translate-y-0 [transition:transform_450ms_var(--ease-drawer)]"
@@ -469,7 +497,7 @@ export function NowPlaying() {
           )}
         </div>
         <div className="flex min-h-0 flex-col justify-end">
-          <h2 className="mb-4 text-2xl font-bold tracking-tight">Up next</h2>
+          <h2 className="mb-4 text-2xl font-bold tracking-tight">Up Next</h2>
           {upNext.length ? (
             <div className="min-h-0 overflow-y-auto">
               <TrackList tracks={upNext} onPlay={(i) => play(queue, index + 1 + i)} />
@@ -480,6 +508,7 @@ export function NowPlaying() {
         </div>
       </div>
       <button
+        ref={close}
         onClick={() => useStore.setState({ nowPlaying: false })}
         aria-label="Close"
         className="glass press absolute top-12 right-6 z-10 grid size-9 place-items-center rounded-full"
@@ -522,11 +551,11 @@ function TrackList({ tracks, numbered, plain, playlist, onPlay = (i) => play(tra
         <li
           key={t.id + i}
           onContextMenu={(e) => (e.preventDefault(), trackMenu(t, playlist ? { playlist, index: i } : undefined))}
-          className={`group relative grid items-center gap-4 rounded-xl px-3 py-2 transition-colors hover:bg-ink/[0.04] ${plain ? "grid-cols-[28px_1fr_32px_48px]" : numbered ? "grid-cols-[28px_40px_1fr_1fr_32px_48px]" : "grid-cols-[40px_1fr_1fr_32px_48px]"}`}
+          className={`group relative grid items-center gap-4 rounded-2xl px-3 py-2 transition-colors [contain-intrinsic-size:auto_60px] [content-visibility:auto] hover:bg-ink/[0.04] ${plain ? "grid-cols-[28px_1fr_32px_48px]" : numbered ? "grid-cols-[28px_40px_1fr_1fr_32px_48px]" : "grid-cols-[40px_1fr_1fr_32px_48px]"}`}
         >
-          <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="absolute inset-0 rounded-xl" />
+          <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
           {numbered && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
-          {!plain && <img src={art(t.thumb, 96)} alt="" className="size-10 rounded-md bg-ink/[0.06] object-cover" />}
+          {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-10 rounded-lg bg-ink/[0.06] object-cover" />}
           <div className="min-w-0">
             <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>{t.title}</div>
             <div className="truncate text-sm text-muted">
@@ -558,12 +587,12 @@ function LikeButton({ track }: { track: Track }) {
 
 function Albums({ items }: { items: Album[] }) {
   return (
-    <div className="-mx-12 flex gap-6 overflow-x-auto px-12 pb-2 [scrollbar-width:none]">
+    <div className="-mx-12 -mt-1 flex gap-6 overflow-x-auto px-12 pt-1 pb-2 [scrollbar-width:none]">
       {items.map((a) => (
         <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative w-48 shrink-0">
           <button onClick={() => open({ name: "collection", id: a.id })} className="press block w-full rounded-xl text-left">
             <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
-              <img src={art(a.thumb, 400)} alt="" className="aspect-square w-full object-cover transition-transform duration-300 ease-(--ease-out) group-hover:scale-[1.03]" />
+              <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
             </div>
             <div className="mt-3 truncate font-semibold">{a.title}</div>
             <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>

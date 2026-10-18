@@ -1,5 +1,5 @@
-import { useEffect, type CSSProperties } from "react";
-import { ChevronLeft, Disc3, Heart, House, Library as LibraryIcon, LoaderCircle, Pause, Play, Search as SearchIcon, SkipBack, SkipForward, Volume2, VolumeX, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { ChevronLeft, Disc3, Heart, Music, House, Library as LibraryIcon, LoaderCircle, Pause, Play, Search as SearchIcon, SkipBack, SkipForward, Volume2, VolumeX, type LucideIcon } from "lucide-react";
 import { audio, back, go, next, prev, toggle, toggleLike, useAudio, useLibrary, useStore } from "./store";
 import { Artist, Artists, CollectionPage, Home, Library, NowPlaying, PlaylistPage, Search, trackMenu } from "./views";
 import { art } from "./yt";
@@ -12,7 +12,8 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") return useStore.setState({ nowPlaying: false });
-      if (e.code !== "Space" || e.target instanceof HTMLInputElement) return;
+      // Space on a focused button or field is theirs.
+      if (e.code !== "Space" || e.repeat || (e.target as Element).closest?.("button, input, textarea")) return;
       e.preventDefault();
       toggle();
     };
@@ -25,14 +26,15 @@ export default function App() {
       {/* macOS draws the traffic lights over this strip (titleBarStyle: Overlay). */}
       <div data-tauri-drag-region className="fixed inset-x-0 top-0 z-50 h-11" />
 
-      <nav className="flex w-[76px] shrink-0 flex-col items-center gap-1 pt-20">
+      {/* The Now Playing sheet covers these; keep focus out of what's under it. */}
+      <nav inert={nowPlaying} className="flex w-[76px] shrink-0 flex-col items-center gap-1 pt-20">
         <RailButton icon={House} label="Home" active={!nowPlaying && root === "home"} onClick={() => go("home")} />
         <RailButton icon={SearchIcon} label="Search" active={!nowPlaying && root === "search"} onClick={() => go("search")} />
         <RailButton icon={LibraryIcon} label="Library" active={!nowPlaying && root === "library"} onClick={() => go("library")} />
         <RailButton icon={Disc3} label="Now Playing" active={nowPlaying} onClick={() => useStore.setState((s) => ({ nowPlaying: !s.nowPlaying }))} />
       </nav>
 
-      <main className="relative min-w-0 flex-1">
+      <main inert={nowPlaying} className="relative min-w-0 flex-1">
         {/* Every view in the stack stays mounted, so going back keeps its results and scroll position. */}
         {stack.map((view, i) => (
           <div key={i + view.name + ("id" in view ? view.id : "")} hidden={i !== stack.length - 1} className="absolute inset-0 overflow-y-auto pb-36">
@@ -50,13 +52,14 @@ export default function App() {
 
       <NowPlaying />
       <PlayerBar />
+      <Toast />
     </div>
   );
 }
 
 function RailButton({ icon: Icon, label, active, onClick }: { icon: LucideIcon; label: string; active: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} aria-label={label} title={label} className={`press grid size-11 place-items-center rounded-xl hover:text-ink ${active ? "text-ink" : "text-muted"}`}>
+    <button onClick={onClick} aria-label={label} title={label} aria-current={active ? "page" : undefined} className={`press grid size-11 place-items-center rounded-xl hover:text-ink ${active ? "text-ink" : "text-muted"}`}>
       <Icon size={22} strokeWidth={active ? 2.4 : 2} />
     </button>
   );
@@ -84,7 +87,7 @@ function PlayerBar() {
             </button>
             <div className="min-w-0">
               <div className="truncate font-semibold">{track?.title ?? "Not playing"}</div>
-              <div className="truncate text-sm text-ink/55">{error ? <span title={error} className="text-red-700">Couldn't play this track. Try it again or pick another.</span> : track && <Artists list={track.artists} />}</div>
+              <div aria-live="polite" className="truncate text-sm text-muted">{error ? <span title={error} className="text-ink">Couldn’t play this track. Try it again or pick another.</span> : track && <Artists list={track.artists} />}</div>
             </div>
             {track && (
               <button onClick={() => toggleLike(track)} aria-label={liked ? "Unlike" : "Like"} aria-pressed={liked} className="press grid size-8 shrink-0 place-items-center rounded-full text-ink/50 hover:text-ink">
@@ -96,12 +99,12 @@ function PlayerBar() {
           <div className="flex flex-col items-center gap-0.5">
             <div className="flex items-center gap-2">
               <button onClick={prev} aria-label="Previous" className="press grid size-10 place-items-center rounded-full"><SkipBack size={20} className="fill-current" /></button>
-              <button onClick={toggle} aria-label={paused ? "Play" : "Pause"} className="press grid size-10 place-items-center rounded-full bg-accent text-white">
+              <button onClick={toggle} aria-label={loading ? "Loading…" : paused ? "Play" : "Pause"} className="press grid size-10 place-items-center rounded-full bg-accent text-white">
                 {loading ? <LoaderCircle size={18} className="animate-[spin_0.6s_linear_infinite]" /> : paused ? <Play size={18} className="ml-0.5 fill-current" /> : <Pause size={18} className="fill-current" />}
               </button>
               <button onClick={next} aria-label="Next" className="press grid size-10 place-items-center rounded-full"><SkipForward size={20} className="fill-current" /></button>
             </div>
-            <div className="flex w-full items-center gap-3 text-[11px] font-medium text-ink/50 tabular-nums">
+            <div className="flex w-full items-center gap-3 text-[11px] font-medium text-muted tabular-nums">
               <span className="w-9 text-right">{fmt(time)}</span>
               <input type="range" aria-label="Seek" min={0} max={duration || 0} step={0.1} value={time} onChange={(e) => (audio.currentTime = +e.target.value)} style={fill(time, duration)} className="flex-1" />
               <span className="w-9">{fmt(duration)}</span>
@@ -116,6 +119,56 @@ function PlayerBar() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Every library change answers here, above the player bar. Stays mounted so it can animate out and
+// so screen readers hear each one; holds still while the pointer or focus is on it.
+function Toast() {
+  const toast = useStore((s) => s.toast);
+  const [last, setLast] = useState(toast);
+  const [hold, setHold] = useState(false);
+  if (toast && toast !== last) setLast(toast);
+  useEffect(() => {
+    if (!toast || hold) return;
+    const t = setTimeout(() => useStore.setState({ toast: undefined }), 5000);
+    return () => clearTimeout(t);
+  }, [toast, hold]);
+  const t = toast ?? last;
+
+  return (
+    <div role="status" className="pointer-events-none fixed bottom-[108px] left-[calc(50%+38px)] z-40 -translate-x-1/2">
+      {t && (
+        <div
+          inert={!toast}
+          onPointerEnter={() => setHold(true)}
+          onPointerLeave={() => setHold(false)}
+          onFocus={() => setHold(true)}
+          onBlur={() => setHold(false)}
+          className={`flex w-[min(460px,calc(100vw-140px))] items-center gap-4 rounded-[22px] bg-ink p-3 text-white shadow-2xl shadow-black/30 ${
+            toast
+              ? "pointer-events-auto translate-y-0 scale-100 opacity-100 transition-[opacity,translate,scale] duration-400 ease-(--ease-out)"
+              : "translate-y-4 scale-95 opacity-0 transition-[opacity,translate,scale] duration-200 ease-in"
+          }`}
+        >
+          {/* A new toast over a showing one swaps its contents in place. */}
+          <div key={t.id} className="flex min-w-0 flex-1 animate-enter items-center gap-4">
+            <div className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-[10px] bg-white/10">
+              {t.thumb ? <img src={art(t.thumb, 120)} alt="" className="size-full object-cover" /> : <Music size={22} className="text-white/60" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[17px] font-bold tracking-tight">{t.text}</div>
+              {t.detail && <div className="truncate text-sm text-white/60">{t.detail}</div>}
+            </div>
+          </div>
+          {t.undo && (
+            <button onClick={t.undo} className="press h-10 shrink-0 rounded-full bg-white px-5 font-semibold text-black hover:bg-white/85">
+              Undo
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

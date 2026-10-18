@@ -45,6 +45,16 @@
     0 12px 40px -12px rgb(0 0 0 / 0.25);
 }
 
+/* A whole card or row as one target, under its own inner buttons. The ring sits inside: cards clip. */
+@utility hit {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  &:focus-visible {
+    outline-offset: -2px;
+  }
+}
+
 /* Every pressable thing answers the press the same way. */
 @utility press {
   transition:
@@ -62,9 +72,18 @@ body,
   height: 100%;
 }
 
+html {
+  color-scheme: light;
+}
+
 body {
   @apply bg-paper text-ink antialiased select-none;
   overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+button,
+input {
+  touch-action: manipulation;
 }
 
 h1,
@@ -79,13 +98,16 @@ h2 {
 input {
   caret-color: var(--color-accent);
 }
-:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-/* Fields show focus with the caret; sliders with their thumb. */
-input:focus-visible {
-  outline: none;
+/* In the base layer so utilities (hit) can move the ring. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  /* Fields show focus with the caret; sliders with their thumb. */
+  input:focus-visible {
+    outline: none;
+  }
 }
 * {
   scrollbar-width: thin;

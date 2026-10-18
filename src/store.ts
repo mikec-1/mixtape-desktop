@@ -13,7 +13,10 @@ type State = {
   index: number;
   loading: boolean;
   error: string;
+  toast?: Toast;
 };
+// Feedback for a library change: what happened, to what, and a way back.
+export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void };
 
 export const useStore = create<State>(() => ({
   stack: [{ name: "home" }],
@@ -36,17 +39,42 @@ export type Playlist = { id: string; name: string; tracks: Track[] };
 type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[] };
 export const useLibrary = create<Library>()(persist((): Library => ({ liked: [], saved: [], playlists: [] }), { name: "library" }));
 const lib = useLibrary.setState;
-const toggleIn = <T extends { id: string }>(list: T[], x: T) => (list.some((y) => y.id === x.id) ? list.filter((y) => y.id !== x.id) : [x, ...list]);
-export const toggleLike = (t: Track) => lib((s) => ({ liked: toggleIn(s.liked, t) }));
-export const toggleSave = (a: Album) => lib((s) => ({ saved: toggleIn(s.saved, a) }));
-const edit = (id: string, fn: (p: Playlist) => Partial<Playlist>) => lib((s) => ({ playlists: s.playlists.map((p) => (p.id === id ? { ...p, ...fn(p) } : p)) }));
-export const addToPlaylist = (id: string, tracks: Track[]) => edit(id, (p) => ({ tracks: [...p.tracks, ...tracks] }));
-export const removeFromPlaylist = (id: string, index: number) => edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => i !== index) }));
-export const renamePlaylist = (id: string, name: string) => edit(id, () => ({ name }));
-export const deletePlaylist = (id: string) => lib((s) => ({ playlists: s.playlists.filter((p) => p.id !== id) }));
+let toasts = 0;
+const notify = (t: Omit<Toast, "id">) => set({ toast: { ...t, id: ++toasts } });
+
+// Every library change goes through here: apply it, say so, offer Undo. Undo puts back only the
+// lists this change touched. ponytail: an edit to the same list in between (a rename) is undone with it.
+function change(text: string, about: { title?: string; thumb?: string } | undefined, fn: (s: Library) => Partial<Library>, undoable = true) {
+  const before = useLibrary.getState();
+  const patch = fn(before);
+  lib(patch);
+  const restore = Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof Library]]));
+  notify({ text, detail: about?.title, thumb: about?.thumb, undo: undoable ? () => (lib(restore), set({ toast: undefined })) : undefined });
+}
+
+const has = (list: { id: string }[], id: string) => list.some((x) => x.id === id);
+const toggleIn = <T extends { id: string }>(list: T[], x: T) => (has(list, x.id) ? list.filter((y) => y.id !== x.id) : [x, ...list]);
+const playlist = (id: string) => useLibrary.getState().playlists.find((p) => p.id === id);
+const edit = (id: string, fn: (p: Playlist) => Partial<Playlist>) => (s: Library) => ({ playlists: s.playlists.map((p) => (p.id === id ? { ...p, ...fn(p) } : p)) });
+
+export const toggleLike = (t: Track) =>
+  change(has(useLibrary.getState().liked, t.id) ? "Removed from Liked Songs" : "Added to Liked Songs", t, (s) => ({ liked: toggleIn(s.liked, t) }));
+export const toggleSave = (a: Album) =>
+  change(has(useLibrary.getState().saved, a.id) ? "Removed from Library" : "Saved to Library", a, (s) => ({ saved: toggleIn(s.saved, a) }));
+export const addToPlaylist = (id: string, tracks: Track[]) =>
+  change(`Added to ${playlist(id)?.name}`, tracks[0], edit(id, (p) => ({ tracks: [...p.tracks, ...tracks] })));
+export const removeFromPlaylist = (id: string, index: number) =>
+  change(`Removed from ${playlist(id)?.name}`, playlist(id)?.tracks[index], edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => i !== index) })));
+export const renamePlaylist = (id: string, name: string) => lib(edit(id, () => ({ name })));
+export function deletePlaylist(id: string) {
+  const p = playlist(id);
+  if (p) change("Playlist Deleted", { title: p.name, thumb: p.tracks[0]?.thumb }, (s) => ({ playlists: s.playlists.filter((x) => x.id !== id) }));
+}
+// An empty one opens straight onto its page, which says enough; one made from a song gets a toast.
 export function newPlaylist(tracks: Track[] = []) {
   const p = { id: crypto.randomUUID(), name: `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks };
-  lib((s) => ({ playlists: [...s.playlists, p] }));
+  if (tracks.length) change(`Added to ${p.name}`, tracks[0], (s) => ({ playlists: [...s.playlists, p] }), false);
+  else lib((s) => ({ playlists: [...s.playlists, p] }));
   return p.id;
 }
 

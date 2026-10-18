@@ -57,7 +57,13 @@ export type Shelf = { title: string; tracks: Track[]; albums: Album[] };
 // The YT Music start page: its home shelves (two pages of them) followed by Explore's.
 let homeFeed: ReturnType<typeof loadHome> | undefined;
 // Fetched once per launch, so going back Home is instant. A failed load is retried next time.
-export const home = () => (homeFeed ??= loadHome().catch((e) => ((homeFeed = undefined), Promise.reject(e))));
+export const home = () =>
+  (homeFeed ??= loadHome().then(
+    (s) => ((localStorage.home = JSON.stringify(s)), s),
+    (e) => ((homeFeed = undefined), Promise.reject(e)),
+  ));
+// Last launch's Home: drawn instantly, and all there is when offline.
+export const lastHome: Shelf[] | undefined = JSON.parse(localStorage.home ?? "null") ?? undefined;
 
 async function loadHome(): Promise<Shelf[]> {
   const music = (await yt).music;

@@ -1,14 +1,17 @@
 import { useSyncExternalStore } from "react";
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { art, fetchAudio, playAudio, type Album, type Track } from "./yt";
 
+type Root = "home" | "search" | "library" | "settings";
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
-export type View = { name: "home" | "search" | "library" } | { name: "artist" | "collection" | "playlist"; id: string };
+export type View = { name: Root } | { name: "artist" | "collection" | "playlist"; id: string };
 
 type State = {
   stack: View[];
-  nowPlaying: boolean;
+  ahead: View[]; // what Back left, for Forward
+  nowPlaying: boolean; // the full-screen sheet
+  query: string; // the search field
   queue: Track[];
   index: number;
   loading: boolean;
@@ -20,7 +23,9 @@ export type Toast = { id: number; text: string; detail?: string; thumb?: string;
 
 export const useStore = create<State>(() => ({
   stack: [{ name: "home" }],
+  ahead: [],
   nowPlaying: false,
+  query: "",
   queue: [],
   index: -1,
   loading: false,
@@ -28,19 +33,41 @@ export const useStore = create<State>(() => ({
 }));
 const { setState: set, getState: get } = useStore;
 
-export const open = (view: View) => set((s) => ({ stack: [...s.stack, view], nowPlaying: false }));
-export const back = () => set((s) => ({ stack: s.stack.slice(0, Math.max(1, s.stack.length - 1)) }));
-export const go = (name: "home" | "search" | "library") => set({ stack: [{ name }], nowPlaying: false });
+export const open = (view: View) => set((s) => ({ stack: [...s.stack, view], ahead: [], nowPlaying: false }));
+export const back = () => set((s) => (s.stack.length > 1 ? { stack: s.stack.slice(0, -1), ahead: [s.stack.at(-1)!, ...s.ahead] } : s));
+export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, s.ahead[0]], ahead: s.ahead.slice(1) } : s));
+export const go = (name: Root) => set({ stack: [{ name }], ahead: [], nowPlaying: false });
 export const report = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e), loading: false });
 
-// Your library. ponytail: localStorage caps near 5 MB (tens of thousands of tracks); move to
-// tauri-plugin-sql when imports outgrow it.
+// Your library, in IndexedDB: no 5 MB cap like localStorage, and the same code runs in the web build.
+// ponytail: the whole library is rewritten on every change; per-row SQLite if imports reach ~100k tracks.
+const db = new Promise<IDBDatabase>((ok, fail) => {
+  const r = indexedDB.open("sleeve", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("kv");
+  r.onsuccess = () => ok(r.result);
+  r.onerror = () => fail(r.error);
+});
+const kv = <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>) =>
+  db.then((d) => new Promise<T>((ok, fail) => {
+    const r = fn(d.transaction("kv", mode).objectStore("kv"));
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => fail(r.error);
+  }));
+const idb: StateStorage = {
+  // Libraries saved before the move are still in localStorage until their first write here.
+  getItem: async (k) => (await kv<string | undefined>("readonly", (s) => s.get(k))) ?? localStorage.getItem(k),
+  setItem: (k, v) => kv("readwrite", (s) => s.put(v, k)).then(() => localStorage.removeItem(k)),
+  removeItem: (k) => kv("readwrite", (s) => s.delete(k)).then(() => {}),
+};
+
 export type Playlist = { id: string; name: string; tracks: Track[] };
 type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[] };
-export const useLibrary = create<Library>()(persist((): Library => ({ liked: [], saved: [], playlists: [] }), { name: "library" }));
+export const useLibrary = create<Library>()(
+  persist((): Library => ({ liked: [], saved: [], playlists: [] }), { name: "library", storage: createJSONStorage(() => idb) }),
+);
 const lib = useLibrary.setState;
 let toasts = 0;
-const notify = (t: Omit<Toast, "id">) => set({ toast: { ...t, id: ++toasts } });
+export const notify = (t: Omit<Toast, "id">) => set({ toast: { ...t, id: ++toasts } });
 
 // Every library change goes through here: apply it, say so, offer Undo. Undo puts back only the
 // lists this change touched. ponytail: an edit to the same list in between (a rename) is undone with it.
@@ -70,6 +97,10 @@ export function deletePlaylist(id: string) {
   const p = playlist(id);
   if (p) change("Playlist Deleted", { title: p.name, thumb: p.tracks[0]?.thumb }, (s) => ({ playlists: s.playlists.filter((x) => x.id !== id) }));
 }
+// Replaces the whole library from an export file; Undo brings the old one back.
+export const restoreLibrary = (l: Library) =>
+  change("Library Restored", { title: `${plural(l.liked.length, "liked song")}, ${plural(l.playlists.length, "playlist")}, ${plural(l.saved.length, "album")}` }, () => l);
+export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 // An empty one opens straight onto its page, which says enough; one made from a song gets a toast.
 export function newPlaylist(tracks: Track[] = []) {
   const p = { id: crypto.randomUUID(), name: `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks };
@@ -77,6 +108,9 @@ export function newPlaylist(tracks: Track[] = []) {
   else lib((s) => ({ playlists: [...s.playlists, p] }));
   return p.id;
 }
+
+const onlineChange = (cb: () => void) => (addEventListener("online", cb), addEventListener("offline", cb), () => (removeEventListener("online", cb), removeEventListener("offline", cb)));
+export const useOnline = () => useSyncExternalStore(onlineChange, () => navigator.onLine);
 
 export const audio = new Audio();
 
@@ -116,10 +150,11 @@ export const prev = () => (audio.currentTime > 3 ? (audio.currentTime = 0) : pla
 audio.addEventListener("ended", next);
 
 // The UI's one colour: the artwork's most prominent vivid hue, by chroma-weighted 30° hue buckets.
-// Grey artwork leaves it at ink. index.css clamps it to a readable lightness and fades between tracks.
+// Grey artwork leaves it at Sleeve's pink. index.css clamps it to a readable lightness and fades between tracks.
 let accentSrc: string | undefined;
 function setAccent(src?: string) {
   accentSrc = src;
+  if (!useSettings.getState().artworkAccent) return document.documentElement.style.removeProperty("--accent-raw");
   if (!src) return;
   const img = new Image();
   img.crossOrigin = "anonymous"; // googleusercontent and ytimg allow it; a tainted canvas can't be read
@@ -144,6 +179,17 @@ function setAccent(src?: string) {
   };
   img.src = src;
 }
+
+// Small and read synchronously at startup, so the theme is right on the first frame: localStorage.
+// sidebarWidth is the expanded width; closed, the sidebar is the icon rail.
+type Settings = { theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number };
+export const useSettings = create<Settings>()(persist((): Settings => ({ theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220 }), { name: "settings" }));
+const applySettings = (s: Settings, was?: Settings) => {
+  document.documentElement.dataset.theme = s.theme; // index.css: color-scheme picks every token's light or dark value
+  if (s.artworkAccent !== was?.artworkAccent) setAccent(accentSrc);
+};
+applySettings(useSettings.getState());
+useSettings.subscribe(applySettings);
 
 // Media keys, Control Center / taskbar controls.
 function setMediaSession(t: Track) {

@@ -1,15 +1,29 @@
 @import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 
 @theme {
-  --color-paper: #f5f5f7;
-  --color-ink: #121212;
-  --color-muted: #6e6e73;
-  /* Tint taken from the playing track's artwork (store.ts). Lightness is clamped so white on it
-     and it on paper both stay above 4.5:1. */
-  --color-accent: oklch(from var(--accent-raw) clamp(0.22, l, 0.55) min(c, 0.2) h);
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  /* Every colour is light-dark(): the root's color-scheme (system, or Settings' choice) picks one. */
+  /* The rail, the page and the player (paper) sit on a slightly darker base with gaps between them. */
+  --color-base: light-dark(#e9e9ec, #000);
+  --color-paper: light-dark(#fff, #141416);
+  --color-ink: light-dark(#121212, #f5f5f7);
+  --color-muted: light-dark(#6e6e73, #98989d);
+  /* Tint taken from the playing track's artwork (store.ts). Lightness is clamped so paper on it
+     and it on paper both stay above 4.5:1; dark mode flips the range. With no colour (nothing
+     playing, or turned off in Settings) it's Sleeve's pink. */
+  --color-accent: light-dark(
+    oklch(from var(--accent-raw) clamp(0.22, l, 0.55) min(c, 0.2) h),
+    oklch(from var(--accent-raw) max(clamp(0.66, l, 0.82), 0.97 - c * 10) min(c, 0.2) h)
+  );
+  /* Always dark enough for white on it: the Now Playing sheet. */
+  --color-accent-deep: oklch(from var(--accent-raw) clamp(0.22, l, 0.45) min(c, 0.2) h);
+  /* Bundled, so Mac, Windows and web set the same type. Mono is only for keys. */
+  --font-sans: "Geist Variable", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
 
-  --text-display: clamp(56px, 8vw, 112px);
+  /* Sized to the page card (main is a container), not the window. */
+  --text-display: clamp(44px, 8cqw, 104px);
   --text-display--line-height: 0.9;
   --text-display--letter-spacing: -0.04em;
   --text-display--font-weight: 800;
@@ -29,19 +43,21 @@
 @property --accent-raw {
   syntax: "<color>";
   inherits: true;
-  initial-value: #121212;
+  initial-value: #ff375f;
 }
 :root {
   transition: --accent-raw 0.5s ease;
+  --glass: light-dark(rgb(255 255 255 / 0.55), rgb(38 38 42 / 0.6));
+  --glass-edge: light-dark(rgb(255 255 255 / 0.7), rgb(255 255 255 / 0.1));
 }
 
-/* Frosted material for floating UI only (player bar, overlay buttons). */
+/* Frosted material for things that float on artwork (the About card, overlay buttons). */
 @utility glass {
-  background: rgb(255 255 255 / 0.55);
+  background: var(--glass);
   -webkit-backdrop-filter: blur(28px) saturate(1.8);
   backdrop-filter: blur(28px) saturate(1.8);
   box-shadow:
-    inset 0 0 0 0.5px rgb(255 255 255 / 0.7),
+    inset 0 0 0 0.5px var(--glass-edge),
     0 12px 40px -12px rgb(0 0 0 / 0.25);
 }
 
@@ -73,11 +89,17 @@ body,
 }
 
 html {
-  color-scheme: light;
+  color-scheme: light dark;
+  &[data-theme="light"] {
+    color-scheme: light;
+  }
+  &[data-theme="dark"] {
+    color-scheme: dark;
+  }
 }
 
 body {
-  @apply bg-paper text-ink antialiased select-none;
+  @apply bg-base text-[15px] text-ink antialiased select-none;
   overflow: hidden;
   -webkit-tap-highlight-color: transparent;
 }
@@ -111,7 +133,7 @@ input {
 }
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgb(18 18 18 / 0.2) transparent;
+  scrollbar-color: color-mix(in oklab, var(--color-ink) 20%, transparent) transparent;
 }
 
 /* Hairline scrubber; the filled part is driven by --p. */
@@ -124,7 +146,7 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: 3px;
-  background: linear-gradient(to right, var(--color-accent) var(--p, 0%), rgb(18 18 18 / 0.14) var(--p, 0%));
+  background: linear-gradient(to right, var(--color-accent) var(--p, 0%), color-mix(in oklab, var(--color-ink) 14%, transparent) var(--p, 0%));
 }
 input[type="range"]::-webkit-slider-thumb {
   appearance: none;

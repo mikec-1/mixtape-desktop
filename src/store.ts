@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { art, fetchAudio, playAudio, type Album, type Track } from "./yt";
 
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
@@ -33,11 +33,32 @@ export const back = () => set((s) => ({ stack: s.stack.slice(0, Math.max(1, s.st
 export const go = (name: "home" | "search" | "library") => set({ stack: [{ name }], nowPlaying: false });
 export const report = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e), loading: false });
 
-// Your library. ponytail: localStorage caps near 5 MB (tens of thousands of tracks); move to
-// tauri-plugin-sql when imports outgrow it.
+// Your library, in IndexedDB: no 5 MB cap like localStorage, and the same code runs in the web build.
+// ponytail: the whole library is rewritten on every change; per-row SQLite if imports reach ~100k tracks.
+const db = new Promise<IDBDatabase>((ok, fail) => {
+  const r = indexedDB.open("sleeve", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("kv");
+  r.onsuccess = () => ok(r.result);
+  r.onerror = () => fail(r.error);
+});
+const kv = <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>) =>
+  db.then((d) => new Promise<T>((ok, fail) => {
+    const r = fn(d.transaction("kv", mode).objectStore("kv"));
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => fail(r.error);
+  }));
+const idb: StateStorage = {
+  // Libraries saved before the move are still in localStorage until their first write here.
+  getItem: async (k) => (await kv<string | undefined>("readonly", (s) => s.get(k))) ?? localStorage.getItem(k),
+  setItem: (k, v) => kv("readwrite", (s) => s.put(v, k)).then(() => localStorage.removeItem(k)),
+  removeItem: (k) => kv("readwrite", (s) => s.delete(k)).then(() => {}),
+};
+
 export type Playlist = { id: string; name: string; tracks: Track[] };
 type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[] };
-export const useLibrary = create<Library>()(persist((): Library => ({ liked: [], saved: [], playlists: [] }), { name: "library" }));
+export const useLibrary = create<Library>()(
+  persist((): Library => ({ liked: [], saved: [], playlists: [] }), { name: "library", storage: createJSONStorage(() => idb) }),
+);
 const lib = useLibrary.setState;
 let toasts = 0;
 const notify = (t: Omit<Toast, "id">) => set({ toast: { ...t, id: ++toasts } });
@@ -77,6 +98,9 @@ export function newPlaylist(tracks: Track[] = []) {
   else lib((s) => ({ playlists: [...s.playlists, p] }));
   return p.id;
 }
+
+const onlineChange = (cb: () => void) => (addEventListener("online", cb), addEventListener("offline", cb), () => (removeEventListener("online", cb), removeEventListener("offline", cb)));
+export const useOnline = () => useSyncExternalStore(onlineChange, () => navigator.onLine);
 
 export const audio = new Audio();
 

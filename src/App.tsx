@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { ChevronLeft, Disc3, Heart, Music, House, Library as LibraryIcon, LoaderCircle, Pause, Play, Search as SearchIcon, SkipBack, SkipForward, Volume2, VolumeX, type LucideIcon } from "lucide-react";
-import { audio, back, go, next, prev, toggle, toggleLike, useAudio, useLibrary, useStore } from "./store";
+import { ChevronLeft, Disc3, Heart, Music, WifiOff, House, Library as LibraryIcon, LoaderCircle, Pause, Play, Search as SearchIcon, SkipBack, SkipForward, Volume2, VolumeX, type LucideIcon } from "lucide-react";
+import { audio, back, go, newPlaylist, next, open, prev, toggle, toggleLike, useAudio, useLibrary, useOnline, useStore } from "./store";
 import { Artist, Artists, CollectionPage, Home, Library, NowPlaying, PlaylistPage, Search, trackMenu } from "./views";
 import { art } from "./yt";
 
@@ -11,11 +11,16 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") return useStore.setState({ nowPlaying: false });
-      // Space on a focused button or field is theirs.
-      if (e.code !== "Space" || e.repeat || (e.target as Element).closest?.("button, input, textarea")) return;
+      const key = (e.metaKey || e.ctrlKey ? "mod+" : "") + e.key.toLowerCase();
+      const target = e.target as Element;
+      // Fields keep their own keys (arrows, space, ⌘← …); ⌘ shortcuts without arrows still work in them.
+      if (target.closest?.("input, textarea") && key !== "escape" && !(key.startsWith("mod+") && !key.includes("arrow"))) return;
+      // Space on a focused button presses it.
+      if (key === " " && (e.repeat || target.closest?.("button"))) return;
+      const run = shortcuts[key];
+      if (!run || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      toggle();
+      run();
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
@@ -53,9 +58,38 @@ export default function App() {
       <NowPlaying />
       <PlayerBar />
       <Toast />
+      <Offline />
     </div>
   );
 }
+
+const findSearch = () => {
+  go("search");
+  requestAnimationFrame(() => document.querySelector<HTMLInputElement>("input[name=q]")?.select());
+};
+const nudge = (prop: "currentTime" | "volume", by: number, max: number) => (audio[prop] = Math.min(max, Math.max(0, audio[prop] + by)));
+
+// ⌘ is Ctrl on Windows. ponytail: fixed bindings; remapping comes with Settings.
+const shortcuts: Record<string, () => unknown> = {
+  " ": toggle,
+  escape: () => useStore.setState({ nowPlaying: false }),
+  arrowright: () => nudge("currentTime", 5, audio.duration || 0),
+  arrowleft: () => nudge("currentTime", -5, audio.duration || 0),
+  "mod+k": findSearch,
+  "mod+f": findSearch,
+  "mod+1": () => go("home"),
+  "mod+2": findSearch,
+  "mod+3": () => go("library"),
+  "mod+n": () => open({ name: "playlist", id: newPlaylist() }),
+  "mod+l": () => {
+    const { queue, index } = useStore.getState();
+    if (queue[index]) toggleLike(queue[index]);
+  },
+  "mod+arrowright": next,
+  "mod+arrowleft": prev,
+  "mod+arrowup": () => ((audio.muted = false), nudge("volume", 0.1, 1)),
+  "mod+arrowdown": () => nudge("volume", -0.1, 1),
+};
 
 function RailButton({ icon: Icon, label, active, onClick }: { icon: LucideIcon; label: string; active: boolean; onClick: () => void }) {
   return (
@@ -99,7 +133,7 @@ function PlayerBar() {
           <div className="flex flex-col items-center gap-0.5">
             <div className="flex items-center gap-2">
               <button onClick={prev} aria-label="Previous" className="press grid size-10 place-items-center rounded-full"><SkipBack size={20} className="fill-current" /></button>
-              <button onClick={toggle} aria-label={loading ? "Loading…" : paused ? "Play" : "Pause"} className="press grid size-10 place-items-center rounded-full bg-accent text-white">
+              <button onClick={toggle} aria-label={loading ? "Loading…" : paused ? "Play" : "Pause"} className="press grid size-10 place-items-center rounded-full bg-accent text-paper">
                 {loading ? <LoaderCircle size={18} className="animate-[spin_0.6s_linear_infinite]" /> : paused ? <Play size={18} className="ml-0.5 fill-current" /> : <Pause size={18} className="fill-current" />}
               </button>
               <button onClick={next} aria-label="Next" className="press grid size-10 place-items-center rounded-full"><SkipForward size={20} className="fill-current" /></button>
@@ -119,6 +153,15 @@ function PlayerBar() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function Offline() {
+  if (useOnline()) return null;
+  return (
+    <div role="status" className="glass fixed top-3 left-[calc(50%+38px)] z-50 flex -translate-x-1/2 animate-enter items-center gap-2.5 rounded-full py-2 pr-5 pl-4 text-sm font-semibold">
+      <WifiOff size={16} /> You’re offline. Your library is still here.
     </div>
   );
 }
@@ -146,7 +189,7 @@ function Toast() {
           onPointerLeave={() => setHold(false)}
           onFocus={() => setHold(true)}
           onBlur={() => setHold(false)}
-          className={`flex w-[min(460px,calc(100vw-140px))] items-center gap-4 rounded-[22px] bg-ink p-3 text-white shadow-2xl shadow-black/30 ${
+          className={`flex w-[min(460px,calc(100vw-140px))] items-center gap-4 rounded-[22px] bg-neutral-900 p-3 text-white shadow-2xl ring-1 shadow-black/30 ring-white/10 ${
             toast
               ? "pointer-events-auto translate-y-0 scale-100 opacity-100 transition-[opacity,translate,scale] duration-400 ease-(--ease-out)"
               : "translate-y-4 scale-95 opacity-0 transition-[opacity,translate,scale] duration-200 ease-in"

@@ -1,5 +1,5 @@
-// Smoke test for the YouTube side, outside the app, mirroring src/yt.ts: search -> mint a PO token with
-// BotGuard -> resolve the YTMUSIC audio stream -> download all of it in 1 MB ranges.
+// Smoke test for the YouTube side, outside the app, mirroring src/yt.ts: search -> Home, artist and album
+// pages -> mint a PO token with BotGuard -> resolve the YTMUSIC audio stream -> download all of it in 1 MB ranges.
 // Run when playback breaks: node scripts/yt-check.mjs "query"
 import { JSDOM } from 'jsdom';
 import { Innertube, Platform } from 'youtubei.js';
@@ -17,6 +17,18 @@ const res = await yt.music.search(process.argv[2] ?? 'playboi carti magnolia', {
 const song = res.songs?.contents?.[0];
 if (!song) throw new Error('no search results');
 console.log('song:', song.id, song.title, '-', song.artists?.map((a) => a.name).join(', '));
+
+// Each page the app draws: fails loudly if YouTube changes its shape to empty.
+const check = async (name, fn) => {
+  const t = Date.now();
+  const n = await fn();
+  if (!n) throw new Error(`${name}: nothing came back`);
+  console.log(`${name}: ${n} in ${Date.now() - t} ms`);
+};
+await check('home sections', async () => (await yt.music.getHomeFeed()).sections?.length);
+await check('explore sections', async () => (await yt.music.getExplore()).sections?.length);
+await check('artist sections', async () => (await yt.music.getArtist(song.artists?.find((a) => a.channel_id)?.channel_id)).sections?.length);
+await check('album tracks', async () => (await yt.music.getAlbum(song.album?.id)).contents?.length);
 
 const { bg_challenge: bg } = await yt.getAttestationChallenge('ENGAGEMENT_TYPE_UNBOUND');
 new Function(await (await fetch('https:' + bg.interpreter_url.private_do_not_access_or_else_trusted_resource_url_wrapped_value)).text())();

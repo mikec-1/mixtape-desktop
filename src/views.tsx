@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { AudioLines, Check, ChevronDown, Ellipsis, Heart, Music, Play, Plus, Shuffle } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
-import { addToPlaylist, back, deletePlaylist, newPlaylist, open, play, removeFromPlaylist, renamePlaylist, report, toggleLike, toggleSave, useLibrary, useStore } from "./store";
-import { art, artist, collection, home, search, type Album, type Track } from "./yt";
+import { addToPlaylist, back, deletePlaylist, newPlaylist, open, play, removeFromPlaylist, renamePlaylist, report, toggleLike, toggleSave, useLibrary, useOnline, useStore } from "./store";
+import { art, artist, collection, home, lastHome, search, type Album, type Track } from "./yt";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
 function useAsync<T>(fn: () => Promise<T> | undefined, deps: unknown[]) {
@@ -28,7 +28,8 @@ export function Search() {
     const t = setTimeout(() => setTerm(query.trim()), 250);
     return () => clearTimeout(t);
   }, [query]);
-  const { data, error, loading } = useAsync(() => (term ? search(term) : undefined), [term]);
+  const online = useOnline(); // a search that failed offline runs again on reconnect
+  const { data, error, loading } = useAsync(() => (term ? search(term) : undefined), [term, online]);
   const top = data?.top;
 
   return (
@@ -154,8 +155,19 @@ export function Home() {
 }
 
 function Shelves() {
-  const { data, error } = useAsync(home, []);
-  if (error) return <p className="mt-6 text-muted">Couldn’t load your start page. Search still works.</p>;
+  const online = useOnline();
+  const [tries, setTries] = useState(0);
+  const { data: fresh, error } = useAsync(home, [online, tries]);
+  const data = fresh ?? lastHome;
+  if (!data && error)
+    return (
+      <div className="mt-6 flex items-center gap-4">
+        <p className="text-muted">Couldn’t load your start page. Search still works.</p>
+        <button onClick={() => setTries((n) => n + 1)} className="press h-9 rounded-full bg-ink/[0.07] px-4 text-sm font-semibold hover:bg-ink/[0.12]">
+          Try Again
+        </button>
+      </div>
+    );
   if (!data)
     return (
       <div role="status" className="animate-pulse">
@@ -421,7 +433,7 @@ export function Artist({ id }: { id: string }) {
         )}
         <div className="relative px-12">
           <h1 className="text-display">{data.name}</h1>
-          <button onClick={() => play(data.songs, 0)} disabled={!data.songs.length} className="press mt-7 flex h-11 items-center gap-2 rounded-full bg-accent px-6 font-semibold text-white disabled:opacity-50">
+          <button onClick={() => play(data.songs, 0)} disabled={!data.songs.length} className="press mt-7 flex h-11 items-center gap-2 rounded-full bg-accent px-6 font-semibold text-paper disabled:opacity-50">
             <Play size={16} className="fill-current" /> Play
           </button>
         </div>
@@ -473,7 +485,7 @@ export function NowPlaying() {
       role="dialog"
       aria-modal="true"
       aria-label="Now Playing"
-      className={`fixed inset-0 z-30 overflow-hidden bg-accent ${
+      className={`fixed inset-0 z-30 overflow-hidden bg-accent-deep ${
         open
           ? "visible translate-y-0 [transition:transform_450ms_var(--ease-drawer)]"
           : "invisible translate-y-full [transition:transform_300ms_var(--ease-drawer),visibility_0s_300ms]"
@@ -600,7 +612,7 @@ function Albums({ items }: { items: Album[] }) {
           <button
             onClick={() => playCollection(a.id)}
             aria-label={`Play ${a.title}`}
-            className="absolute top-[140px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-ink opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+            className="absolute top-[140px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
           >
             <Play size={18} className="ml-0.5 fill-current" />
           </button>

@@ -1,23 +1,38 @@
 @import "tailwindcss";
 
 @theme {
-  --color-paper: #f6f5f2;
+  --color-paper: #f5f5f7;
   --color-ink: #121212;
-  --color-muted: #8b8781;
+  --color-muted: #6e6e73;
+  /* Tint taken from the playing track's artwork (store.ts). Lightness is clamped so white on it
+     and it on paper both stay above 4.5:1. */
+  --color-accent: oklch(from var(--accent-raw) clamp(0.22, l, 0.55) min(c, 0.2) h);
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
 
   --text-display: clamp(56px, 8vw, 112px);
   --text-display--line-height: 0.9;
-  --text-display--letter-spacing: -0.045em;
+  --text-display--letter-spacing: -0.04em;
   --text-display--font-weight: 800;
 
-  --animate-enter: enter 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --animate-enter: enter 0.3s var(--ease-out) both;
   @keyframes enter {
     from {
       opacity: 0;
       transform: translateY(6px);
     }
   }
+}
+
+@property --accent-raw {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #121212;
+}
+:root {
+  transition: --accent-raw 0.5s ease;
 }
 
 /* Frosted material for floating UI only (player bar, overlay buttons). */
@@ -28,6 +43,17 @@
   box-shadow:
     inset 0 0 0 0.5px rgb(255 255 255 / 0.7),
     0 12px 40px -12px rgb(0 0 0 / 0.25);
+}
+
+/* Every pressable thing answers the press the same way. */
+@utility press {
+  transition:
+    transform 160ms var(--ease-out),
+    color 150ms ease,
+    background-color 150ms ease;
+  &:active:not(:disabled) {
+    transform: scale(0.96);
+  }
 }
 
 html,
@@ -41,6 +67,31 @@ body {
   overflow: hidden;
 }
 
+h1,
+h2 {
+  text-wrap: balance;
+}
+
+/* The browser's own surfaces, in the palette. */
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 22%, transparent);
+}
+input {
+  caret-color: var(--color-accent);
+}
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+/* Fields show focus with the caret; sliders with their thumb. */
+input:focus-visible {
+  outline: none;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(18 18 18 / 0.2) transparent;
+}
+
 /* Hairline scrubber; the filled part is driven by --p. */
 input[type="range"] {
   appearance: none;
@@ -51,7 +102,7 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: 3px;
-  background: linear-gradient(to right, var(--color-ink) var(--p, 0%), rgb(18 18 18 / 0.14) var(--p, 0%));
+  background: linear-gradient(to right, var(--color-accent) var(--p, 0%), rgb(18 18 18 / 0.14) var(--p, 0%));
 }
 input[type="range"]::-webkit-slider-thumb {
   appearance: none;
@@ -59,10 +110,25 @@ input[type="range"]::-webkit-slider-thumb {
   height: 11px;
   margin-top: -4px;
   border-radius: 50%;
-  background: var(--color-ink);
+  background: var(--color-accent);
   opacity: 0;
   transition: opacity 0.15s;
 }
-input[type="range"]:hover::-webkit-slider-thumb {
+input[type="range"]:hover::-webkit-slider-thumb,
+input[type="range"]:focus-visible::-webkit-slider-thumb {
   opacity: 1;
+}
+
+/* Reduced motion: things still fade and recolour, nothing travels. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    transition-property: opacity, color, background-color, --accent-raw !important;
+  }
+  @keyframes enter {
+    from {
+      opacity: 0;
+    }
+  }
 }

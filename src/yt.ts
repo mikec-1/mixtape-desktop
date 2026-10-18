@@ -18,7 +18,7 @@ const yt = Innertube.create({ fetch: ytFetch, retrieve_player: true });
 
 export type Artist = { id?: string; name: string };
 export type Track = { id: string; title: string; artists: Artist[]; album?: string; thumb?: string; duration?: string };
-export type Album = { id: string; title: string; year?: string; thumb?: string };
+export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string };
 
 // YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at.
 export const art = (url: string | undefined, w: number, h = w) => url?.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, `=w${w}-h${h}-l90-rj`);
@@ -38,7 +38,7 @@ const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
   );
 
 const toAlbums = (items: YTNodes.MusicTwoRowItem[] = []): Album[] =>
-  items.map((a) => ({ id: a.id!, title: a.title.text ?? "", year: a.year, thumb: a.thumbnail?.[0]?.url }));
+  items.map((a) => ({ id: a.id!, title: a.title.text ?? "", year: a.year, by: a.artists?.map((x) => x.name).join(", "), thumb: a.thumbnail?.[0]?.url }));
 
 export async function search(query: string) {
   const music = (await yt).music;
@@ -50,6 +50,24 @@ export async function search(query: string) {
     ? { id, name: card.title.text ?? "", about: card.subtitle.text?.split(" • ").pop(), thumb: card.thumbnail?.contents?.[0]?.url }
     : undefined;
   return { top, songs: toTracks(songs.songs?.contents?.filterType(YTNodes.MusicResponsiveListItem)) };
+}
+
+// The YT Music start page: its first home shelves (songs, new albums) plus Explore's new releases.
+let homeFeed: ReturnType<typeof loadHome> | undefined;
+// Fetched once per launch, so going back Home is instant. A failed load is retried next time.
+export const home = () => (homeFeed ??= loadHome().catch((e) => ((homeFeed = undefined), Promise.reject(e))));
+
+async function loadHome() {
+  const music = (await yt).music;
+  const [feed, explore] = await Promise.all([music.getHomeFeed(), music.getExplore()]);
+  const shelves = [...(feed.sections ?? []), ...(explore.sections ?? [])].filter((s) => s.is(YTNodes.MusicCarouselShelf));
+  const find = (title: string) => shelves.find((s) => s.header?.title?.text === title)?.contents;
+  return {
+    picks: toTracks(find("Quick picks")?.filterType(YTNodes.MusicResponsiveListItem)),
+    trending: toTracks(find("Trending songs for you")?.filterType(YTNodes.MusicResponsiveListItem)),
+    releases: toAlbums(find("New releases")?.filterType(YTNodes.MusicTwoRowItem)),
+    more: toAlbums(find("New albums & singles")?.filterType(YTNodes.MusicTwoRowItem)),
+  };
 }
 
 export async function artist(id: string) {

@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { AudioLines, Check, ChevronDown, Download, Ellipsis, Heart, Music, Play, Plus, Shuffle, Upload } from "lucide-react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { AudioLines, Check, ChevronDown, Download, Ellipsis, GripVertical, Heart, Music, Play, Plus, Radio, Shuffle, Sparkle, Upload, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
-import { addToPlaylist, back, deletePlaylist, newPlaylist, notify, open, play, removeFromPlaylist, renamePlaylist, report, restoreLibrary, toggleLike, toggleSave, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { EQ_BANDS, EQ_PRESETS, addToPlaylist, back, clearQueue, deletePlaylist, enqueue, jump, moveInQueue, newPlaylist, notify, open, play, removeFromPlaylist, radioFrom, removeFromQueue, renamePlaylist, report, restoreLibrary, shufflePlay, startRadio, toggleLike, toggleSave, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { art, artist, collection, home, lastHome, search, type Album, type Track } from "./yt";
 import { version } from "../package.json";
 
@@ -104,17 +104,31 @@ export function Search() {
   );
 }
 
-const shuffled = <T,>(list: T[]) => list.map((x) => [Math.random(), x] as const).sort((a, b) => a[0] - b[0]).map((p) => p[1]);
 const playCollection = (id: string) => collection(id).then((c) => play(c.tracks, 0), report);
 const count = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 
 // Right-click menus are the OS's own. ponytail: Tauri-only; the web build needs an HTML fallback.
-const popup = (items: MenuOptions["items"]) => Menu.new({ items }).then((m) => m.popup(), report);
+export const popup = (items: MenuOptions["items"]) => Menu.new({ items }).then((m) => m.popup(), report);
 
-export function trackMenu(t: Track, from?: { playlist: string; index: number }) {
+// from: the row is in one of your playlists, or in the queue (an index into the whole queue).
+export function trackMenu(t: Track, from?: { playlist: string; index: number } | { queue: number }) {
   const { liked, playlists } = useLibrary.getState();
   const by = t.artists.find((a) => a.id);
+  const q = from && "queue" in from ? from.queue : -1;
+  const { index, queue } = useStore.getState();
   popup([
+    ...(q < 0
+      ? [
+          { text: "Play Next", action: () => enqueue([t], true) },
+          { text: "Add to Queue", action: () => enqueue([t], false) },
+        ]
+      : [
+          ...(q > index + 1 ? [{ text: "Move Up", action: () => moveInQueue(q, q - 1) }] : []),
+          ...(q < queue.length - 1 ? [{ text: "Move Down", action: () => moveInQueue(q, q + 1) }] : []),
+          { text: "Remove from Queue", action: () => removeFromQueue(q) },
+        ]),
+    { text: "Start Radio", action: () => startRadio(t) },
+    { item: "Separator" as const },
     { text: liked.some((x) => x.id === t.id) ? "Remove from Liked Songs" : "Add to Liked Songs", action: () => toggleLike(t) },
     {
       text: "Add to Playlist",
@@ -124,7 +138,7 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number }) 
         ...playlists.map((p) => ({ text: p.name, action: () => addToPlaylist(p.id, [t]) })),
       ],
     },
-    ...(from ? [{ text: "Remove from This Playlist", action: () => removeFromPlaylist(from.playlist, from.index) }] : []),
+    ...(from && "playlist" in from ? [{ text: "Remove from This Playlist", action: () => removeFromPlaylist(from.playlist, from.index) }] : []),
     ...(by ? [{ item: "Separator" as const }, { text: `Go to ${by.name}`, action: () => open({ name: "artist", id: by.id! }) }] : []),
   ]);
 }
@@ -132,6 +146,8 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number }) 
 const albumMenu = (a: Album) =>
   popup([
     { text: "Play", action: () => playCollection(a.id) },
+    { text: "Play Next", action: () => collection(a.id).then((c) => enqueue(c.tracks, true), report) },
+    { text: "Add to Queue", action: () => collection(a.id).then((c) => enqueue(c.tracks, false), report) },
     { text: useLibrary.getState().saved.some((x) => x.id === a.id) ? "Remove from Library" : "Add to Library", action: () => toggleSave(a) },
   ]);
 
@@ -167,8 +183,11 @@ function PlayButtons({ tracks }: { tracks: Track[] }) {
       <button onClick={() => play(tracks, 0)} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
         <Play size={16} className="fill-current" /> Play
       </button>
-      <button onClick={() => play(shuffled(tracks), 0)} disabled={!tracks.length} className={`${pill} bg-white/20 hover:bg-white/30 disabled:opacity-50`}>
+      <button onClick={() => shufflePlay(tracks)} disabled={!tracks.length} className={`${pill} bg-white/20 hover:bg-white/30 disabled:opacity-50`}>
         <Shuffle size={16} /> Shuffle
+      </button>
+      <button onClick={() => radioFrom(tracks)} disabled={!tracks.length} aria-label="Radio" title="Radio" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30 disabled:opacity-50">
+        <Radio size={16} />
       </button>
     </>
   );
@@ -439,6 +458,7 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
           <div className="min-w-0">
             <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>{t.title}</div>
             <div className="truncate text-sm text-muted">
+              {t.rec && <Sparkle size={14} aria-label="Recommended" className="mr-1.5 inline -translate-y-px fill-accent text-accent drop-shadow-[0_0_4px_var(--color-accent)]" />}
               <Artists list={t.artists} />
             </div>
           </div>
@@ -471,8 +491,11 @@ export function Artist({ id }: { id: string }) {
             <button onClick={() => play(data.songs, 0)} disabled={!data.songs.length} className={`${pill} bg-accent text-paper disabled:opacity-50`}>
               <Play size={16} className="fill-current" /> Play
             </button>
-            <button onClick={() => play(shuffled(data.songs), 0)} disabled={!data.songs.length} aria-label="Shuffle" title="Shuffle" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
+            <button onClick={() => shufflePlay(data.songs)} disabled={!data.songs.length} aria-label="Shuffle" title="Shuffle" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
               <Shuffle size={17} />
+            </button>
+            <button onClick={() => radioFrom(data.songs)} disabled={!data.songs.length} aria-label="Artist radio" title="Artist radio" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
+              <Radio size={17} />
             </button>
           </div>
         </div>
@@ -560,7 +583,7 @@ export function NowPlaying() {
           <h2 className="mb-4 text-2xl font-bold tracking-tight">Up Next</h2>
           {upNext.length ? (
             <div className="min-h-0 overflow-y-auto">
-              <TrackList tracks={upNext} onPlay={(i) => play(queue, index + 1 + i)} />
+              <TrackList tracks={upNext} onPlay={(i) => jump(index + 1 + i)} />
             </div>
           ) : (
             <p className="text-muted">Nothing queued.</p>
@@ -587,6 +610,8 @@ const keys: [string, string[]][] = [
   ["Back or forward 5 seconds", ["←", "→"]],
   ["Previous or next song", [`${mod}←`, `${mod}→`]],
   ["Volume down or up", [`${mod}↓`, `${mod}↑`]],
+  ["Shuffle, then Smart Shuffle", [`${mod}S`]],
+  ["Repeat all, one or off", [`${mod}R`]],
   ["Like the playing song", [`${mod}L`]],
   ["Search", [`${mod}K`]],
   ["Go back or forward", [`${mod}[`, `${mod}]`]],
@@ -611,6 +636,7 @@ async function restore(file: File) {
 
 const panes = [
   { id: "appearance", label: "Appearance" },
+  { id: "playback", label: "Playback" },
   { id: "library", label: "Library" },
   { id: "shortcuts", label: "Shortcuts" },
   { id: "about", label: "About" },
@@ -635,7 +661,7 @@ export function Settings() {
           ))}
         </nav>
         <div key={pane} className="max-w-3xl min-w-0 flex-1 animate-enter">
-          {pane === "appearance" ? <Appearance /> : pane === "library" ? <LibraryPane /> : pane === "shortcuts" ? <Shortcuts /> : <About />}
+          {pane === "appearance" ? <Appearance /> : pane === "playback" ? <Playback /> : pane === "library" ? <LibraryPane /> : pane === "shortcuts" ? <Shortcuts /> : <About />}
         </div>
       </div>
     </div>
@@ -659,6 +685,84 @@ function Appearance() {
         <Choice label="From Artwork" on={artworkAccent} onPick={() => set({ artworkAccent: true })}><Preview tint="#ff8a3d" /></Choice>
         <Choice label="Sleeve Pink" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Preview /></Choice>
       </Group>
+    </>
+  );
+}
+
+const fill = (v: number, min: number, max: number) => ({ "--p": `${((v - min) / (max - min)) * 100}%` }) as CSSProperties;
+
+function Row({ label, detail, children }: { label: string; detail: string; children: ReactNode }) {
+  return (
+    <div className="flex min-h-16 items-center justify-between gap-6 py-3">
+      <div>
+        <div className="font-semibold">{label}</div>
+        <div className="text-sm text-muted">{detail}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Playback() {
+  const { quality, normalize, crossfade, eq } = useSettings();
+  const set = useSettings.setState;
+  const preset = Object.entries(EQ_PRESETS).find(([, g]) => g.every((v, i) => v === eq[i]))?.[0];
+  return (
+    <>
+      <div className="mb-10 divide-y divide-ink/10">
+        <Row label="Audio Quality" detail={quality === "high" ? "The best stream there is for each song" : "Smaller streams, for slow or metered connections"}>
+          <div role="radiogroup" aria-label="Audio Quality" className="flex rounded-full bg-ink/[0.07] p-1">
+            {(["high", "low"] as const).map((q) => (
+              <button key={q} role="radio" aria-checked={quality === q} onClick={() => set({ quality: q })} className={`h-7 rounded-full px-3 text-sm font-semibold transition-colors ${quality === q ? "bg-paper shadow-sm" : "text-muted hover:text-ink"}`}>
+                {q === "high" ? "High" : "Data Saver"}
+              </button>
+            ))}
+          </div>
+        </Row>
+        <Row label="Normalise Volume" detail="Turns loud songs down to the level of the rest">
+          <button role="switch" aria-checked={normalize} aria-label="Normalise Volume" onClick={() => set({ normalize: !normalize })} className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${normalize ? "bg-accent" : "bg-ink/20"}`}>
+            <span className={`absolute top-0.5 left-0.5 size-6 rounded-full bg-white shadow transition-transform duration-200 ease-out ${normalize ? "translate-x-5" : ""}`} />
+          </button>
+        </Row>
+        <Row label="Crossfade" detail={crossfade ? "Songs fade into each other" : "Off: songs play back to back with no gap"}>
+          <div className="flex items-center gap-3">
+            <input type="range" aria-label="Crossfade" min={0} max={12} step={1} value={crossfade} onChange={(e) => set({ crossfade: +e.target.value })} style={fill(crossfade, 0, 12)} className="w-40" />
+            <span className="w-10 text-right text-sm tabular-nums">{crossfade ? `${crossfade} s` : "Off"}</span>
+          </div>
+        </Row>
+      </div>
+      <section>
+        <h2 className="mb-3 text-xl font-bold tracking-tight">Equalizer</h2>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(EQ_PRESETS).map(([name, g]) => (
+            <button key={name} aria-pressed={preset === name} onClick={() => set({ eq: g })} className={`press h-8 rounded-full px-3.5 text-sm font-semibold transition-colors ${preset === name ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`}>
+              {name}
+            </button>
+          ))}
+        </div>
+        <div className="mt-6 flex justify-between rounded-2xl bg-ink/[0.04] px-8 py-6">
+          {EQ_BANDS.map((f, i) => (
+            <div key={f} className="flex flex-col items-center gap-2">
+              <span className="text-xs tabular-nums text-muted">{eq[i] > 0 ? `+${eq[i]}` : eq[i]}</span>
+              {/* A rotated range, so the track's left-to-right fill reads bottom to top. */}
+              <div className="relative h-36 w-6">
+                <input
+                  type="range"
+                  aria-label={`${f < 1000 ? f : `${f / 1000}k`} Hz`}
+                  min={-12}
+                  max={12}
+                  step={1}
+                  value={eq[i]}
+                  onChange={(e) => set({ eq: eq.map((v, j) => (j === i ? +e.target.value : v)) })}
+                  style={fill(eq[i], -12, 12)}
+                  className="absolute top-1/2 left-1/2 w-36 -translate-x-1/2 -translate-y-1/2 -rotate-90 knob"
+                />
+              </div>
+              <span className="text-xs font-semibold tabular-nums">{f < 1000 ? f : `${f / 1000}k`}</span>
+            </div>
+          ))}
+        </div>
+      </section>
     </>
   );
 }
@@ -794,6 +898,112 @@ export function Artists({ list }: { list: Track["artists"] }) {
       )}
     </Fragment>
   ));
+}
+
+// The queue beside the page, opened from the player bar (like Spotify's). Drag a row, or use its menu, to reorder.
+const QUEUE_MIN = 260, QUEUE_MAX = 560;
+const resizeQueue = (w: number) => useSettings.setState({ queueWidth: Math.round(Math.min(QUEUE_MAX, Math.max(QUEUE_MIN, w))) });
+
+export function QueuePanel() {
+  const queue = useStore((s) => s.queue);
+  const index = useStore((s) => s.index);
+  const added = useStore((s) => s.added);
+  const [drag, setDrag] = useState<number>();
+  const [over, setOver] = useState<number>();
+  const mine = queue.slice(index + 1, index + 1 + added);
+  const rest = queue.slice(index + 1 + added);
+
+  const row = (t: Track, i: number) => (
+    <li
+      key={t.id + i}
+      draggable={i !== index}
+      onDragStart={(e) => ((e.dataTransfer.effectAllowed = "move"), setDrag(i))}
+      onDragOver={(e) => drag !== undefined && i > index && (e.preventDefault(), setOver(i))}
+      // Clear here too: the move re-keys the rows, so dragend never reaches the moved one.
+      onDrop={() => (drag !== undefined && moveInQueue(drag, i), setDrag(undefined), setOver(undefined))}
+      onDragEnd={() => (setDrag(undefined), setOver(undefined))}
+      onContextMenu={(e) => (e.preventDefault(), trackMenu(t, i === index ? undefined : { queue: i }))}
+      className={`group relative flex items-center gap-3 rounded-lg px-3 py-1.5 hover:bg-ink/[0.04] ${drag === i ? "opacity-40" : ""} ${
+        over === i && drag !== undefined && drag !== i ? (drag > i ? "shadow-[inset_0_2px_var(--color-accent)]" : "shadow-[inset_0_-2px_var(--color-accent)]") : ""
+      }`}
+    >
+      <button onClick={() => jump(i)} aria-label={`Play ${t.title}`} className="hit" />
+      <div className="relative shrink-0">
+        <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-10 rounded-md bg-ink/[0.06] object-cover" />
+        {t.rec && (
+          <span className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full bg-accent text-paper ring-2 ring-paper">
+            <Sparkle size={11} aria-label="Recommended" className="fill-current" />
+          </span>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className={`truncate text-sm font-semibold ${i === index ? "text-accent" : ""}`}>{t.title}</div>
+        {/* Artists come first; "Recommended" gives way when the row is narrow. */}
+        <div className="flex text-sm whitespace-nowrap text-muted">
+          <span className="min-w-0 truncate"><Artists list={t.artists} /></span>
+          {t.rec && <span className="min-w-0 shrink-[999] truncate font-semibold text-accent">&nbsp;· Recommended</span>}
+        </div>
+      </div>
+      {i !== index && (
+        <>
+          <button onClick={() => removeFromQueue(i)} aria-label={`Remove ${t.title} from queue`} className="press relative grid size-7 place-items-center rounded-full text-muted opacity-0 group-hover:opacity-100 hover:text-ink focus-visible:opacity-100">
+            <X size={16} />
+          </button>
+          <GripVertical size={16} aria-hidden className="relative -mr-1.5 shrink-0 cursor-grab text-muted opacity-0 group-hover:opacity-100" />
+        </>
+      )}
+    </li>
+  );
+  const heading = "px-3 pt-5 pb-1.5 text-sm font-bold";
+  const width = useSettings((s) => s.queueWidth);
+  const [resizing, setResizing] = useState(false);
+  const sizing = (on: boolean) => (setResizing(on), (document.documentElement.style.cursor = on ? "col-resize" : ""));
+
+  return (
+    <aside aria-label="Queue" style={{ width }} className="relative flex shrink-0 animate-enter flex-col rounded-2xl bg-paper">
+      {/* Drag its left edge to resize, like the sidebar (App.tsx); arrows work too. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize Queue"
+        aria-valuenow={width}
+        aria-valuemin={QUEUE_MIN}
+        aria-valuemax={QUEUE_MAX}
+        tabIndex={0}
+        onPointerDown={(e) => e.button === 0 && (e.currentTarget.setPointerCapture(e.pointerId), sizing(true))}
+        onPointerMove={(e) => resizing && resizeQueue(e.currentTarget.parentElement!.getBoundingClientRect().right - e.clientX)}
+        onLostPointerCapture={() => sizing(false)}
+        onKeyDown={(e) => {
+          const by = { ArrowLeft: 16, ArrowRight: -16 }[e.key];
+          if (by) resizeQueue(width + by), e.preventDefault();
+        }}
+        className={`absolute inset-y-0 -left-2 z-10 w-2 cursor-col-resize outline-none before:absolute before:inset-y-6 before:left-[3px] before:w-0.5 before:rounded-full before:bg-accent before:transition-opacity hover:before:opacity-100 focus-visible:before:opacity-100 ${resizing ? "before:opacity-100" : "before:opacity-0"}`}
+      />
+      <div className="flex items-center gap-2 px-5 pt-4">
+        <h2 className="flex-1 text-xl font-bold tracking-tight">Queue</h2>
+        {index + 1 < queue.length && (
+          <button onClick={clearQueue} className="press h-8 rounded-full px-3 text-sm font-semibold text-muted hover:bg-ink/[0.06] hover:text-ink">
+            Clear
+          </button>
+        )}
+        <button onClick={() => useSettings.setState({ queue: false })} aria-label="Close Queue" className="press -mr-2 grid size-8 place-items-center rounded-full text-muted hover:bg-ink/[0.06] hover:text-ink">
+          <X size={18} />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto rounded-b-2xl px-2 pb-4">
+        <h3 className={heading}>Now Playing</h3>
+        {queue[index] ? <ol>{row(queue[index], index)}</ol> : <p className="px-3 text-sm text-muted">Nothing playing.</p>}
+        {mine.length > 0 && (
+          <>
+            <h3 className={heading}>Next in Queue</h3>
+            <ol>{mine.map((t, i) => row(t, index + 1 + i))}</ol>
+          </>
+        )}
+        <h3 className={heading}>Next Up</h3>
+        {rest.length ? <ol>{rest.map((t, i) => row(t, index + 1 + added + i))}</ol> : <p className="px-3 text-sm text-muted">When the queue ends, similar songs play.</p>}
+      </div>
+    </aside>
+  );
 }
 
 function TrackList({ tracks, numbered, plain, playlist, onPlay = (i) => play(tracks, i) }: { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; onPlay?: (i: number) => void }) {

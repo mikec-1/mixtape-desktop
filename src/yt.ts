@@ -17,7 +17,7 @@ const ytFetch: typeof globalThis.fetch = (input, init) => {
 const yt = Innertube.create({ fetch: ytFetch, retrieve_player: true });
 
 export type Artist = { id?: string; name: string };
-export type Track = { id: string; title: string; artists: Artist[]; album?: string; thumb?: string; duration?: string };
+export type Track = { id: string; title: string; artists: Artist[]; album?: string; thumb?: string; duration?: string; rec?: true }; // rec: added by Smart Shuffle
 export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string };
 
 // YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at.
@@ -160,22 +160,26 @@ async function poToken(videoId: string): Promise<string> {
   }
 }
 
-async function stream(id: string) {
+// high: the best stream this WebView can play (Opus ~160 kbps where WebM works, else AAC 128); low: AAC ~48 kbps.
+export type Quality = "high" | "low";
+async function stream(id: string, quality: Quality) {
   const y = await yt;
   const [info, pot] = await Promise.all([y.getBasicInfo(id, { client: "YTMUSIC" }), poToken(id)]);
-  const format = info.chooseFormat({ type: "audio", quality: "best", format: "mp4" });
+  const best = quality === "high" ? info.chooseFormat({ type: "audio", quality: "best", format: "any" }) : undefined;
+  const format = best && MediaSource.isTypeSupported(best.mime_type) ? best : info.chooseFormat({ type: "audio", quality: quality === "high" ? "best" : "bestefficiency", format: "mp4" });
   if (!format.content_length) throw new Error("Unknown stream size");
   const url = new URL(await format.decipher(y.session.player));
   url.searchParams.set("pot", pot);
-  return { url: url.toString(), mime: format.mime_type, size: format.content_length, duration: info.basic_info.duration };
+  // How much louder than YouTube's reference level this track is, in dB, for normalisation.
+  const loudness = format.loudness_db ?? info.player_config?.audio_config.loudness_db ?? 0;
+  return { url: url.toString(), mime: format.mime_type, size: format.content_length, duration: info.basic_info.duration, loudness };
 }
 
-let objectUrl = "";
 const CHUNK = 1 << 20; // googlevideo 403s ranges much bigger than ~1 MB
 
 // Fire all 1 MB range requests in parallel; playback starts as soon as the first one lands.
-export async function fetchAudio(id: string) {
-  const { url, mime, size, duration } = await stream(id);
+export async function fetchAudio(id: string, quality: Quality = "high") {
+  const { url, mime, size, duration, loudness } = await stream(id, quality);
   const chunks: Promise<ArrayBuffer>[] = [];
   for (let start = 0; start < size; start += CHUNK) {
     const range = `bytes=${start}-${Math.min(start + CHUNK, size) - 1}`;
@@ -186,15 +190,34 @@ export async function fetchAudio(id: string) {
     chunk.catch(() => {}); // surfaced when awaited in playAudio; silences abandoned tracks
     chunks.push(chunk);
   }
-  return { chunks, mime, duration };
+  return { chunks, mime, duration, loudness };
+}
+
+// Song radio: YT Music's automix "watch next" for a track (the seed itself comes first).
+export async function radio(id: string): Promise<Track[]> {
+  const panel = await (await yt).music.getUpNext(id, true);
+  return panel.contents
+    .map((v) => (v.is(YTNodes.PlaylistPanelVideoWrapper) ? v.primary : v))
+    .flatMap((v) =>
+      v?.is(YTNodes.PlaylistPanelVideo)
+        ? [{
+            id: v.video_id,
+            title: v.title.toString(),
+            artists: v.artists?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [],
+            album: v.album?.name,
+            thumb: v.thumbnail[0]?.url,
+            duration: v.duration.text,
+          }]
+        : [],
+    );
 }
 
 // YouTube serves fragmented (DASH) MP4, which WebKit can't play from a plain src, so feed it via MSE.
-export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duration }: Awaited<ReturnType<typeof fetchAudio>>) {
+// start resumes partway in (after a relaunch). autoplay false only buffers it (the next track, for gapless).
+export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duration }: Awaited<ReturnType<typeof fetchAudio>>, start = 0, autoplay = true) {
   const ms = new MediaSource();
-  URL.revokeObjectURL(objectUrl);
-  objectUrl = URL.createObjectURL(ms);
-  audio.src = objectUrl;
+  URL.revokeObjectURL(audio.src); // each player's own last one
+  audio.src = URL.createObjectURL(ms);
   await new Promise((r) => ms.addEventListener("sourceopen", r, { once: true }));
   const sb = ms.addSourceBuffer(mime);
   if (duration) ms.duration = duration; // fragmented MP4 doesn't say, and the scrubber needs it
@@ -203,7 +226,10 @@ export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duratio
     if (ms.readyState !== "open") return; // another track took over the player
     sb.appendBuffer(data);
     await new Promise((r) => sb.addEventListener("updateend", r, { once: true }));
-    if (i === 0) await audio.play();
+    if (i === 0 && !autoplay) continue;
+    if (i === 0 && !start) await audio.play();
+    // Seeking past the first chunk makes play() wait for data that this loop hasn't appended yet.
+    else if (i === 0) (audio.currentTime = start), audio.play().catch(() => {});
   }
   ms.endOfStream();
 }

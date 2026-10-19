@@ -6,9 +6,9 @@ Size: **S** ≈ a day · **M** ≈ a few days · **L** ≈ a week or more.
 
 ## Where it stands (Oct 2026)
 
-Done: compact layout (sidebar with Home, Search, Library and Settings that collapses to an icon rail (⌘B) and resizes by dragging its edge; one rounded content card with a Back pill; player bar with an artwork-colour wash), search (songs + top artist, Browse All genres), Home (YT Music shelves), artist, album and playlist pages, Now Playing sheet, docked player bar with artwork accent colour, likes, saved albums, your own playlists (create, rename, delete, add and remove tracks), undoable toasts, media keys, accessibility pass.
+Done: compact layout (sidebar with Home, Search, Library and Settings that collapses to an icon rail (⌘B) and resizes by dragging its edge; one rounded content card with a Back pill; player bar with an artwork-colour wash; system font, SF Pro on Mac), search (songs + top artist, Browse All genres), Home (YT Music shelves), artist, album and playlist pages, Now Playing sheet, docked player bar with artwork accent colour, queue panel with drag to reorder, shuffle and Smart Shuffle, repeat, song, artist and playlist radio, autoplay radio, gapless playback and crossfade, volume normalisation, audio quality, equalizer, mini player, sleep timer, playback that resumes where it left off, likes, saved albums, your own playlists (create, rename, delete, add and remove tracks), undoable toasts, media keys, accessibility pass.
 
-Missing: everything below. Notable gaps today: no queue controls, no shuffle or repeat, macOS only tested, no web build.
+Missing: everything below. Notable gaps today: no lyrics, the macOS window buttons don't sit inside the sidebar card yet, macOS only tested, no web build.
 
 ---
 
@@ -23,16 +23,18 @@ Done first, because everything else builds on them.
 - [x] **Smoke test:** `node scripts/yt-check.mjs` checks search, Home, Explore, an artist page, an album and a full stream download. **S**
 
 ## Phase 2: Playback (Spotify parity)
-- [ ] Queue: Play Next, Add to Queue, view, drag to reorder, clear. **M**
-- [ ] Shuffle, plus a Smart Shuffle that mixes in recommended tracks. Repeat all and repeat one. **S**
-- [ ] **Instant skip:** fetch the next track's stream while this one plays, and cache stream URLs. **M**
-- [ ] Gapless playback and crossfade (0–12 s). **M**
-- [ ] Volume normalisation and an audio quality setting. **S**
-- [ ] Autoplay radio when the queue ends. Song, artist and playlist radio (YT Music "watch next"). **M**
-- [ ] Remember the queue, position and volume between launches. **S**
-- [ ] Sleep timer. **S**
-- [ ] Equalizer (Web Audio, with presets). **M**
-- [ ] Mini player window (always-on-top Tauri window). **M**
+- [x] Queue: Play Next, Add to Queue, view, drag to reorder, clear. **M**
+- [x] Shuffle (⌘S), repeat all and repeat one (⌘R). **S**
+- [x] Smart Shuffle (press Shuffle again): one recommended track after every three of yours, marked with a sparkle. **S**
+- [x] **Instant skip:** fetch the next track's stream while this one plays, and cache stream URLs. **M**
+- [x] Gapless playback and crossfade (0–12 s): the next track buffers in a second player. **M**
+- [x] Volume normalisation and an audio quality setting. **S**
+- [x] Autoplay radio when the queue ends, and Start Radio from any song (YT Music "watch next"). **M**
+- [x] Artist, album and playlist radio (the Radio button by Shuffle). **S**
+- [x] Remember the queue, position and volume between launches. **S**
+- [x] Sleep timer: 15–60 minutes or end of track. **S**
+- [x] Equalizer (Web Audio, with presets). **M**
+- [x] Mini player window (always-on-top Tauri window). **M**
 
 ## Phase 3: Lyrics
 - [ ] **Synced lyrics** in Now Playing: the current line is highlighted and auto-scrolls, and clicking a line seeks to it. Source: LRCLIB (free, synced), falling back to YT Music's plain lyrics. **M**
@@ -73,7 +75,7 @@ Done first, because everything else builds on them.
 The page and its first sections exist (Phase 1). These fill it in as each feature lands.
 
 - [ ] **Account:** profile, linked services (Spotify, YT Music, Deezer, Last.fm), sign out, delete. **M**
-- [ ] **Playback:** quality, crossfade, gapless, normalisation, autoplay, EQ. **S**
+- [ ] **Playback:** ~~quality, crossfade, normalisation, EQ~~ (done); autoplay on or off. **S**
 - [ ] **Appearance:** ~~light, dark or system; accent from artwork on or off~~ (done); reduce motion; UI zoom. **S**
 - [ ] **Library:** ~~export, restore~~ (done); local folders, storage and cache size, import history. **S**
 - [ ] **Lyrics:** source, translation language. **S**

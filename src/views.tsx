@@ -1,14 +1,16 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ArrowUpDown, AudioLines, CaseSensitive, Check, ChevronDown, Copy, Download, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpDown, AudioLines, CircleArrowDown, CaseSensitive, Check, ChevronDown, Copy, Download, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
-  EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearHistory, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
+  EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover,
-  shufflePlay, skipped, sortPlaylist, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, useRecents, useSettings, useStore,
+  shufflePlay, skipped, sortPlaylist, unavailable, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, useRecents, useSettings, useStore,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, groups, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
-import { art, artist, collection, home, lastHome, search, type Album, type Track } from "./yt";
+import { art, artist, artistByName, collection, home, lastHome, search, type Album, type Artist, type Track } from "./yt";
+import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
+import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { version } from "../package.json";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
@@ -67,7 +69,7 @@ export function Search() {
         name="q"
         autoComplete="off"
         spellCheck={false}
-        className="w-full bg-transparent text-display outline-none placeholder:text-ink"
+        className="room w-full bg-transparent text-display outline-none placeholder:text-ink"
       />
       {!query && (
         <>
@@ -119,7 +121,7 @@ export const popup = (items: MenuOptions["items"]) => Menu.new({ items }).then((
 // from: the row is in one of your playlists, or in the queue (an index into the whole queue).
 export function trackMenu(t: Track, from?: { playlist: string; index: number } | { queue: number }) {
   const { liked, playlists, hidden } = useLibrary.getState();
-  const by = t.artists.find((a) => a.id);
+  const by = t.artists;
   const q = from && "queue" in from ? from.queue : -1;
   const { index, queue } = useStore.getState();
   popup([
@@ -133,7 +135,7 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
           ...(q < queue.length - 1 ? [{ text: "Move Down", action: () => moveInQueue(q, q + 1) }] : []),
           { text: "Remove from Queue", action: () => removeFromQueue(q) },
         ]),
-    { text: "Start Radio", action: () => startRadio(t) },
+    ...(t.file ? [] : [{ text: "Start Radio", action: () => startRadio(t) }]),
     { text: "Edit Lyrics…", action: () => editLyrics(t) },
     { item: "Separator" as const },
     { text: liked.some((x) => x.id === t.id) ? "Remove from Liked Songs" : "Add to Liked Songs", action: () => toggleLike(t) },
@@ -147,7 +149,9 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
     },
     ...(from && "playlist" in from ? [{ text: "Remove from This Playlist", action: () => removeFromPlaylist(from.playlist, from.index) }] : []),
     { text: hidden.some((x) => x.id === t.id) ? "Unhide Song" : "Hide Song", action: () => toggleHide(t) },
-    ...(by ? [{ item: "Separator" as const }, { text: `Go to ${by.name}`, action: () => open({ name: "artist", id: by.id! }) }] : []),
+    ...(by.length ? [{ item: "Separator" as const }] : []),
+    ...(by.length === 1 ? [{ text: `Go to ${by[0].name}`, action: () => goToArtist(by[0]) }] : by.length ? [{ text: "Go to Artist", items: by.map((a) => ({ text: a.name, action: () => goToArtist(a) })) }] : []),
+    ...(t.albumId ? [{ text: "Go to Album", action: () => open({ name: "collection", id: t.albumId! }) }] : []),
   ]);
 }
 
@@ -163,7 +167,11 @@ const LIKED = "bg-linear-to-br from-[#ff375f] to-[#b80f3c]";
 // A playlist with no artwork yet still gets its own colour, picked from its id.
 const tints = ["from-[#ff375f] to-[#ff9f0a]", "from-[#0a84ff] to-[#30d158]", "from-[#bf5af2] to-[#ff375f]", "from-[#ff9f0a] to-[#ffd60a]", "from-[#5e5ce6] to-[#64d2ff]", "from-[#30d158] to-[#0a84ff]"];
 const tint = (id: string) => `bg-linear-135 ${tints[[...id].reduce((n, c) => n + c.charCodeAt(0), 0) % tints.length]}`;
-const TITLE = "line-clamp-2 text-[clamp(36px,6.5cqw,80px)] leading-[0.92] font-extrabold tracking-[-0.04em]";
+// A page's big title: set tight, so its letters hang past its lines; nothing around it clips them. It
+// gets smaller the longer it is, so a long one takes two or three lines instead of running on.
+const TITLE = "leading-[0.92] font-extrabold tracking-[-0.04em] text-balance break-words";
+const titleSize = (text = "") => (text.length <= 16 ? "text-[clamp(36px,6.5cqw,80px)]" : text.length <= 32 ? "text-[clamp(32px,5cqw,64px)]" : "text-[clamp(28px,3.6cqw,46px)]");
+const title = (text?: string) => `${TITLE} ${titleSize(text)}`;
 
 // The top of every album and playlist page: cover and title over the artwork's own blur.
 function Masthead({ cover, bg, fill = "bg-neutral-800", title, sub, meta, children }: { cover: ReactNode; bg?: string; fill?: string; title: ReactNode; sub?: ReactNode; meta: string; children: ReactNode }) {
@@ -185,7 +193,8 @@ function Masthead({ cover, bg, fill = "bg-neutral-800", title, sub, meta, childr
 }
 
 const pill = "press flex h-10 items-center gap-2 rounded-full px-5 font-semibold";
-function PlayButtons({ tracks, from }: { tracks: Track[]; from?: string }) {
+// radio false: no Radio button (Local Files: radio comes from YouTube Music, which doesn't have them).
+function PlayButtons({ tracks, from, radio = true }: { tracks: Track[]; from?: string; radio?: boolean }) {
   return (
     <>
       <button onClick={() => play(tracks, firstPlayable(tracks), from)} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
@@ -194,10 +203,36 @@ function PlayButtons({ tracks, from }: { tracks: Track[]; from?: string }) {
       <button onClick={() => shufflePlay(tracks, from)} disabled={!tracks.length} className={`${pill} bg-white/20 hover:bg-white/30 disabled:opacity-50`}>
         <Shuffle size={16} /> Shuffle
       </button>
-      <button onClick={() => radioFrom(tracks, from)} disabled={!tracks.length} aria-label="Radio" title="Radio" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30 disabled:opacity-50">
-        <Radio size={16} />
-      </button>
+      {radio && (
+        <button onClick={() => radioFrom(tracks, from)} disabled={!tracks.length} aria-label="Radio" title="Radio" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30 disabled:opacity-50">
+          <Radio size={16} />
+        </button>
+      )}
     </>
+  );
+}
+
+// Download a list to play offline (offline.ts): an arrow; while it downloads, a ring filling up; once it's
+// all here, a solid arrow, which offers to remove it. about: what to keep with it, asked for on the press.
+function DownloadButton({ id, about }: { id: string; about: () => Parameters<typeof download>[1] }) {
+  const state = useOffline();
+  useLibrary((l) => l.playlists), useLibrary((l) => l.liked); // a playlist growing moves the ring back
+  if (!canDownload) return null;
+  const p = progress(id, state);
+  const label = !p ? "Download" : p.done ? "Downloaded" : `Downloading, ${p.saved} of ${p.total}`;
+  return (
+    <button onClick={() => (p ? popup([{ text: "Remove Download", action: () => removeDownload(id) }]) : download(id, about()))} aria-label={label} title={label} aria-haspopup={p ? "menu" : undefined} className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
+      {!p ? (
+        <ArrowDownToLine size={18} />
+      ) : p.done ? (
+        <CircleArrowDown size={24} strokeWidth={2.2} className="fill-white text-black/75" />
+      ) : (
+        <svg viewBox="0 0 20 20" aria-hidden className="size-5 -rotate-90">
+          <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2.5" />
+          <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray={`${(p.total ? p.saved / p.total : 0) * 50.3} 50.3`} className="transition-[stroke-dasharray] duration-300" />
+        </svg>
+      )}
+    </button>
   );
 }
 
@@ -271,7 +306,7 @@ function Shelves({ children }: { children?: ReactNode }) {
           <img src={art(hero.thumb, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover blur-3xl saturate-150" />
           <div className="absolute inset-0 -z-10 bg-linear-to-r from-black/60 via-black/30 to-black/0" />
           <div className="pointer-events-none min-w-0 flex-1 p-8 @4xl:p-10">
-            <h2 className="line-clamp-3 text-[clamp(36px,6cqw,76px)] leading-[0.92] font-extrabold tracking-[-0.04em]">{hero.title}</h2>
+            <h2 className={`${TITLE} ${hero.title.length <= 24 ? "text-[clamp(36px,6cqw,76px)]" : "text-[clamp(30px,4.2cqw,54px)]"}`}>{hero.title}</h2>
             <div className="mt-3 truncate text-lg text-white/80">{hero.by}</div>
             <button onClick={() => playCollection(hero.id)} className={`${pill} pointer-events-auto mt-6 inline-flex bg-white text-black hover:bg-white/85`}>
               <Play size={16} className="fill-current" /> Play
@@ -296,10 +331,15 @@ function Shelves({ children }: { children?: ReactNode }) {
 }
 
 // An album or playlist on YouTube Music.
+// A downloaded one opens from what was kept with it while offline, or if YouTube Music doesn't answer.
 export function CollectionPage({ id }: { id: string }) {
-  const { data, error } = useAsync(() => collection(id), [id]);
+  const online = useOnline();
+  const kept = useOffline((s) => s.lists[libraryKey("album", id)]?.collection);
+  const { data: fresh, error } = useAsync(() => (online || !kept ? collection(id) : undefined), [id, online]);
+  const page = fresh ?? kept;
+  const data = page && { ...page, by: [page.by ?? []].flat() }; // kept before an album's artists were a list
   const saved = useLibrary((s) => s.saved.some((a) => a.id === id));
-  if (error) return <p className="px-8 pt-20 text-muted">Couldn’t open this. Go back and try again.</p>;
+  if (!data && error) return <p className="px-8 pt-20 text-muted">Couldn’t open this. Go back and try again.</p>;
   if (!data) return <Skeleton className="h-[380px] bg-ink/[0.04]" />;
   const album = isAlbum(id);
 
@@ -308,12 +348,13 @@ export function CollectionPage({ id }: { id: string }) {
       <Masthead
         cover={<img src={art(data.thumb, 600)} alt="" className="size-full object-cover" />}
         bg={data.thumb}
-        title={<h1 className={TITLE}>{data.title}</h1>}
-        sub={data.by && <Artists list={[data.by]} />}
+        title={<h1 className={title(data.title)}>{data.title}</h1>}
+        sub={data.by.length > 0 && <Artists list={data.by} />}
         meta={[data.kind, ...data.meta].filter(Boolean).join(" · ")}
       >
         <PlayButtons tracks={data.tracks} from={libraryKey("album", id)} />
-        <button onClick={() => toggleSave({ id, title: data.title, by: data.by?.name, thumb: data.thumb })} aria-pressed={saved} className={`${pill} bg-white/20 px-4 hover:bg-white/30`}>
+        <DownloadButton id={libraryKey("album", id)} about={() => (!saved && toggleSave({ id, title: data.title, by: data.by.map((a) => a.name).join(", "), thumb: data.thumb }), { title: data.title, thumb: data.thumb, collection: data })} />
+        <button onClick={() => toggleSave({ id, title: data.title, by: data.by.map((a) => a.name).join(", "), thumb: data.thumb })} aria-pressed={saved} className={`${pill} bg-white/20 px-4 hover:bg-white/30`}>
           {saved ? <Check size={16} strokeWidth={2.6} /> : <Plus size={16} strokeWidth={2.6} />} {saved ? "Saved" : "Save"}
         </button>
       </Masthead>
@@ -337,8 +378,11 @@ export function Library() {
   const [query, setQuery] = useState("");
   const q = query.trim().toLocaleLowerCase();
   const hero = view === "grid" && !filter && !q;
-  const items = useMemo(() => libraryItems(library, recents, sort, filter, q).filter((i) => !(hero && i.kind === "liked")), [library, recents, sort, filter, q, hero]);
+  const local = useLocal((s) => (s.folders.length ? Object.keys(s.files).length : -1));
+  const lists = useOffline((s) => s.lists);
+  const items = useMemo(() => libraryItems(library, recents, sort, filter, q, local, lists).filter((i) => !(hero && i.kind === "liked")), [library, recents, sort, filter, q, hero, local, lists]);
   const songs = useMemo(() => (filter === "songs" ? sorted(library.liked, SONG_ORDER[sort]).filter((r) => !q || matches(r.t, q)) : []), [library.liked, filter, sort, q]);
+  useEffect(() => void (filter === "songs" && fillIn(library.liked)), [filter, library.liked]);
   const set = useSettings.setState;
   const chip = (on: boolean) => `press h-8 rounded-full px-3.5 text-sm font-semibold transition-colors ${on ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`;
 
@@ -378,14 +422,14 @@ export function Library() {
       ) : items.length ? (
         <LibraryItems items={items} view={view} />
       ) : (
-        <p className="mt-6 text-muted">{q ? "Nothing in your library matches." : filter === "artists" ? "Follow an artist and they land here." : filter === "albums" ? "Save an album and it lands here." : "Make a playlist with the + button, or save one."}</p>
+        <p className="mt-6 text-muted">{q ? "Nothing in your library matches." : filter === "artists" ? "Follow an artist and they land here." : filter === "albums" ? "Save an album and it lands here." : filter === "downloaded" ? "Download a playlist or album and it plays without a connection." : "Make a playlist with the + button, or save one."}</p>
       )}
     </div>
   );
 }
 
 const round2 = "press flex size-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.07] hover:text-ink";
-const FILTERS = [["playlists", "Playlists"], ["albums", "Albums"], ["artists", "Artists"], ["songs", "Songs"]] as const;
+const FILTERS = [["playlists", "Playlists"], ["albums", "Albums"], ["artists", "Artists"], ["songs", "Songs"], ...(canDownload ? ([["downloaded", "Downloaded"]] as const) : [])] as const;
 const LIBRARY_SORTS = [["recents", "Recents"], ["added", "Recently Added"], ["name", "Alphabetical"], ["creator", "Creator"]] as const;
 // Songs order by the same setting, read for songs.
 const SONG_ORDER: Record<LibrarySort, TrackSort> = { recents: "custom", added: "custom", name: "title", creator: "artist" };
@@ -430,20 +474,24 @@ const isAlbum = (id: string) => id.startsWith("MPRE");
 // What the Library shows for a filter and search, pinned first (Liked Songs before all), then in order.
 // Searching looks inside folders too. at: when it was added; things saved before Sleeve kept the time
 // keep their old order.
-function libraryItems(l: LibraryData, recents: Record<string, number>, sort: LibrarySort, filter: LibraryFilter | undefined, q: string): Item[] {
+// local: how many songs Local Files has, or -1 when you've added no folders (and it isn't shown).
+// downloaded: the keys of what's downloaded (offline.ts).
+function libraryItems(l: LibraryData, recents: Record<string, number>, sort: LibrarySort, filter: LibraryFilter | undefined, q: string, local = -1, downloaded: Record<string, unknown> = {}): Item[] {
   const folders = new Set(l.folders.map((f) => f.id));
   const all: Item[] = [
     { key: "liked", kind: "liked", id: "liked", title: "Liked Songs", sub: `Playlist · ${count(l.liked.length)}`, at: Infinity, creator: "" },
+    ...(local >= 0 ? [{ key: "local", kind: "local" as const, id: "local", title: "Local Files", sub: `On this Mac · ${count(local)}`, at: 0, creator: "" }] : []),
     ...l.folders.map((f, i) => ({ key: libraryKey("folder", f.id), kind: "folder" as const, id: f.id, title: f.name, sub: `Folder · ${plural(l.playlists.filter((p) => p.folder === f.id).length, "playlist")}`, at: f.at ?? i, creator: "" })),
     ...l.playlists.map((p, i) => ({ key: libraryKey("playlist", p.id), kind: "playlist" as const, id: p.id, title: p.name, sub: `Playlist · ${count(p.tracks.length)}`, at: p.at ?? i, creator: "", folder: p.folder && folders.has(p.folder) ? p.folder : undefined })),
     ...l.saved.map((a, i) => ({ key: libraryKey("album", a.id), kind: "album" as const, id: a.id, title: a.title, sub: `${isAlbum(a.id) ? "Album" : "Playlist"}${a.by ? ` · ${a.by}` : ""}`, at: a.at ?? -i, creator: a.by ?? "" })),
     ...l.followed.map((a, i) => ({ key: libraryKey("artist", a.id), kind: "artist" as const, id: a.id, title: a.name, sub: "Artist", at: a.at ?? -i, creator: a.name })),
   ];
   const kinds: Record<LibraryFilter, (i: Item) => boolean> = {
-    playlists: (i) => i.kind === "liked" || i.kind === "folder" || i.kind === "playlist" || (i.kind === "album" && !isAlbum(i.id)),
+    playlists: (i) => i.kind === "liked" || i.kind === "local" || i.kind === "folder" || i.kind === "playlist" || (i.kind === "album" && !isAlbum(i.id)),
     albums: (i) => i.kind === "album" && isAlbum(i.id),
     artists: (i) => i.kind === "artist",
     songs: () => false,
+    downloaded: (i) => i.key in downloaded,
   };
   const order: Record<LibrarySort, (a: Item, b: Item) => number> = {
     recents: (a, b) => Math.max(recents[b.key] ?? 0, b.at) - Math.max(recents[a.key] ?? 0, a.at),
@@ -505,12 +553,13 @@ function LibraryItems({ items, view }: { items: Item[]; view: "grid" | "list" })
   );
 }
 
-const itemView = (i: Item): View => (i.kind === "liked" ? { name: "playlist", id: "liked" } : i.kind === "album" ? { name: "collection", id: i.id } : i.kind === "local" ? { name: "playlist", id: "local" } : { name: i.kind, id: i.id });
+const itemView = (i: Item): View => (i.kind === "liked" ? { name: "playlist", id: "liked" } : i.kind === "album" ? { name: "collection", id: i.id } : i.kind === "local" ? { name: "local" } : { name: i.kind, id: i.id });
 
 // An item's songs, to play from its card: your own lists at once, the rest from YouTube Music.
 async function itemTracks(i: Item): Promise<Track[]> {
   const l = useLibrary.getState();
   if (i.kind === "liked") return l.liked;
+  if (i.kind === "local") return localTracks();
   if (i.kind === "playlist") return l.playlists.find((p) => p.id === i.id)?.tracks ?? [];
   if (i.kind === "folder") return l.playlists.filter((p) => p.folder === i.id).flatMap((p) => p.tracks);
   if (i.kind === "artist") return (await artist(i.id)).songs;
@@ -520,6 +569,7 @@ async function itemTracks(i: Item): Promise<Track[]> {
 function ItemCover({ item }: { item: Item }) {
   const l = useLibrary();
   if (item.kind === "liked") return <PlaylistCover id="liked" tracks={[]} />;
+  if (item.kind === "local") return <LocalCover />;
   if (item.kind === "playlist") {
     const p = l.playlists.find((x) => x.id === item.id);
     return <PlaylistCover id={item.id} tracks={p?.tracks ?? []} cover={p?.cover} />;
@@ -621,12 +671,14 @@ function sorted(tracks: Track[], sort: TrackSort) {
   return cmp ? rows.sort((a, b) => cmp(a.t, b.t) || a.i - b.i) : rows;
 }
 
-function SortSelect({ value, onChange, liked }: { value: TrackSort; onChange: (s: TrackSort) => void; liked?: boolean }) {
+// custom: what Custom Order is called where the list's own order means something else (and there's then
+// no Date Added to offer): Liked Songs' newest first, Local Files' by artist and album.
+function SortSelect({ value, onChange, custom }: { value: TrackSort; onChange: (s: TrackSort) => void; custom?: string }) {
   return (
     <div className="relative">
       <select value={value} onChange={(e) => onChange(e.target.value as TrackSort)} aria-label="Order" className="press h-8 appearance-none rounded-full bg-ink/[0.07] pr-8 pl-3.5 text-sm font-semibold outline-none hover:bg-ink/[0.12] focus-visible:outline-2 focus-visible:outline-accent">
-        {(Object.keys(TRACK_SORTS) as TrackSort[]).filter((s) => !(liked && s === "added")).map((s) => (
-          <option key={s} value={s}>{liked && s === "custom" ? "Recently Added" : TRACK_SORTS[s].label}</option>
+        {(Object.keys(TRACK_SORTS) as TrackSort[]).filter((s) => !(custom && s === "added")).map((s) => (
+          <option key={s} value={s}>{custom && s === "custom" ? custom : TRACK_SORTS[s].label}</option>
         ))}
       </select>
       <ChevronDown size={15} aria-hidden className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-muted" />
@@ -644,6 +696,7 @@ export function PlaylistPage({ id }: { id: string }) {
   const folder = useLibrary((s) => s.folders.find((f) => f.id === playlist?.folder));
   const file = useRef<HTMLInputElement>(null);
   const tracks = playlist?.tracks ?? liked;
+  useEffect(() => fillIn(tracks), [tracks]); // albums, lengths and artists some songs came without
   const sort = (playlist ? playlist.sort : likedSort) ?? "custom";
   const rows = useMemo(() => sorted(tracks, sort), [tracks, sort]);
   if (id !== "liked" && !playlist) return <p className="px-8 pt-20 text-muted">This playlist was deleted.</p>;
@@ -696,11 +749,11 @@ export function PlaylistPage({ id }: { id: string }) {
                 name="playlist-name"
                 autoComplete="off"
                 spellCheck={false}
-                className={`${TITLE} -my-2 w-full bg-transparent py-2 caret-white outline-none`}
+                className={`${title(playlist.name)} room w-full bg-transparent caret-white outline-none`}
               />
             </h1>
           ) : (
-            <h1 className={TITLE}>Liked Songs</h1>
+            <h1 className={title("Liked Songs")}>Liked Songs</h1>
           )
         }
         sub={
@@ -719,6 +772,7 @@ export function PlaylistPage({ id }: { id: string }) {
         meta={[folder?.name ?? (playlist ? "Playlist" : "Library"), count(tracks.length)].join(" · ")}
       >
         <PlayButtons tracks={shown} from={from} />
+        <DownloadButton id={from} about={() => ({ title: playlist?.name ?? "Liked Songs", thumb: playlist?.cover ?? tracks[0]?.thumb })} />
         <button onClick={more} aria-label="More" title="More" aria-haspopup="menu" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
           <Ellipsis size={20} />
         </button>
@@ -727,7 +781,7 @@ export function PlaylistPage({ id }: { id: string }) {
       <div className="mt-6 px-8">
         {tracks.length > 1 && (
           <div className="mb-2 flex justify-end">
-            <SortSelect value={sort} liked={!playlist} onChange={(s) => (playlist ? sortPlaylist(id, s) : useSettings.setState({ likedSort: s }))} />
+            <SortSelect value={sort} custom={playlist ? undefined : "Recently Added"} onChange={(s) => (playlist ? sortPlaylist(id, s) : useSettings.setState({ likedSort: s }))} />
           </div>
         )}
         {tracks.length ? (
@@ -768,7 +822,7 @@ export function FolderPage({ id }: { id: string }) {
         fill={tint(id)}
         title={
           <h1>
-            <input value={folder.name} onChange={(e) => renameFolder(id, e.target.value)} onBlur={(e) => !e.target.value.trim() && renameFolder(id, "Untitled Folder")} aria-label="Folder name" name="folder-name" autoComplete="off" spellCheck={false} className={`${TITLE} -my-2 w-full bg-transparent py-2 caret-white outline-none`} />
+            <input value={folder.name} onChange={(e) => renameFolder(id, e.target.value)} onBlur={(e) => !e.target.value.trim() && renameFolder(id, "Untitled Folder")} aria-label="Folder name" name="folder-name" autoComplete="off" spellCheck={false} className={`${title(folder.name)} room w-full bg-transparent caret-white outline-none`} />
           </h1>
         }
         meta={`Folder · ${plural(items.length, "playlist")}`}
@@ -787,6 +841,53 @@ export function FolderPage({ id }: { id: string }) {
       <div className="px-8">
         {items.length ? <LibraryItems items={items} view={view} /> : <p className="mt-6 text-muted">Drag a playlist onto this folder in your Library, or right-click one and choose Move to Folder.</p>}
       </div>
+    </div>
+  );
+}
+
+// Songs on this Mac, from the folders you added (local.ts): play them, order them, search them.
+export function LocalPage() {
+  const tracks = useLocalTracks();
+  const folders = useLocal((s) => s.folders);
+  const scanning = useLocal((s) => s.scanning);
+  const sort = useSettings((s) => s.localSort);
+  const [query, setQuery] = useState("");
+  const rows = useMemo(() => sorted(tracks, sort).filter((r) => !query.trim() || matches(r.t, query.trim())), [tracks, sort, query]);
+  const shown = rows.map((r) => r.t);
+  return (
+    <div className="animate-enter">
+      <Masthead cover={<LocalCover />} fill="bg-linear-135 from-[#5e5ce6] to-[#30d158]" title={<h1 className={title("Local Files")}>Local Files</h1>} meta={`On this Mac · ${count(tracks.length)} · ${plural(folders.length, "folder")}${scanning ? " · Looking for changes…" : ""}`}>
+        <PlayButtons tracks={shown} from="local" radio={false} />
+        <button onClick={() => popup([{ text: "Add Folder…", action: () => void addFolder() }, { text: "Look for New Songs", action: () => void rescan() }])} aria-label="More" title="More" aria-haspopup="menu" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
+          <Ellipsis size={20} />
+        </button>
+      </Masthead>
+      <div className="mt-6 px-8">
+        {!folders.length ? (
+          <div className="flex items-center gap-4">
+            <p className="text-muted">{canHaveFiles ? "Add a folder of music on this Mac and it plays here, alongside everything else." : "Local files play in the Sleeve app."}</p>
+            {canHaveFiles && <button onClick={() => void addFolder()} className={solid}><Plus size={16} /> Add Folder…</button>}
+          </div>
+        ) : (
+          <>
+            <div className="mb-2 flex items-center justify-end gap-2">
+              <label className="flex h-8 w-56 items-center gap-2 rounded-full bg-ink/[0.07] px-3 focus-within:bg-ink/[0.1]">
+                <SearchIcon size={15} className="shrink-0 text-muted" />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} placeholder="Search in Local Files" aria-label="Search in Local Files" name="local-q" autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" />
+              </label>
+              <SortSelect value={sort} custom="Artist & Album" onChange={(localSort) => useSettings.setState({ localSort })} />
+            </div>
+            {shown.length ? <TrackList tracks={shown} from="local" /> : <p className="text-muted">{query.trim() ? "No songs match." : scanning ? "Reading your music…" : "No songs in these folders yet."}</p>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+function LocalCover() {
+  return (
+    <div className="grid size-full place-items-center bg-linear-135 from-[#5e5ce6] to-[#30d158] text-white/90">
+      <HardDrive className="size-1/3" strokeWidth={1.5} />
     </div>
   );
 }
@@ -1024,7 +1125,7 @@ export function NowPlaying() {
             {track ? (
               <>
                 <img src={art(track.thumb, 1000)} alt="" className="aspect-square w-full max-w-[min(100%,50vh)] rounded-2xl object-cover shadow-2xl shadow-black/25" />
-                <h1 className="mt-10 line-clamp-2 text-[clamp(40px,5vw,72px)] leading-[0.95] font-extrabold tracking-[-0.04em]">{track.title}</h1>
+                <h1 className={`mt-10 leading-[0.95] font-extrabold tracking-[-0.04em] text-balance break-words ${track.title.length <= 28 ? "text-[clamp(40px,5vw,72px)]" : "text-[clamp(30px,3.4vw,48px)]"}`}>{track.title}</h1>
                 <div className="mt-3 truncate text-xl text-white/75">
                   <Artists list={track.artists} />
                 </div>
@@ -2033,6 +2134,8 @@ function LibraryPane() {
         </button>
         <input ref={file} type="file" accept=".json,application/json" hidden onChange={(e) => (e.target.files?.[0] && restore(e.target.files[0]), (e.target.value = ""))} />
       </div>
+      {canHaveFiles && <LocalFolders />}
+      {canDownload && <Downloads />}
       <section className="mt-10">
         <h2 className="mb-1 text-xl font-bold tracking-tight">Hidden Songs</h2>
         <p className="mb-3 text-sm text-muted">Skipped when a playlist or radio plays on by itself. They still play when you pick them.</p>
@@ -2073,6 +2176,70 @@ function LibraryPane() {
   );
 }
 
+// What's downloaded, in Settings → Library, and the room it takes.
+function Downloads() {
+  const { songs, lists, waiting } = useOffline();
+  const [size, setSize] = useState<number>();
+  useEffect(() => void downloadedSize().then(setSize, () => {}), [songs]);
+  const entries = Object.entries(lists).sort((a, b) => b[1].at - a[1].at);
+  const n = Object.keys(songs).length;
+  return (
+    <section className="mt-10">
+      <h2 className="mb-1 text-xl font-bold tracking-tight">Downloads</h2>
+      <p className="mb-3 text-sm text-muted">
+        {entries.length ? `${count(n)}${size !== undefined ? `, ${size < 1e9 ? `${size < 1e7 ? (size / 1e6).toFixed(1) : Math.round(size / 1e6)} MB` : `${(size / 1e9).toFixed(1)} GB`}` : ""}${waiting.length ? `, ${waiting.length} still to come` : ""}. They play without a connection, and only in Sleeve.` : "Download a playlist or album with its arrow button and it plays without a connection."}
+      </p>
+      {entries.length > 0 && (
+        <>
+          <div className="mb-3 divide-y divide-ink/10">
+            {entries.map(([key, l]) => (
+              <div key={key} className="flex h-14 items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold">{l.title}</div>
+                  <div className="truncate text-sm text-muted">{count(listTracks(key).length)}</div>
+                </div>
+                <button onClick={() => removeDownload(key)} className={quiet}>Remove</button>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => popup([{ text: "Remove All Downloads", action: removeAllDownloads }])} className={quiet}>Remove All…</button>
+        </>
+      )}
+    </section>
+  );
+}
+
+// The folders Local Files reads, in Settings → Library.
+function LocalFolders() {
+  const folders = useLocal((s) => s.folders);
+  const scanning = useLocal((s) => s.scanning);
+  const songs = useLocal((s) => Object.keys(s.files).length);
+  return (
+    <section className="mt-10">
+      <h2 className="mb-1 text-xl font-bold tracking-tight">Local Files</h2>
+      <p className="mb-3 text-sm text-muted">{folders.length ? `${count(songs)} from these folders${scanning ? ", looking for changes…" : ""}. They’re read again each time Sleeve opens.` : "Music on this Mac plays alongside everything else. Add a folder and its songs land in Local Files."}</p>
+      {folders.length > 0 && (
+        <div className="mb-3 divide-y divide-ink/10">
+          {folders.map((f) => (
+            <div key={f} className="flex h-14 items-center gap-3">
+              <FolderIcon size={18} className="shrink-0 text-muted" />
+              <div title={f} className="min-w-0 flex-1">
+                <div className="truncate font-semibold">{f.split(/[\\/]/).filter(Boolean).at(-1) ?? f}</div>
+                <div className="truncate text-sm text-muted">{f}</div>
+              </div>
+              <button onClick={() => removeFolder(f)} className={quiet}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <button onClick={() => void addFolder()} className={solid}><Plus size={16} /> Add Folder…</button>
+        {folders.length > 0 && <button onClick={() => void rescan()} disabled={scanning} className={quiet}>Look for New Songs</button>}
+      </div>
+    </section>
+  );
+}
+
 function Shortcuts() {
   return (
     <div className="divide-y divide-ink/10">
@@ -2109,19 +2276,23 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
+// Each artist their own link, with commas between. One YT Music didn't link finds its page by search.
 export function Artists({ list }: { list: Track["artists"] }) {
   return list.map((a, i) => (
     <Fragment key={i}>
       {i > 0 && ", "}
-      {a.id ? (
-        <button onClick={(e) => (e.stopPropagation(), open({ name: "artist", id: a.id! }))} className="relative hover:text-ink hover:underline">
-          {a.name}
-        </button>
-      ) : (
-        a.name
-      )}
+      <button onClick={(e) => (e.stopPropagation(), goToArtist(a))} className="relative hover:text-ink hover:underline">
+        {a.name}
+      </button>
     </Fragment>
   ));
+}
+export function goToArtist(a: Artist) {
+  if (a.id) return open({ name: "artist", id: a.id });
+  artistByName(a.name).then(
+    (id) => (id ? open({ name: "artist", id }) : notify({ text: "No Page for This Artist", detail: a.name })),
+    () => notify({ text: "Couldn’t Find This Artist", detail: a.name }),
+  );
 }
 
 // The queue beside the page, opened from the player bar (like Spotify's). Drag a row, or use its menu, to reorder.
@@ -2236,13 +2407,16 @@ export function QueuePanel() {
 type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number, to: number) => void; times?: number[]; onPlay?: (i: number) => void };
 function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
   const current = useStore((s) => s.queue[s.index]?.id);
-  useLibrary((s) => s.hidden), useLibrary((s) => s.blocked); // re-dim as they change
+  useLibrary((s) => s.hidden), useLibrary((s) => s.blocked), useOnline(); // re-dim as they change
+  const saved = useOffline((s) => s.songs);
+  useOffline((s) => s.art); // a cover just kept is drawn from disk
   const [drag, setDrag] = useState<number>();
   const [over, setOver] = useState<number>();
   return (
     <ol>
       {tracks.map((t, i) => {
         const off = skipped(t);
+        const dim = off || unavailable(t);
         return (
           <li
             key={t.id + i}
@@ -2259,17 +2433,22 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
           >
             <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
             {numbered && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
-            {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" className={`size-10 rounded-lg bg-ink/[0.06] object-cover ${off ? "opacity-40" : ""}`} />}
-            <div className={`min-w-0 ${off ? "opacity-45" : ""}`}>
+            {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" className={`size-10 rounded-lg bg-ink/[0.06] object-cover ${dim ? "opacity-40" : ""}`} />}
+            <div className={`min-w-0 ${dim ? "opacity-45" : ""}`}>
               <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>
                 {off && <EyeOff size={14} aria-label="Hidden" className="mr-1.5 inline -translate-y-px text-muted" />}
                 {t.title}
               </div>
               <div className="truncate text-sm text-muted">
+                {saved[t.id] && <CircleArrowDown size={14} aria-label="Downloaded" className="mr-1 inline -translate-y-px fill-accent text-paper" />}
                 <Artists list={t.artists} />
               </div>
             </div>
-            {!plain && <div className={`truncate text-sm text-muted ${off ? "opacity-45" : ""}`}>{t.album}</div>}
+            {!plain && (
+              <div className={`min-w-0 truncate text-sm text-muted ${dim ? "opacity-45" : ""}`}>
+                {t.albumId ? <button onClick={() => open({ name: "collection", id: t.albumId! })} className="relative max-w-full truncate text-left hover:text-ink hover:underline">{t.album}</button> : t.album}
+              </div>
+            )}
             <LikeButton track={t} />
             <div className="flex justify-end text-sm text-muted tabular-nums">{current === t.id ? <AudioLines size={16} className="text-accent" /> : times ? new Date(times[i]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : t.duration}</div>
           </li>

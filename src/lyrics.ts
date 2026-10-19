@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -337,11 +338,27 @@ async function find(t: Track): Promise<Lyrics | null> {
   return null;
 }
 
+// A song file's own lyrics (local.rs local_lyrics), ahead of every source: synced ones in its tags, then a
+// .lrc file beside it, then plain ones in its tags. Read each time, not kept: they're on disk already,
+// and you may have just fixed the .lrc.
+async function fromFile(path: string): Promise<Lyrics | undefined> {
+  const { embedded, lrc } = await invoke<{ embedded?: string; lrc?: string }>("local_lyrics", { path }).catch(() => ({ embedded: undefined, lrc: undefined }));
+  const synced = (text?: string) => !!text && text.split(/\r?\n/).some((r) => STAMP.test(r));
+  if (synced(embedded)) return { lines: tidy(parseLrc(embedded!)), synced: true, source: "the song’s file" };
+  if (synced(lrc)) return { lines: tidy(parseLrc(lrc!)), synced: true, source: "its .lrc file" };
+  if (embedded?.trim()) return { lines: plain(embedded), synced: false, source: "the song’s file" };
+}
+
+// A downloaded song's lyrics, fetched now (if they aren't kept already) so they're there offline.
+export const keepLyrics = (t: Track) => stored(t).then(() => {}, () => {});
+
 // Lyrics found are kept on disk, so a song heard before has them at once, even offline, with no request.
 // A miss is kept two days, then asked again, as sources keep adding songs. ponytail: never pruned (a
 // few KB a song); bump the version when a source is added, or what's read from one changes (v2: Apple's
 // backing-vocal timings and duet sides).
 async function stored(t: Track): Promise<Lyrics | null> {
+  const own = t.file ? await fromFile(t.file) : undefined;
+  if (own) return own;
   const key = `lyrics:v2:${t.id}`;
   const kept = await idbGet<{ at: number; lyrics: Lyrics | null }>(key).catch(() => undefined);
   if (kept && (kept.lyrics || Date.now() - kept.at < 2 * 86_400_000)) return kept.lyrics;

@@ -72,6 +72,13 @@
   }
 }
 
+/* Room above and below big, tightly set text in a box that clips (a text field), so its accents and
+   descenders show; negative margins give the space back, so nothing moves. */
+@utility room {
+  padding-block: 0.15em;
+  margin-block: -0.15em;
+}
+
 /* A word of karaoke lyrics, lit as it's sung: --p runs 0 to 1 (views.tsx LyricLines), and the lit edge
    feathers over --feather (am-lyrics' 0.75em; 0.3em on single letters). --lit is the sung colour, which
    fades to the line's dim one when it's done. Right-to-left lines wipe the other way. */

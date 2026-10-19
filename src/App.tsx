@@ -2,8 +2,13 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
 import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { useExtras, useLine, useLyrics } from "./lyrics";
-import { Artist, Artists, CollectionPage, Dialogs, FolderPage, HistoryPage, Home, Library, NowPlaying, PlaylistPage, popup, QueuePanel, Search, Settings, trackMenu } from "./views";
+import { Artist, Artists, CollectionPage, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, QueuePanel, Search, Settings, trackMenu } from "./views";
 import { art, type Track } from "./yt";
+
+// A picture that can't load (offline, say) leaves its grey tile rather than WebKit's broken-image mark;
+// it shows again once its source loads.
+addEventListener("error", (e) => e.target instanceof HTMLImageElement && (e.target.style.visibility = "hidden"), true);
+addEventListener("load", (e) => e.target instanceof HTMLImageElement && e.target.style.visibility && (e.target.style.visibility = ""), true);
 
 export default function App() {
   const stack = useStore((s) => s.stack);
@@ -45,7 +50,7 @@ export default function App() {
             <div key={i + view.name + ("id" in view ? view.id : "")} hidden={i !== stack.length - 1} className="absolute inset-0 overflow-x-hidden overflow-y-auto pb-10">
               {"id" in view ? (
                 view.name === "artist" ? <Artist id={view.id} /> : view.name === "playlist" ? <PlaylistPage id={view.id} /> : view.name === "folder" ? <FolderPage id={view.id} /> : <CollectionPage id={view.id} />
-              ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : view.name === "settings" ? <Settings /> : view.name === "history" ? <HistoryPage /> : <Library />}
+              ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : view.name === "settings" ? <Settings /> : view.name === "history" ? <HistoryPage /> : view.name === "local" ? <LocalPage /> : <Library />}
             </div>
           ))}
           {stack.length > 1 && (

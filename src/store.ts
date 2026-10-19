@@ -1,13 +1,14 @@
 import { useSyncExternalStore } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import { art, fetchAudio, playAudio, radio, type Album, type Artist, type Quality, type Track } from "./yt";
+import { art, details, fetchAudio, playAudio, radio, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
 
 type Root = "home" | "search" | "library" | "settings";
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
-export type View = { name: Root | "history" } | { name: "artist" | "collection" | "playlist" | "folder"; id: string };
+export type View = { name: Root | "history" | "local" } | { name: "artist" | "collection" | "playlist" | "folder"; id: string };
 
 type State = {
   stack: View[];
@@ -48,7 +49,7 @@ export const open = (view: View) => {
 };
 // The library key of a page's subject (libraryKey), if it can be in your library.
 export const viewKey = (v: View) =>
-  !("id" in v) ? undefined : v.name === "collection" ? libraryKey("album", v.id) : v.id === "liked" ? libraryKey("liked") : libraryKey(v.name, v.id);
+  !("id" in v) ? (v.name === "local" ? libraryKey("local") : undefined) : v.name === "collection" ? libraryKey("album", v.id) : v.id === "liked" ? libraryKey("liked") : libraryKey(v.name, v.id);
 export const back = () => set((s) => (s.stack.length > 1 ? { stack: s.stack.slice(0, -1), ahead: [s.stack.at(-1)!, ...s.ahead] } : s));
 export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, s.ahead[0]], ahead: s.ahead.slice(1) } : s));
 export const go = (name: Root) => set({ stack: [{ name }], ahead: [], sheet: undefined });
@@ -205,6 +206,35 @@ export const restoreLibrary = (l: Partial<Library> & Pick<Library, "liked" | "sa
   change("Library Restored", { title: `${plural(l.liked.length, "liked song")}, ${plural(l.playlists.length, "playlist")}, ${plural(l.saved.length, "album")}` }, () => ({ ...empty(), ...l }));
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+// Songs from some lists come without an album or a length (a music video has neither), and ones kept
+// before artists were read properly can have two in one ("Jazeek & Luciano"). Each is looked up once a
+// launch, two at a time, from its own entry on YT Music, and the answer written back wherever it's kept.
+const needsFill = (t: Track) => !t.file && (t.album === undefined || !t.duration || (!t.albumId && t.artists.some((a) => SEP.test(a.name))));
+const asked = new Set<string>();
+const toFill: Track[] = [];
+let filling = 0;
+export function fill(tracks: Track[]) {
+  for (const t of tracks) if (needsFill(t) && !asked.has(t.id)) asked.add(t.id), toFill.push(t);
+  while (filling < 2 && toFill.length) void fillNext();
+}
+async function fillNext() {
+  filling++;
+  for (let t; (t = toFill.shift()); ) {
+    const d = await details(t.id).catch(() => undefined);
+    if (d) patch(t.id, { album: d.album ?? t.album ?? "", ...(d.albumId && { albumId: d.albumId }), ...(!t.duration && d.duration && { duration: d.duration }), ...(d.artists.length && { artists: d.artists }) });
+  }
+  filling--;
+}
+// Changes a song wherever it's kept: your lists, the queue, recently played.
+function patch(id: string, p: Partial<Track>) {
+  const fix = (list: Track[]) => (list.some((x) => x.id === id) ? list.map((x) => (x.id === id ? { ...x, ...p } : x)) : list);
+  const l = useLibrary.getState();
+  const liked = fix(l.liked), hidden = fix(l.hidden), playlists = l.playlists.map((pl) => ((t) => (t === pl.tracks ? pl : { ...pl, tracks: t }))(fix(pl.tracks)));
+  if (liked !== l.liked || hidden !== l.hidden || playlists.some((pl, i) => pl !== l.playlists[i])) lib({ liked, hidden, playlists });
+  set((s) => ({ queue: fix(s.queue) }));
+  useHistory.setState((s) => ({ recent: fix(s.recent) }));
+}
+
 // When each thing in your library was last opened or played from, for the Library's Recents order.
 export const useRecents = create<Record<string, number>>()(persist(() => ({}), { name: "recents", storage: createJSONStorage(() => idb) }));
 export const touch = (key: string) => useRecents.setState({ [key]: Date.now() });
@@ -294,11 +324,17 @@ export const subscribeAudio = subscribe;
 
 export const shuffled = <T,>(list: T[]) => list.map((x) => [Math.random(), x] as const).sort((a, b) => a[0] - b[0]).map((p) => p[1]);
 
+// Downloaded songs (offline.ts sets these) play from disk, and while offline they and your own files are
+// all that can play: a queue moving on by itself passes over the rest, and lists dim them.
+export const downloads: { read?: (id: string) => ReturnType<typeof fetchAudio> | undefined; has?: (id: string) => boolean } = {};
+export const unavailable = (t: Track) => !navigator.onLine && !t.file && !downloads.has?.(t.id);
+const playable = (t: Track) => !skipped(t) && !unavailable(t);
+
 // Instant skip: the next track's audio is fetched while this one plays, and recent ones are kept.
-// ponytail: last 4 tracks in memory (~20 MB); a disk cache comes with offline downloads.
+// ponytail: last 4 tracks in memory (~20 MB).
 const cache = new Map<string, ReturnType<typeof fetchAudio>>();
 function fetchCached(id: string) {
-  const p = cache.get(id) ?? fetchAudio(id, useSettings.getState().quality);
+  const p = cache.get(id) ?? downloads.read?.(id) ?? fetchAudio(id, useSettings.getState().quality);
   cache.delete(id);
   cache.set(id, p);
   if (cache.size > 4) cache.delete(cache.keys().next().value!);
@@ -306,9 +342,23 @@ function fetchCached(id: string) {
   return p;
 }
 const prefetch = () => {
-  const t = get().queue[get().index + 1];
-  if (t) fetchCached(t.id).catch(() => {});
+  const t = get().queue[nextIndex(get().index)];
+  if (t && !t.file) fetchCached(t.id).catch(() => {});
 };
+// A song file on this computer plays from disk through the asset protocol: no stream to fetch, and it
+// seeks like any file. A webview that won't stream that into a player (WebKitGTK, on Linux) gets the file
+// read whole and played from memory instead. start resumes partway in; autoplay false only loads it.
+async function playFile(el: HTMLAudioElement, path: string, start = 0, autoplay = true) {
+  URL.revokeObjectURL(el.src);
+  el.src = convertFileSrc(path);
+  const loads = await new Promise<boolean>((ok) => {
+    const done = (e: Event) => (el.removeEventListener("loadedmetadata", done), el.removeEventListener("error", done), ok(e.type === "loadedmetadata"));
+    el.addEventListener("loadedmetadata", done), el.addEventListener("error", done);
+  });
+  if (!loads) el.src = URL.createObjectURL(await (await fetch(convertFileSrc(path))).blob());
+  if (start) el.currentTime = start;
+  if (autoplay) await el.play();
+}
 
 // Start playing a list (an album, a playlist, search results) from one of its tracks. from: the library
 // key of what it's from, for the Library's Recents order. A song you pick plays even if it's hidden.
@@ -323,12 +373,12 @@ export function play(queue: Track[], index: number, from?: string) {
   return loading;
 }
 export function shufflePlay(tracks: Track[], from?: string) {
-  const ok = tracks.flatMap((t, i) => (skipped(t) ? [] : [i]));
+  const ok = tracks.flatMap((t, i) => (playable(t) ? [i] : []));
   set({ shuffle: true });
   return play(tracks, ok.length ? ok[Math.floor(Math.random() * ok.length)] : 0, from);
 }
 // Where a list starts when you press its Play: its first song you haven't hidden.
-export const firstPlayable = (tracks: Track[]) => Math.max(0, tracks.findIndex((t) => !skipped(t)));
+export const firstPlayable = (tracks: Track[]) => Math.max(0, tracks.findIndex(playable));
 // A song's radio: it plays now and its "watch next" mix fills Up Next.
 export function startRadio(t: Track) {
   play([t], 0);
@@ -337,7 +387,7 @@ export function startRadio(t: Track) {
 
 // An artist's or playlist's radio: the "watch next" mixes of a few of its songs, taken in turn.
 async function mix(seeds: Track[], skip = new Set<string>()) {
-  const mixes = await Promise.all(seeds.map((t) => radio(t.id).catch(() => [])));
+  const mixes = await Promise.all(seeds.filter((t) => !t.file).map((t) => radio(t.id).catch(() => [])));
   return mixes.flatMap((m) => m.map((t, i) => [i, t] as const)).sort((a, b) => a[0] - b[0]).flatMap(([, t]) => (skip.has(t.id) || skipped(t) ? [] : (skip.add(t.id), [t])));
 }
 export async function radioFrom(tracks: Track[], from?: string) {
@@ -347,12 +397,13 @@ export async function radioFrom(tracks: Track[], from?: string) {
   play(list, 0, from);
 }
 
-// The next song a queue moves on to by itself, passing over hidden songs and blocked artists: an index
+// The next song a queue moves on to by itself, passing over hidden songs, blocked artists, and offline
+// what isn't downloaded: an index
 // into the queue, or queue.length when there's none. Repeat All goes round to the start.
 function nextIndex(from: number, wrap = get().repeat === "all") {
   const { queue } = get();
-  for (let i = from + 1; i < queue.length; i++) if (!skipped(queue[i])) return i;
-  if (wrap) for (let i = 0; i <= from && i < queue.length; i++) if (!skipped(queue[i])) return i;
+  for (let i = from + 1; i < queue.length; i++) if (playable(queue[i])) return i;
+  if (wrap) for (let i = 0; i <= from && i < queue.length; i++) if (playable(queue[i])) return i;
   return queue.length;
 }
 
@@ -377,9 +428,11 @@ async function load(index: number, start = 0, fade = 0) {
   setMediaSession(track);
   setAccent(art(track.thumb, 64));
   listened(start);
+  fill([track]);
   if (nextIndex(index, false) === get().queue.length && get().repeat === "off") extend(track); // autoplay
   try {
     if (buffered) await audio.play();
+    else if (track.file) loudness.set(audio, 0), level(audio), await playFile(audio, track.file, start);
     else {
       const data = await fetchCached(track.id);
       if (me !== latest) return;
@@ -412,6 +465,7 @@ async function preload(t: Track) {
   if (!el.paused) return; // still fading out
   ready = { id: t.id, el };
   try {
+    if (t.file) return loudness.set(el, 0), await playFile(el, t.file, 0, false);
     const data = await fetchCached(t.id);
     if (ready?.el !== el || ready.id !== t.id) return;
     loudness.set(el, data.loudness);
@@ -430,9 +484,15 @@ on("timeupdate", () => {
   if (fade && left <= fade) advance(fade); // load() swaps audio, so this fires once
 });
 on("playing", () => set({ loading: false }));
+// A song that came without a length gets the one its stream says.
+on("durationchange", () => {
+  const t = get().queue[get().index];
+  if (t && !t.duration && Number.isFinite(audio.duration) && audio.duration > 0) patch(t.id, { duration: `${Math.floor(audio.duration / 60)}:${String(Math.floor(audio.duration % 60)).padStart(2, "0")}` });
+});
 
 // The queue ran out: carry on with the last track's radio, minus anything already in it.
 async function extend(seed: Track) {
+  if (seed.file) return; // not on YouTube, so no radio
   const more = await radio(seed.id).catch(() => []);
   const { queue } = get();
   if (queue.at(-1)?.id !== seed.id) return; // you queued or played something else meanwhile
@@ -447,7 +507,7 @@ export const next = () => advance();
 export function prev() {
   const { queue, index } = get();
   let i = index - 1;
-  while (i >= 0 && skipped(queue[i])) i--;
+  while (i >= 0 && !playable(queue[i])) i--;
   return audio.currentTime > 3 || i < 0 ? (audio.currentTime = 0) : load(i);
 }
 on("ended", () => {
@@ -592,12 +652,12 @@ export const EQ_BANDS = [60, 150, 400, 1000, 2400, 15000];
 // system's Reduce Motion, so they look the same for everyone unless this is on. The Library page keeps
 // its view, order and filter; likedSort is how Liked Songs lists its songs (a playlist keeps its own).
 export type LibrarySort = "recents" | "added" | "name" | "creator";
-export type LibraryFilter = "playlists" | "albums" | "artists" | "songs";
+export type LibraryFilter = "playlists" | "albums" | "artists" | "songs" | "downloaded";
 type Settings = {
   theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number;
   quality: Quality; normalize: boolean; crossfade: number; eq: number[];
   lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean;
-  libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort;
+  libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort;
 };
 export const useSettings = create<Settings>()(
   persist(
@@ -605,7 +665,7 @@ export const useSettings = create<Settings>()(
       theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320,
       quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
       lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
-      libraryView: "grid", librarySort: "recents", likedSort: "custom",
+      libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom",
     }),
     { name: "settings" },
   ),

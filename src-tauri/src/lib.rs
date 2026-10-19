@@ -1,5 +1,8 @@
 use tauri::{webview::PageLoadEvent, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+mod local;
+mod offline;
+
 /// Lets the mini player float over other apps' full-screen spaces (a Chrome video, say). macOS only
 /// shows a regular app's windows there if they're non-activating panels, so the window is turned
 /// into one: an NSPanel subclass that can still take key (for its buttons), joins every space as a
@@ -35,7 +38,8 @@ fn float_mini(window: tauri::WebviewWindow) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![float_mini])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![float_mini, local::scan_music, local::allow_music, local::local_lyrics, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.

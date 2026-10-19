@@ -18,11 +18,41 @@ const yt = Innertube.create({ fetch: ytFetch, retrieve_player: true });
 
 export type Artist = { id?: string; name: string };
 // rec: added by Smart Shuffle. at: when it was added to the list it's in (a playlist, Liked Songs).
-export type Track = { id: string; title: string; artists: Artist[]; album?: string; thumb?: string; duration?: string; rec?: true; at?: number };
+// file: a song on this computer (local.ts), by its path; it plays from disk and isn't on YouTube.
+// albumId opens its album; album "" means it was looked for and there's none (store.ts fill).
+export type Track = { id: string; title: string; artists: Artist[]; album?: string; albumId?: string; thumb?: string; duration?: string; rec?: true; at?: number; file?: string };
 export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string; at?: number }; // at: when you saved it
 
-// YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at.
-export const art = (url: string | undefined, w: number, h = w) => url?.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, `=w${w}-h${h}-l90-rj`);
+// YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at. A
+// downloaded song's artwork (offline.ts sets covers.local) comes from disk instead, at any size.
+export const covers: { local?: (url: string, w: number) => string | undefined } = {};
+export const artBase = (url: string) => url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, "");
+export const sizedArt = (url: string, w: number, h = w) => url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, `=w${w}-h${h}-l90-rj`);
+export const art = (url: string | undefined, w: number, h = w) => url && (covers.local?.(url, w) ?? sizedArt(url, w, h));
+
+// YT Music links only the artists it has a page for; the rest are plain text in the same line ("Jazeek &
+// Luciano" with only Jazeek linked). Every name in text becomes an artist, in the order written: a linked
+// one with its page, the others split at , & + x feat. ft. with vs., and given a page by search when
+// opened (artistByName). A linked name is never split ("Mumford & Sons").
+export const SEP = /\s*(?:,|&|\+|\s+x\s+|\bfeat\.?(?=\s)|\bft\.?(?=\s)|\bwith\b|\bvs\.?(?=\s))\s*/i;
+export function withUnlinked(linked: Artist[], text = ""): Artist[] {
+  const marks: [number, Artist][] = [];
+  let left = text;
+  for (const a of linked) {
+    const at = left.indexOf(a.name);
+    if (at >= 0) left = left.slice(0, at) + "\0".repeat(a.name.length) + left.slice(at + a.name.length);
+    marks.push([at < 0 ? text.length : at, a]);
+  }
+  for (const m of left.matchAll(/[^\0]+/g)) for (const name of splits(m[0])) marks.push([m.index + m[0].indexOf(name), { name }]);
+  return marks.sort((a, b) => a[0] - b[0]).map(([, a]) => a);
+}
+const splits = (text: string) => text.split(SEP).map((x) => x.trim()).filter((x) => x && !STAT.test(x));
+// Not names: a count ("1.2M plays"), a year, a length.
+const STAT = /^([\d.,]+[KMB]?\s+\w+|\d{4}|\d+:\d\d(:\d\d)?)$/i;
+// The part of a list item's second line that holds its artists ("Jazeek & Luciano • STARBOYZ • 2:38"):
+// the first, after any word for what the item is ("Song • …").
+const KINDS = /^(song|video|single|ep|album|episode|podcast|playlist)$/i;
+const artistLine = (text = "") => text.split(" • ").find((p) => !KINDS.test(p.trim())) ?? "";
 
 const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
   items.flatMap((s) =>
@@ -30,8 +60,10 @@ const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
       ? [{
           id: s.id,
           title: s.title ?? "",
-          artists: (s.artists ?? s.authors)?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [], // videos have authors
+          // Videos have authors.
+          artists: withUnlinked((s.artists ?? s.authors)?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [], artistLine(s.flex_columns?.[1]?.title?.text)),
           album: s.album?.name,
+          albumId: s.album?.id,
           thumb: s.thumbnails?.[0]?.url,
           duration: s.duration?.text,
         }]
@@ -100,7 +132,7 @@ export async function artist(id: string) {
   };
 }
 
-export type Collection = { title: string; by?: Artist; kind?: string; meta: string[]; about?: string; thumb?: string; tracks: Track[] };
+export type Collection = { title: string; by: Artist[]; kind?: string; meta: string[]; about?: string; thumb?: string; tracks: Track[] };
 
 // An album (MPRE… ids) or a playlist (VL…/PL… ids): both pages share YT Music's responsive header.
 export async function collection(id: string): Promise<Collection> {
@@ -108,14 +140,15 @@ export async function collection(id: string): Promise<Collection> {
   const album = id.startsWith("MPRE") ? await music.getAlbum(id) : undefined;
   const page = album ?? (await music.getPlaylist(id));
   const header = page.header?.as(YTNodes.MusicResponsiveHeader);
-  const run = header?.strapline_text_one?.runs?.[0] as Misc.TextRun | undefined;
-  const by = header?.strapline_text_one?.text ? { name: header.strapline_text_one.text, id: run?.endpoint?.payload?.browseId } : undefined;
+  const runs = (header?.strapline_text_one?.runs ?? []) as Misc.TextRun[];
+  const linked = runs.flatMap((r) => (r.endpoint?.payload?.browseId?.startsWith("UC") ? [{ name: r.text, id: r.endpoint.payload.browseId as string }] : []));
+  const by = withUnlinked(linked, header?.strapline_text_one?.text);
   const thumb = header?.thumbnail?.contents?.[0]?.url;
   const [kind, year] = header?.subtitle?.text?.split(" • ") ?? [];
   let tracks: Track[];
   if (album) {
     // Album tracks carry neither artwork nor artists; both come from the header.
-    tracks = toTracks(album.contents?.filterType(YTNodes.MusicResponsiveListItem)).map((t) => ({ ...t, artists: t.artists.length || !by ? t.artists : [by], album: header?.title.text, thumb }));
+    tracks = toTracks(album.contents?.filterType(YTNodes.MusicResponsiveListItem)).map((t) => ({ ...t, artists: t.artists.length ? t.artists : by, album: header?.title.text, albumId: id, thumb }));
   } else {
     // ponytail: first 5 pages (~500 tracks); page in on scroll if huge playlists matter.
     let p = page as Awaited<ReturnType<typeof music.getPlaylist>>;
@@ -204,13 +237,41 @@ export async function radio(id: string): Promise<Track[]> {
         ? [{
             id: v.video_id,
             title: v.title.toString(),
-            artists: v.artists?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [],
+            artists: withUnlinked(v.artists?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [], artistLine(v.author)),
             album: v.album?.name,
+            albumId: v.album?.id,
             thumb: v.thumbnail[0]?.url,
             duration: v.duration.text,
           }]
         : [],
     );
+}
+
+// What a song's own entry on YT Music says, for one that came without it (store.ts fill): its album and
+// length. A music video has no album of its own; its song version (the counterpart) does.
+export async function details(id: string) {
+  const panel = await (await yt).music.getUpNext(id, false);
+  for (const v of panel.contents) {
+    const both = v.is(YTNodes.PlaylistPanelVideoWrapper) ? [v.primary, ...(v.counterpart ?? [])] : [v];
+    const all = both.filter((x): x is YTNodes.PlaylistPanelVideo => !!x?.is(YTNodes.PlaylistPanelVideo));
+    const me = all.find((x) => x.video_id === id);
+    if (!me) continue;
+    const album = me.album ?? all.find((x) => x.album)?.album;
+    const artists = withUnlinked(me.artists?.map((x) => ({ name: x.name, id: x.channel_id })) ?? [], artistLine(me.author));
+    return { album: album?.name, albumId: album?.id, duration: me.duration?.text || undefined, artists };
+  }
+}
+
+// An artist's page by name, for one YT Music didn't link: the artist search finds by that name.
+const named = new Map<string, Promise<string | undefined>>();
+export function artistByName(name: string) {
+  const key = name.toLocaleLowerCase();
+  if (!named.has(key))
+    named.set(key, (async () => {
+      const list = (await (await yt).music.search(name, { type: "artist" })).artists?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? [];
+      return (list.find((a) => a.name?.toLocaleLowerCase() === key) ?? list[0])?.id;
+    })().catch((e) => (named.delete(key), Promise.reject(e))));
+  return named.get(key)!;
 }
 
 // YouTube serves fragmented (DASH) MP4, which WebKit can't play from a plain src, so feed it via MSE.

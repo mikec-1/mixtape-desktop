@@ -3,11 +3,11 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import { art, fetchAudio, playAudio, radio, type Album, type Quality, type Track } from "./yt";
+import { art, fetchAudio, playAudio, radio, type Album, type Artist, type Quality, type Track } from "./yt";
 
 type Root = "home" | "search" | "library" | "settings";
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
-export type View = { name: Root } | { name: "artist" | "collection" | "playlist"; id: string };
+export type View = { name: Root | "history" } | { name: "artist" | "collection" | "playlist" | "folder"; id: string };
 
 type State = {
   stack: View[];
@@ -41,7 +41,14 @@ export const useStore = create<State>()(
 );
 const { setState: set, getState: get } = useStore;
 
-export const open = (view: View) => set((s) => ({ stack: [...s.stack, view], ahead: [], sheet: undefined }));
+export const open = (view: View) => {
+  const key = viewKey(view);
+  if (key) touch(key); // opening something counts as using it, for the Library's Recents order
+  set((s) => ({ stack: [...s.stack, view], ahead: [], sheet: undefined }));
+};
+// The library key of a page's subject (libraryKey), if it can be in your library.
+export const viewKey = (v: View) =>
+  !("id" in v) ? undefined : v.name === "collection" ? libraryKey("album", v.id) : v.id === "liked" ? libraryKey("liked") : libraryKey(v.name, v.id);
 export const back = () => set((s) => (s.stack.length > 1 ? { stack: s.stack.slice(0, -1), ahead: [s.stack.at(-1)!, ...s.ahead] } : s));
 export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, s.ahead[0]], ahead: s.ahead.slice(1) } : s));
 export const go = (name: Root) => set({ stack: [{ name }], ahead: [], sheet: undefined });
@@ -51,15 +58,20 @@ export const report = (e: unknown) => set({ error: e instanceof Error ? e.messag
 
 // Your library, in IndexedDB: no 5 MB cap like localStorage, and the same code runs in the web build.
 // ponytail: the whole library is rewritten on every change; per-row SQLite if imports reach ~100k tracks.
+// plays is the listening history, one row a play (keys count up, so newest last), appended without
+// rewriting the rest.
 const db = new Promise<IDBDatabase>((ok, fail) => {
-  const r = indexedDB.open("sleeve", 1);
-  r.onupgradeneeded = () => r.result.createObjectStore("kv");
+  const r = indexedDB.open("sleeve", 2);
+  r.onupgradeneeded = () => {
+    if (!r.result.objectStoreNames.contains("kv")) r.result.createObjectStore("kv");
+    if (!r.result.objectStoreNames.contains("plays")) r.result.createObjectStore("plays", { autoIncrement: true });
+  };
   r.onsuccess = () => ok(r.result);
   r.onerror = () => fail(r.error);
 });
-const kv = <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>) =>
+const kv = <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>, store = "kv") =>
   db.then((d) => new Promise<T>((ok, fail) => {
-    const r = fn(d.transaction("kv", mode).objectStore("kv"));
+    const r = fn(d.transaction(store, mode).objectStore(store));
     r.onsuccess = () => ok(r.result);
     r.onerror = () => fail(r.error);
   }));
@@ -73,11 +85,17 @@ export const idb: StateStorage = {
   removeItem: (k) => kv("readwrite", (s) => s.delete(k)).then(() => {}),
 };
 
-export type Playlist = { id: string; name: string; tracks: Track[] };
-type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[] };
-export const useLibrary = create<Library>()(
-  persist((): Library => ({ liked: [], saved: [], playlists: [] }), { name: "library", storage: createJSONStorage(() => idb) }),
-);
+// about, cover (a data URL, the image you picked) and sort (how its page lists the songs) are yours to
+// set; folder is the folder it's in.
+export type Playlist = { id: string; name: string; tracks: Track[]; about?: string; cover?: string; folder?: string; sort?: TrackSort; at?: number };
+export type TrackSort = "custom" | "title" | "artist" | "album" | "added" | "duration";
+export type Folder = { id: string; name: string; at?: number };
+export type Followed = { id: string; name: string; thumb?: string; at?: number };
+// pinned holds library keys (libraryKey), newest pin first. hidden songs and blocked artists are
+// skipped wherever a queue moves on by itself, and left out of radio.
+export type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[]; followed: Followed[]; folders: Folder[]; pinned: string[]; hidden: Track[]; blocked: Artist[] };
+const empty = (): Library => ({ liked: [], saved: [], playlists: [], followed: [], folders: [], pinned: [], hidden: [], blocked: [] });
+export const useLibrary = create<Library>()(persist(empty, { name: "library", storage: createJSONStorage(() => idb) }));
 const lib = useLibrary.setState;
 let toasts = 0;
 export const notify = (t: Omit<Toast, "id">) => set({ toast: { ...t, id: ++toasts } });
@@ -93,33 +111,137 @@ function change(text: string, about: { title?: string; thumb?: string } | undefi
 }
 
 const has = (list: { id: string }[], id: string) => list.some((x) => x.id === id);
-const toggleIn = <T extends { id: string }>(list: T[], x: T) => (has(list, x.id) ? list.filter((y) => y.id !== x.id) : [x, ...list]);
+const toggleIn = <T extends { id: string }>(list: T[], x: T) => (has(list, x.id) ? list.filter((y) => y.id !== x.id) : [{ ...x, at: Date.now() }, ...list]);
 const playlist = (id: string) => useLibrary.getState().playlists.find((p) => p.id === id);
 const edit = (id: string, fn: (p: Playlist) => Partial<Playlist>) => (s: Library) => ({ playlists: s.playlists.map((p) => (p.id === id ? { ...p, ...fn(p) } : p)) });
+// A song as a list keeps it: without what only the queue cares about.
+const entry = ({ rec: _, ...t }: Track): Track => ({ ...t, at: Date.now() });
 
 export const toggleLike = (t: Track) =>
-  change(has(useLibrary.getState().liked, t.id) ? "Removed from Liked Songs" : "Added to Liked Songs", t, (s) => ({ liked: toggleIn(s.liked, t) }));
+  change(has(useLibrary.getState().liked, t.id) ? "Removed from Liked Songs" : "Added to Liked Songs", t, (s) => ({ liked: toggleIn(s.liked, entry(t)) }));
 export const toggleSave = (a: Album) =>
   change(has(useLibrary.getState().saved, a.id) ? "Removed from Library" : "Saved to Library", a, (s) => ({ saved: toggleIn(s.saved, a) }));
+export const toggleFollow = (a: Followed) =>
+  change(has(useLibrary.getState().followed, a.id) ? "Unfollowed" : "Following", { title: a.name, thumb: a.thumb }, (s) => ({ followed: toggleIn(s.followed, a) }));
 export const addToPlaylist = (id: string, tracks: Track[]) =>
-  change(`Added to ${playlist(id)?.name}`, tracks[0], edit(id, (p) => ({ tracks: [...p.tracks, ...tracks] })));
+  change(`Added to ${playlist(id)?.name}`, tracks[0], edit(id, (p) => ({ tracks: [...p.tracks, ...tracks.map(entry)] })));
 export const removeFromPlaylist = (id: string, index: number) =>
   change(`Removed from ${playlist(id)?.name}`, playlist(id)?.tracks[index], edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => i !== index) })));
+export const movePlaylistTrack = (id: string, from: number, to: number) =>
+  lib(edit(id, (p) => {
+    const tracks = [...p.tracks];
+    tracks.splice(to, 0, ...tracks.splice(from, 1));
+    return { tracks };
+  }));
 export const renamePlaylist = (id: string, name: string) => lib(edit(id, () => ({ name })));
+export const describePlaylist = (id: string, about: string) => lib(edit(id, () => ({ about })));
+export const sortPlaylist = (id: string, sort: TrackSort) => lib(edit(id, () => ({ sort })));
+export const setCover = (id: string, cover?: string) => change(cover ? "Cover Changed" : "Cover Removed", { title: playlist(id)?.name, thumb: cover }, edit(id, () => ({ cover })));
 export function deletePlaylist(id: string) {
   const p = playlist(id);
-  if (p) change("Playlist Deleted", { title: p.name, thumb: p.tracks[0]?.thumb }, (s) => ({ playlists: s.playlists.filter((x) => x.id !== id) }));
+  if (p) change("Playlist Deleted", { title: p.name, thumb: p.cover ?? p.tracks[0]?.thumb }, (s) => ({ playlists: s.playlists.filter((x) => x.id !== id), pinned: s.pinned.filter((k) => k !== libraryKey("playlist", id)) }));
 }
-// Replaces the whole library from an export file; Undo brings the old one back.
-export const restoreLibrary = (l: Library) =>
-  change("Library Restored", { title: `${plural(l.liked.length, "liked song")}, ${plural(l.playlists.length, "playlist")}, ${plural(l.saved.length, "album")}` }, () => l);
-export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+// Its copy goes straight after it, in the same folder.
+export function duplicatePlaylist(id: string) {
+  const p = playlist(id);
+  if (!p) return;
+  const copy = { ...p, id: crypto.randomUUID(), name: `${p.name} Copy`, at: Date.now() };
+  change("Playlist Duplicated", { title: copy.name, thumb: p.cover ?? p.tracks[0]?.thumb }, (s) => {
+    const at = s.playlists.findIndex((x) => x.id === id);
+    return { playlists: [...s.playlists.slice(0, at + 1), copy, ...s.playlists.slice(at + 1)] };
+  });
+  return copy.id;
+}
 // An empty one opens straight onto its page, which says enough; one made from a song gets a toast.
-export function newPlaylist(tracks: Track[] = []) {
-  const p = { id: crypto.randomUUID(), name: `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks };
+export function newPlaylist(tracks: Track[] = [], folder?: string) {
+  const p: Playlist = { id: crypto.randomUUID(), name: `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks: tracks.map(entry), at: Date.now(), ...(folder && { folder }) };
   if (tracks.length) change(`Added to ${p.name}`, tracks[0], (s) => ({ playlists: [...s.playlists, p] }), false);
   else lib((s) => ({ playlists: [...s.playlists, p] }));
   return p.id;
+}
+
+// Folders hold playlists (one level, as in Spotify's sidebar). Deleting one keeps its playlists.
+export function newFolder(playlists: string[] = []) {
+  const f = { id: crypto.randomUUID(), name: `Folder ${useLibrary.getState().folders.length + 1}`, at: Date.now() };
+  lib((s) => ({ folders: [...s.folders, f], playlists: s.playlists.map((p) => (playlists.includes(p.id) ? { ...p, folder: f.id } : p)) }));
+  return f.id;
+}
+export const renameFolder = (id: string, name: string) => lib((s) => ({ folders: s.folders.map((f) => (f.id === id ? { ...f, name } : f)) }));
+export function deleteFolder(id: string) {
+  const f = useLibrary.getState().folders.find((x) => x.id === id);
+  if (f) change("Folder Deleted", { title: f.name }, (s) => ({ folders: s.folders.filter((x) => x.id !== id), playlists: s.playlists.map((p) => (p.folder === id ? { ...p, folder: undefined } : p)), pinned: s.pinned.filter((k) => k !== libraryKey("folder", id)) }));
+}
+export function moveToFolder(id: string, folder?: string) {
+  const name = folder ? useLibrary.getState().folders.find((f) => f.id === folder)?.name : undefined;
+  change(name ? `Moved to ${name}` : "Moved out of Folder", { title: playlist(id)?.name, thumb: playlist(id)?.cover ?? playlist(id)?.tracks[0]?.thumb }, edit(id, () => ({ folder })));
+}
+
+// What the Library page lists, by kind and id: "liked" and "local" are one of a kind.
+export type LibraryKind = "liked" | "local" | "playlist" | "folder" | "album" | "artist";
+export const libraryKey = (kind: LibraryKind, id = "") => (id ? `${kind}:${id}` : kind);
+export const togglePin = (key: string) => lib((s) => ({ pinned: s.pinned.includes(key) ? s.pinned.filter((k) => k !== key) : [key, ...s.pinned] }));
+
+// Hiding a song, or every song by an artist. They stay where they are, dimmed, and play when you pick
+// them yourself; a queue moving on by itself passes over them.
+export const toggleHide = (t: Track) =>
+  change(has(useLibrary.getState().hidden, t.id) ? "Song Unhidden" : "Song Hidden", t, (s) => ({ hidden: toggleIn(s.hidden, entry(t)) }));
+const artistKey = (a: Artist) => a.id ?? a.name.toLowerCase();
+export function toggleBlock(a: Artist) {
+  const on = useLibrary.getState().blocked.some((b) => artistKey(b) === artistKey(a));
+  change(on ? `You’ll hear ${a.name} again` : `You won’t hear ${a.name}`, { title: on ? undefined : "Their songs are skipped and left out of radio" }, (s) => ({
+    blocked: on ? s.blocked.filter((b) => artistKey(b) !== artistKey(a)) : [{ id: a.id, name: a.name }, ...s.blocked],
+  }));
+}
+let off: { hidden: Track[]; blocked: Artist[]; ids: Set<string>; artists: Set<string> } | undefined;
+export function skipped(t: Track) {
+  const { hidden, blocked } = useLibrary.getState();
+  if (off?.hidden !== hidden || off.blocked !== blocked)
+    off = { hidden, blocked, ids: new Set(hidden.map((x) => x.id)), artists: new Set(blocked.flatMap((b) => [b.name.toLowerCase(), ...(b.id ? [b.id] : [])])) };
+  return off.ids.has(t.id) || t.artists.some((a) => off!.artists.has(a.name.toLowerCase()) || (!!a.id && off!.artists.has(a.id)));
+}
+
+// Replaces the whole library from an export file; Undo brings the old one back.
+export const restoreLibrary = (l: Partial<Library> & Pick<Library, "liked" | "saved" | "playlists">) =>
+  change("Library Restored", { title: `${plural(l.liked.length, "liked song")}, ${plural(l.playlists.length, "playlist")}, ${plural(l.saved.length, "album")}` }, () => ({ ...empty(), ...l }));
+export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// When each thing in your library was last opened or played from, for the Library's Recents order.
+export const useRecents = create<Record<string, number>>()(persist(() => ({}), { name: "recents", storage: createJSONStorage(() => idb) }));
+export const touch = (key: string) => useRecents.setState({ [key]: Date.now() });
+
+// Listening history. A play counts after 30 s of listening (all of a shorter song), as on Spotify. recent
+// is the last 50 songs, newest first, one entry each, read once at launch and kept up to date here.
+export type Play = { t: Track; at: number };
+export const useHistory = create<{ recent: Track[] }>()(() => ({ recent: [] }));
+const RECENT = 50;
+const remember = (t: Track, list: Track[]) => [t, ...list.filter((x) => x.id !== t.id)].slice(0, RECENT);
+void (async () => {
+  const seen: Track[] = [];
+  await plays((p) => (seen.length < RECENT && !seen.some((x) => x.id === p.t.id) && seen.push(p.t), seen.length < RECENT)).catch(() => {});
+  useHistory.setState((s) => ({ recent: [...s.recent, ...seen.filter((t) => !s.recent.some((x) => x.id === t.id))].slice(0, RECENT) }));
+})();
+function logPlay(t: Track) {
+  const { rec: _, at: __, ...track } = t;
+  void kv("readwrite", (s) => s.add({ t: track, at: Date.now() } satisfies Play), "plays").catch(() => {});
+  useHistory.setState((s) => ({ recent: remember(track, s.recent) }));
+}
+// Plays newest first, each handed to each until it returns false; before: a key to carry on from.
+export async function plays(each: (p: Play, key: number) => boolean, before?: number) {
+  const d = await db;
+  return new Promise<void>((ok, fail) => {
+    const r = d.transaction("plays").objectStore("plays").openCursor(before === undefined ? null : IDBKeyRange.upperBound(before, true), "prev");
+    r.onsuccess = () => {
+      const c = r.result;
+      if (c && each(c.value as Play, c.key as number)) c.continue();
+      else ok();
+    };
+    r.onerror = () => fail(r.error);
+  });
+}
+export function clearHistory() {
+  void kv("readwrite", (s) => s.clear(), "plays");
+  useHistory.setState({ recent: [] });
+  notify({ text: "History Cleared" });
 }
 
 const onlineChange = (cb: () => void) => (addEventListener("online", cb), addEventListener("offline", cb), () => (removeEventListener("online", cb), removeEventListener("offline", cb)));
@@ -188,9 +310,11 @@ const prefetch = () => {
   if (t) fetchCached(t.id).catch(() => {});
 };
 
-// Start playing a list (an album, a playlist, search results) from one of its tracks.
-export function play(queue: Track[], index: number) {
+// Start playing a list (an album, a playlist, search results) from one of its tracks. from: the library
+// key of what it's from, for the Library's Recents order. A song you pick plays even if it's hidden.
+export function play(queue: Track[], index: number, from?: string) {
   if (!queue[index]) return;
+  if (from) touch(from);
   const original = get().shuffle ? queue : undefined;
   if (original) (queue = [queue[index], ...shuffled(queue.filter((_, i) => i !== index))]), (index = 0);
   set({ queue, original, added: 0 });
@@ -198,10 +322,13 @@ export function play(queue: Track[], index: number) {
   if (get().shuffle === "smart") void recommend();
   return loading;
 }
-export function shufflePlay(tracks: Track[]) {
+export function shufflePlay(tracks: Track[], from?: string) {
+  const ok = tracks.flatMap((t, i) => (skipped(t) ? [] : [i]));
   set({ shuffle: true });
-  return play(tracks, Math.floor(Math.random() * tracks.length));
+  return play(tracks, ok.length ? ok[Math.floor(Math.random() * ok.length)] : 0, from);
 }
+// Where a list starts when you press its Play: its first song you haven't hidden.
+export const firstPlayable = (tracks: Track[]) => Math.max(0, tracks.findIndex((t) => !skipped(t)));
 // A song's radio: it plays now and its "watch next" mix fills Up Next.
 export function startRadio(t: Track) {
   play([t], 0);
@@ -211,13 +338,22 @@ export function startRadio(t: Track) {
 // An artist's or playlist's radio: the "watch next" mixes of a few of its songs, taken in turn.
 async function mix(seeds: Track[], skip = new Set<string>()) {
   const mixes = await Promise.all(seeds.map((t) => radio(t.id).catch(() => [])));
-  return mixes.flatMap((m) => m.map((t, i) => [i, t] as const)).sort((a, b) => a[0] - b[0]).flatMap(([, t]) => (skip.has(t.id) ? [] : (skip.add(t.id), [t])));
+  return mixes.flatMap((m) => m.map((t, i) => [i, t] as const)).sort((a, b) => a[0] - b[0]).flatMap(([, t]) => (skip.has(t.id) || skipped(t) ? [] : (skip.add(t.id), [t])));
 }
-export async function radioFrom(tracks: Track[]) {
-  const list = await mix(shuffled(tracks).slice(0, 3));
+export async function radioFrom(tracks: Track[], from?: string) {
+  const list = await mix(shuffled(tracks.filter((t) => !skipped(t))).slice(0, 3));
   if (!list.length) return report(new Error("No radio for this one"));
   set({ shuffle: false });
-  play(list, 0);
+  play(list, 0, from);
+}
+
+// The next song a queue moves on to by itself, passing over hidden songs and blocked artists: an index
+// into the queue, or queue.length when there's none. Repeat All goes round to the start.
+function nextIndex(from: number, wrap = get().repeat === "all") {
+  const { queue } = get();
+  for (let i = from + 1; i < queue.length; i++) if (!skipped(queue[i])) return i;
+  if (wrap) for (let i = 0; i <= from && i < queue.length; i++) if (!skipped(queue[i])) return i;
+  return queue.length;
 }
 
 let latest = 0;
@@ -240,7 +376,8 @@ async function load(index: number, start = 0, fade = 0) {
   emit();
   setMediaSession(track);
   setAccent(art(track.thumb, 64));
-  if (index === get().queue.length - 1 && get().repeat === "off") extend(track); // autoplay
+  listened(start);
+  if (nextIndex(index, false) === get().queue.length && get().repeat === "off") extend(track); // autoplay
   try {
     if (buffered) await audio.play();
     else {
@@ -285,7 +422,7 @@ async function preload(t: Track) {
 }
 on("timeupdate", () => {
   const { queue, index, repeat, sleep, loading } = get();
-  const t = queue[index + 1] ?? (repeat === "all" ? queue[0] : undefined);
+  const t = queue[nextIndex(index)];
   if (!t || loading || repeat === "one" || sleep === "track") return;
   const left = audio.duration - audio.currentTime;
   const fade = useSettings.getState().crossfade;
@@ -300,22 +437,37 @@ async function extend(seed: Track) {
   const { queue } = get();
   if (queue.at(-1)?.id !== seed.id) return; // you queued or played something else meanwhile
   const ids = new Set(queue.map((t) => t.id));
-  set({ queue: [...queue, ...more.filter((t) => !ids.has(t.id))] });
+  set({ queue: [...queue, ...more.filter((t) => !ids.has(t.id) && !skipped(t))] });
   prefetch();
 }
 
 export const jump = (index: number) => load(index);
-const advance = (fade = 0) => {
-  const { index, queue, repeat } = get();
-  return load(index + 1 < queue.length || repeat !== "all" ? index + 1 : 0, 0, fade);
-};
+const advance = (fade = 0) => load(nextIndex(get().index), 0, fade);
 export const next = () => advance();
-export const prev = () => (audio.currentTime > 3 || get().index < 1 ? (audio.currentTime = 0) : load(get().index - 1));
+export function prev() {
+  const { queue, index } = get();
+  let i = index - 1;
+  while (i >= 0 && skipped(queue[i])) i--;
+  return audio.currentTime > 3 || i < 0 ? (audio.currentTime = 0) : load(i);
+}
 on("ended", () => {
   const { sleep, repeat } = get();
   if (sleep === "track") return sleepIn();
-  if (repeat === "one") (audio.currentTime = 0), audio.play();
+  if (repeat === "one") (audio.currentTime = 0), listened(0), audio.play();
   else next();
+});
+
+// The listening history counts a play once it's been listened to for 30 s, or all of a shorter song
+// (playing time, so seeking past doesn't count). listened restarts the count for a song starting at.
+let heard = 0, was = 0, logged = false;
+const listened = (at: number) => ((heard = 0), (was = at), (logged = false));
+on("timeupdate", () => {
+  const step = audio.currentTime - was;
+  was = audio.currentTime;
+  if (logged || step <= 0 || step > 2) return;
+  heard += step;
+  const t = get().queue[get().index];
+  if (t && heard >= Math.min(30, (audio.duration || 31) - 1)) (logged = true), logPlay(t);
 });
 
 // Pausing mid-crossfade stops both tracks and leaves the new one at full level.
@@ -339,7 +491,7 @@ addEventListener("pagehide", save);
 async function recommend() {
   const { queue, index } = get();
   const seed = queue[index];
-  const recs = seed ? await mix([seed, ...shuffled(queue.slice(index + 1)).slice(0, 2)], new Set(queue.map((t) => t.id))) : [];
+  const recs = seed ? await mix([seed, ...shuffled(queue.slice(index + 1).filter((t) => !skipped(t))).slice(0, 2)], new Set(queue.map((t) => t.id))) : [];
   if (!recs.length) return notify({ text: "No recommendations for this queue" });
   const now = get();
   if (now.shuffle !== "smart" || now.queue[now.index]?.id !== seed?.id) return; // you moved on meanwhile
@@ -437,11 +589,15 @@ export const EQ_BANDS = [60, 150, 400, 1000, 2400, 15000];
 // crossfade is in seconds (0 is gapless); eq is dB per EQ_BANDS band. lyricsPeek is the line on the player bar;
 // lyricsWords estimates word timings for lyrics that only time lines; translateTo is a language code, "" for
 // the system's (lyrics.ts translateTarget). lyricsStill keeps the lyrics from moving: they don't follow the
-// system's Reduce Motion, so they look the same for everyone unless this is on.
+// system's Reduce Motion, so they look the same for everyone unless this is on. The Library page keeps
+// its view, order and filter; likedSort is how Liked Songs lists its songs (a playlist keeps its own).
+export type LibrarySort = "recents" | "added" | "name" | "creator";
+export type LibraryFilter = "playlists" | "albums" | "artists" | "songs";
 type Settings = {
   theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number;
   quality: Quality; normalize: boolean; crossfade: number; eq: number[];
   lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean;
+  libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort;
 };
 export const useSettings = create<Settings>()(
   persist(
@@ -449,6 +605,7 @@ export const useSettings = create<Settings>()(
       theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320,
       quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
       lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
+      libraryView: "grid", librarySort: "recents", likedSort: "custom",
     }),
     { name: "settings" },
   ),

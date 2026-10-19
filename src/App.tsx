@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
 import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { useExtras, useLine, useLyrics } from "./lyrics";
-import { Artist, Artists, CollectionPage, Dialogs, Home, Library, NowPlaying, PlaylistPage, popup, QueuePanel, Search, Settings, trackMenu } from "./views";
+import { Artist, Artists, CollectionPage, Dialogs, FolderPage, HistoryPage, Home, Library, NowPlaying, PlaylistPage, popup, QueuePanel, Search, Settings, trackMenu } from "./views";
 import { art, type Track } from "./yt";
 
 export default function App() {
@@ -44,8 +44,8 @@ export default function App() {
           {stack.map((view, i) => (
             <div key={i + view.name + ("id" in view ? view.id : "")} hidden={i !== stack.length - 1} className="absolute inset-0 overflow-x-hidden overflow-y-auto pb-10">
               {"id" in view ? (
-                view.name === "artist" ? <Artist id={view.id} /> : view.name === "playlist" ? <PlaylistPage id={view.id} /> : <CollectionPage id={view.id} />
-              ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : view.name === "settings" ? <Settings /> : <Library />}
+                view.name === "artist" ? <Artist id={view.id} /> : view.name === "playlist" ? <PlaylistPage id={view.id} /> : view.name === "folder" ? <FolderPage id={view.id} /> : <CollectionPage id={view.id} />
+              ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : view.name === "settings" ? <Settings /> : view.name === "history" ? <HistoryPage /> : <Library />}
             </div>
           ))}
           {stack.length > 1 && (

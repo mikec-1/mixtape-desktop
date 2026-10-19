@@ -17,8 +17,9 @@ const ytFetch: typeof globalThis.fetch = (input, init) => {
 const yt = Innertube.create({ fetch: ytFetch, retrieve_player: true });
 
 export type Artist = { id?: string; name: string };
-export type Track = { id: string; title: string; artists: Artist[]; album?: string; thumb?: string; duration?: string; rec?: true }; // rec: added by Smart Shuffle
-export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string };
+// rec: added by Smart Shuffle. at: when it was added to the list it's in (a playlist, Liked Songs).
+export type Track = { id: string; title: string; artists: Artist[]; album?: string; thumb?: string; duration?: string; rec?: true; at?: number };
+export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string; at?: number }; // at: when you saved it
 
 // YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at.
 export const art = (url: string | undefined, w: number, h = w) => url?.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, `=w${w}-h${h}-l90-rj`);

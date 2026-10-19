@@ -1,7 +1,12 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { AudioLines, CaseSensitive, Check, ChevronDown, Copy, Download, Ellipsis, GripVertical, Heart, ImageDown, Languages, Maximize2, Music, PencilLine, Play, Plus, Quote, Radio, Shuffle, Sparkle, Upload, X } from "lucide-react";
+import { ArrowUpDown, AudioLines, CaseSensitive, Check, ChevronDown, Copy, Download, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
-import { EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearQueue, deletePlaylist, enqueue, jump, moveInQueue, newPlaylist, notify, open, play, removeFromPlaylist, radioFrom, removeFromQueue, renamePlaylist, report, restoreLibrary, shufflePlay, startRadio, subscribeAudio, toggle, toggleLike, toggleSave, useLibrary, useOnline, useSettings, useStore, type Dialog } from "./store";
+import {
+  EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearHistory, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
+  movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover,
+  shufflePlay, skipped, sortPlaylist, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, useRecents, useSettings, useStore,
+  type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
+} from "./store";
 import { asText, estimateWords, groups, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { art, artist, collection, home, lastHome, search, type Album, type Track } from "./yt";
 import { version } from "../package.json";
@@ -113,7 +118,7 @@ export const popup = (items: MenuOptions["items"]) => Menu.new({ items }).then((
 
 // from: the row is in one of your playlists, or in the queue (an index into the whole queue).
 export function trackMenu(t: Track, from?: { playlist: string; index: number } | { queue: number }) {
-  const { liked, playlists } = useLibrary.getState();
+  const { liked, playlists, hidden } = useLibrary.getState();
   const by = t.artists.find((a) => a.id);
   const q = from && "queue" in from ? from.queue : -1;
   const { index, queue } = useStore.getState();
@@ -141,6 +146,7 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
       ],
     },
     ...(from && "playlist" in from ? [{ text: "Remove from This Playlist", action: () => removeFromPlaylist(from.playlist, from.index) }] : []),
+    { text: hidden.some((x) => x.id === t.id) ? "Unhide Song" : "Hide Song", action: () => toggleHide(t) },
     ...(by ? [{ item: "Separator" as const }, { text: `Go to ${by.name}`, action: () => open({ name: "artist", id: by.id! }) }] : []),
   ]);
 }
@@ -179,16 +185,16 @@ function Masthead({ cover, bg, fill = "bg-neutral-800", title, sub, meta, childr
 }
 
 const pill = "press flex h-10 items-center gap-2 rounded-full px-5 font-semibold";
-function PlayButtons({ tracks }: { tracks: Track[] }) {
+function PlayButtons({ tracks, from }: { tracks: Track[]; from?: string }) {
   return (
     <>
-      <button onClick={() => play(tracks, 0)} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
+      <button onClick={() => play(tracks, firstPlayable(tracks), from)} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
         <Play size={16} className="fill-current" /> Play
       </button>
-      <button onClick={() => shufflePlay(tracks)} disabled={!tracks.length} className={`${pill} bg-white/20 hover:bg-white/30 disabled:opacity-50`}>
+      <button onClick={() => shufflePlay(tracks, from)} disabled={!tracks.length} className={`${pill} bg-white/20 hover:bg-white/30 disabled:opacity-50`}>
         <Shuffle size={16} /> Shuffle
       </button>
-      <button onClick={() => radioFrom(tracks)} disabled={!tracks.length} aria-label="Radio" title="Radio" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30 disabled:opacity-50">
+      <button onClick={() => radioFrom(tracks, from)} disabled={!tracks.length} aria-label="Radio" title="Radio" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30 disabled:opacity-50">
         <Radio size={16} />
       </button>
     </>
@@ -201,37 +207,57 @@ const Skeleton = ({ className }: { className: string }) => (
   </div>
 );
 
-// YT Music's own start page, artwork first.
+// YT Music's own start page, artwork first, with what you played lately under its big card.
 export function Home() {
   return (
     <div className="animate-enter px-8 pt-14">
       <h1 className="text-display">Home</h1>
-      <Shelves />
+      <Shelves>
+        <RecentlyPlayed />
+      </Shelves>
     </div>
   );
 }
 
-function Shelves() {
+// Read from this Mac, so it's there at once, and offline.
+function RecentlyPlayed() {
+  const recent = useHistory((s) => s.recent);
+  if (!recent.length) return null;
+  return (
+    <Section title="Recently Played" action={<button onClick={() => open({ name: "history" })} className="press text-sm font-semibold text-muted hover:text-ink">History</button>}>
+      <TrackGrid tracks={recent.slice(0, 20)} />
+    </Section>
+  );
+}
+
+// children go under the big card, or above the page while it loads or if it can't.
+function Shelves({ children }: { children?: ReactNode }) {
   const online = useOnline();
   const [tries, setTries] = useState(0);
   const { data: fresh, error } = useAsync(home, [online, tries]);
   const data = fresh ?? lastHome;
   if (!data && error)
     return (
-      <div className="mt-6 flex items-center gap-4">
-        <p className="text-muted">Couldn’t load your start page. Search still works.</p>
-        <button onClick={() => setTries((n) => n + 1)} className="press h-9 rounded-full bg-ink/[0.07] px-4 text-sm font-semibold hover:bg-ink/[0.12]">
-          Try Again
-        </button>
-      </div>
+      <>
+        <div className="mt-6 flex items-center gap-4">
+          <p className="text-muted">Couldn’t load your start page. Search still works.</p>
+          <button onClick={() => setTries((n) => n + 1)} className="press h-9 rounded-full bg-ink/[0.07] px-4 text-sm font-semibold hover:bg-ink/[0.12]">
+            Try Again
+          </button>
+        </div>
+        {children}
+      </>
     );
   if (!data)
     return (
-      <div role="status" className="animate-pulse">
-        <span className="sr-only">Loading…</span>
-        <div className="mt-8 h-[clamp(260px,38vh,380px)] rounded-3xl bg-ink/[0.05]" />
-        <div className="mt-12 h-56 rounded-2xl bg-ink/[0.04]" />
-      </div>
+      <>
+        {children}
+        <div role="status" className="animate-pulse">
+          <span className="sr-only">Loading…</span>
+          <div className="mt-8 h-[clamp(260px,38vh,380px)] rounded-3xl bg-ink/[0.05]" />
+          <div className="mt-12 h-56 rounded-2xl bg-ink/[0.04]" />
+        </div>
+      </>
     );
 
   // The first album or playlist on the page gets the big card instead of a spot on its shelf.
@@ -254,6 +280,7 @@ function Shelves() {
           <img src={art(hero.thumb, 900)} alt="" className="pointer-events-none mr-8 aspect-square h-[78%] shrink-0 rounded-2xl object-cover shadow-2xl shadow-black/40 @4xl:mr-10" />
         </div>
       )}
+      {children}
       {data.map((shelf, i) => {
         const albums = shelf === heroShelf ? shelf.albums.slice(1) : shelf.albums;
         if (!shelf.tracks.length && !albums.length) return null;
@@ -274,7 +301,7 @@ export function CollectionPage({ id }: { id: string }) {
   const saved = useLibrary((s) => s.saved.some((a) => a.id === id));
   if (error) return <p className="px-8 pt-20 text-muted">Couldn’t open this. Go back and try again.</p>;
   if (!data) return <Skeleton className="h-[380px] bg-ink/[0.04]" />;
-  const isAlbum = id.startsWith("MPRE");
+  const album = isAlbum(id);
 
   return (
     <div className="animate-enter">
@@ -285,7 +312,7 @@ export function CollectionPage({ id }: { id: string }) {
         sub={data.by && <Artists list={[data.by]} />}
         meta={[data.kind, ...data.meta].filter(Boolean).join(" · ")}
       >
-        <PlayButtons tracks={data.tracks} />
+        <PlayButtons tracks={data.tracks} from={libraryKey("album", id)} />
         <button onClick={() => toggleSave({ id, title: data.title, by: data.by?.name, thumb: data.thumb })} aria-pressed={saved} className={`${pill} bg-white/20 px-4 hover:bg-white/30`}>
           {saved ? <Check size={16} strokeWidth={2.6} /> : <Plus size={16} strokeWidth={2.6} />} {saved ? "Saved" : "Save"}
         </button>
@@ -293,92 +320,282 @@ export function CollectionPage({ id }: { id: string }) {
       <div className="px-8">
         {data.about && <p className="mt-6 line-clamp-2 max-w-2xl text-[15px] leading-relaxed text-ink/65">{data.about}</p>}
         <div className="mt-6">
-          <TrackList tracks={data.tracks} numbered={isAlbum} plain={isAlbum} />
+          <TrackList tracks={data.tracks} numbered={album} plain={album} from={libraryKey("album", id)} />
         </div>
       </div>
     </div>
   );
 }
 
-// Liked Songs and the playlists you make.
+// Your library: Liked Songs, your playlists and folders, the albums and playlists you saved, the artists
+// you follow. Filter it by kind, search it, order it, see it as a grid or a list; pinned things stay on
+// top, and Liked Songs is always first (the big card, or the first item). Songs lists Liked Songs.
 export function Library() {
-  const { liked, saved, playlists } = useLibrary();
+  const library = useLibrary();
+  const recents = useRecents();
+  const { libraryView: view, librarySort: sort, libraryFilter: filter } = useSettings();
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLocaleLowerCase();
+  const hero = view === "grid" && !filter && !q;
+  const items = useMemo(() => libraryItems(library, recents, sort, filter, q).filter((i) => !(hero && i.kind === "liked")), [library, recents, sort, filter, q, hero]);
+  const songs = useMemo(() => (filter === "songs" ? sorted(library.liked, SONG_ORDER[sort]).filter((r) => !q || matches(r.t, q)) : []), [library.liked, filter, sort, q]);
+  const set = useSettings.setState;
+  const chip = (on: boolean) => `press h-8 rounded-full px-3.5 text-sm font-semibold transition-colors ${on ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`;
+
   return (
     <div className="animate-enter px-8 pt-14">
       <h1 className="text-display">Library</h1>
-      <div className={`group relative isolate mt-8 flex min-h-[clamp(230px,30vh,320px)] items-end overflow-hidden rounded-3xl p-8 text-white @4xl:p-10 ${LIKED}`}>
-        <button onClick={() => open({ name: "playlist", id: "liked" })} aria-label="Open Liked Songs" className="hit" />
-        <div className="pointer-events-none min-w-0 flex-1">
-          <Heart className="size-9 fill-white" strokeWidth={0} />
-          <h2 className="mt-4 text-[clamp(36px,6cqw,76px)] leading-[0.92] font-extrabold tracking-[-0.04em]">Liked Songs</h2>
-          <div className="mt-2 text-lg text-white/80">{liked.length ? count(liked.length) : "Tap the heart on any song."}</div>
-          {liked.length > 0 && (
-            <button onClick={() => play(liked, 0)} className={`${pill} pointer-events-auto mt-6 bg-white text-black hover:bg-white/85`}>
-              <Play size={16} className="fill-current" /> Play
+      {hero && <LikedHero liked={library.liked} />}
+      <div className="mt-8 flex flex-wrap items-center gap-2">
+        <div role="radiogroup" aria-label="Show" className="flex flex-wrap gap-2">
+          {FILTERS.map(([f, label]) => (
+            <button key={f} role="radio" aria-checked={filter === f} onClick={() => set({ libraryFilter: filter === f ? undefined : f })} className={chip(filter === f)}>
+              {label}
             </button>
-          )}
-        </div>
-        {/* The latest likes, stacked like sleeves pulled from a crate. */}
-        <div className="pointer-events-none absolute top-1/2 right-8 hidden -translate-y-1/2 @3xl:flex @4xl:right-10">
-          {liked.slice(0, 4).map((t, i) => (
-            <img
-              key={t.id}
-              src={art(t.thumb, 400)}
-              alt=""
-              style={{ zIndex: 4 - i, rotate: `${i * 4 - 3}deg` }}
-              className="-ml-24 size-[clamp(130px,18vh,190px)] rounded-xl object-cover shadow-2xl shadow-black/40 transition-[rotate] duration-300 ease-(--ease-out) first:ml-0 group-hover:rotate-0"
-            />
           ))}
+        </div>
+        <div className="ml-auto flex items-center gap-1">
+          <label className="flex h-8 w-44 items-center gap-2 rounded-full bg-ink/[0.07] px-3 focus-within:bg-ink/[0.1] @3xl:w-56">
+            <SearchIcon size={15} className="shrink-0 text-muted" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} placeholder="Search in Library" aria-label="Search in Library" name="library-q" autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" />
+          </label>
+          <button onClick={() => popup(LIBRARY_SORTS.map(([s, label]) => ({ text: filter === "songs" ? SONG_SORT_LABEL[s] : label, checked: sort === s, action: () => set({ librarySort: s }) })))} aria-label={`Order: ${LIBRARY_SORTS.find(([s]) => s === sort)?.[1]}`} title="Order" className={`${round2} w-auto gap-1.5 px-3 text-sm font-semibold`}>
+            <ArrowUpDown size={15} /> <span className="hidden @3xl:inline">{filter === "songs" ? SONG_SORT_LABEL[sort] : LIBRARY_SORTS.find(([s]) => s === sort)?.[1]}</span>
+          </button>
+          <button onClick={() => set({ libraryView: view === "grid" ? "list" : "grid" })} aria-label={view === "grid" ? "Show as List" : "Show as Grid"} title={view === "grid" ? "Show as List" : "Show as Grid"} className={round2}>
+            {view === "grid" ? <List size={17} /> : <LayoutGrid size={16} />}
+          </button>
+          <button onClick={() => open({ name: "history" })} aria-label="History" title="History" className={round2}>
+            <HistoryIcon size={17} />
+          </button>
+          <button onClick={() => popup([{ text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist() }) }, { text: "New Folder", action: () => open({ name: "folder", id: newFolder() }) }])} aria-label="New" title="New Playlist or Folder" className={round2}>
+            <Plus size={18} />
+          </button>
         </div>
       </div>
-
-      <Section title="Playlists">
-        <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
-          <button onClick={() => open({ name: "playlist", id: newPlaylist() })} className="press w-44 shrink-0 text-left">
-            <div className="grid aspect-square place-items-center rounded-xl border-2 border-dashed border-ink/15 text-muted transition-colors hover:border-ink/35 hover:text-ink">
-              <Plus size={32} strokeWidth={1.75} />
-            </div>
-            <div className="mt-2.5 font-semibold">New Playlist</div>
-          </button>
-          {[...playlists].reverse().map((p) => (
-            <button
-              key={p.id}
-              onClick={() => open({ name: "playlist", id: p.id })}
-              onContextMenu={(e) => (e.preventDefault(), popup([{ text: "Delete Playlist", action: () => deletePlaylist(p.id) }]))}
-              className="press w-44 shrink-0 text-left"
-            >
-              <div className="aspect-square overflow-hidden rounded-xl bg-ink/[0.06]">
-                <PlaylistCover id={p.id} tracks={p.tracks} />
-              </div>
-              <div className="mt-2.5 truncate font-semibold">{p.name}</div>
-              <div className="truncate text-sm text-muted">{count(p.tracks.length)}</div>
-            </button>
-          ))}
-        </div>
-      </Section>
-
-      <Section title="Albums & Playlists">
-        {saved.length ? <Albums items={saved} /> : <p className="text-muted">Save an album or playlist and it lands here.</p>}
-      </Section>
+      {filter === "songs" ? (
+        songs.length ? <div className="mt-2"><TrackList tracks={songs.map((r) => r.t)} from="liked" /></div> : <p className="mt-6 text-muted">{q ? "No liked songs match." : "Tap the heart on any song and it lands here."}</p>
+      ) : items.length ? (
+        <LibraryItems items={items} view={view} />
+      ) : (
+        <p className="mt-6 text-muted">{q ? "Nothing in your library matches." : filter === "artists" ? "Follow an artist and they land here." : filter === "albums" ? "Save an album and it lands here." : "Make a playlist with the + button, or save one."}</p>
+      )}
     </div>
   );
 }
 
-function PlaylistCover({ id, tracks }: { id: string; tracks: Track[] }) {
+const round2 = "press flex size-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.07] hover:text-ink";
+const FILTERS = [["playlists", "Playlists"], ["albums", "Albums"], ["artists", "Artists"], ["songs", "Songs"]] as const;
+const LIBRARY_SORTS = [["recents", "Recents"], ["added", "Recently Added"], ["name", "Alphabetical"], ["creator", "Creator"]] as const;
+// Songs order by the same setting, read for songs.
+const SONG_ORDER: Record<LibrarySort, TrackSort> = { recents: "custom", added: "custom", name: "title", creator: "artist" };
+const SONG_SORT_LABEL: Record<LibrarySort, string> = { recents: "Recently Added", added: "Recently Added", name: "Title", creator: "Artist" };
+const fold = (s = "") => s.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
+const matches = (t: Track, q: string) => fold([t.title, t.album, ...t.artists.map((a) => a.name)].join(" ")).includes(fold(q));
+
+// The big Liked Songs card, with the latest likes stacked like sleeves pulled from a crate.
+function LikedHero({ liked }: { liked: Track[] }) {
+  return (
+    <div className={`group relative isolate mt-8 flex min-h-[clamp(230px,30vh,320px)] items-end overflow-hidden rounded-3xl p-8 text-white @4xl:p-10 ${LIKED}`}>
+      <button onClick={() => open({ name: "playlist", id: "liked" })} aria-label="Open Liked Songs" className="hit" />
+      <div className="pointer-events-none min-w-0 flex-1">
+        <Heart className="size-9 fill-white" strokeWidth={0} />
+        <h2 className="mt-4 text-[clamp(36px,6cqw,76px)] leading-[0.92] font-extrabold tracking-[-0.04em]">Liked Songs</h2>
+        <div className="mt-2 text-lg text-white/80">{liked.length ? count(liked.length) : "Tap the heart on any song."}</div>
+        {liked.length > 0 && (
+          <button onClick={() => play(liked, firstPlayable(liked), "liked")} className={`${pill} pointer-events-auto mt-6 bg-white text-black hover:bg-white/85`}>
+            <Play size={16} className="fill-current" /> Play
+          </button>
+        )}
+      </div>
+      <div className="pointer-events-none absolute top-1/2 right-8 hidden -translate-y-1/2 @3xl:flex @4xl:right-10">
+        {liked.slice(0, 4).map((t, i) => (
+          <img
+            key={t.id}
+            src={art(t.thumb, 400)}
+            alt=""
+            style={{ zIndex: 4 - i, rotate: `${i * 4 - 3}deg` }}
+            className="-ml-24 size-[clamp(130px,18vh,190px)] rounded-xl object-cover shadow-2xl shadow-black/40 transition-[rotate] duration-300 ease-(--ease-out) first:ml-0 group-hover:rotate-0"
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// One thing in the library, as the Library page and a folder's page show it.
+type Item = { key: string; kind: LibraryKind; id: string; title: string; sub: string; at: number; creator: string; folder?: string };
+const isAlbum = (id: string) => id.startsWith("MPRE");
+
+// What the Library shows for a filter and search, pinned first (Liked Songs before all), then in order.
+// Searching looks inside folders too. at: when it was added; things saved before Sleeve kept the time
+// keep their old order.
+function libraryItems(l: LibraryData, recents: Record<string, number>, sort: LibrarySort, filter: LibraryFilter | undefined, q: string): Item[] {
+  const folders = new Set(l.folders.map((f) => f.id));
+  const all: Item[] = [
+    { key: "liked", kind: "liked", id: "liked", title: "Liked Songs", sub: `Playlist · ${count(l.liked.length)}`, at: Infinity, creator: "" },
+    ...l.folders.map((f, i) => ({ key: libraryKey("folder", f.id), kind: "folder" as const, id: f.id, title: f.name, sub: `Folder · ${plural(l.playlists.filter((p) => p.folder === f.id).length, "playlist")}`, at: f.at ?? i, creator: "" })),
+    ...l.playlists.map((p, i) => ({ key: libraryKey("playlist", p.id), kind: "playlist" as const, id: p.id, title: p.name, sub: `Playlist · ${count(p.tracks.length)}`, at: p.at ?? i, creator: "", folder: p.folder && folders.has(p.folder) ? p.folder : undefined })),
+    ...l.saved.map((a, i) => ({ key: libraryKey("album", a.id), kind: "album" as const, id: a.id, title: a.title, sub: `${isAlbum(a.id) ? "Album" : "Playlist"}${a.by ? ` · ${a.by}` : ""}`, at: a.at ?? -i, creator: a.by ?? "" })),
+    ...l.followed.map((a, i) => ({ key: libraryKey("artist", a.id), kind: "artist" as const, id: a.id, title: a.name, sub: "Artist", at: a.at ?? -i, creator: a.name })),
+  ];
+  const kinds: Record<LibraryFilter, (i: Item) => boolean> = {
+    playlists: (i) => i.kind === "liked" || i.kind === "folder" || i.kind === "playlist" || (i.kind === "album" && !isAlbum(i.id)),
+    albums: (i) => i.kind === "album" && isAlbum(i.id),
+    artists: (i) => i.kind === "artist",
+    songs: () => false,
+  };
+  const order: Record<LibrarySort, (a: Item, b: Item) => number> = {
+    recents: (a, b) => Math.max(recents[b.key] ?? 0, b.at) - Math.max(recents[a.key] ?? 0, a.at),
+    added: (a, b) => b.at - a.at,
+    name: (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+    creator: (a, b) => a.creator.localeCompare(b.creator, undefined, { sensitivity: "base" }) || a.title.localeCompare(b.title),
+  };
+  const pin = (i: Item) => (i.kind === "liked" ? -1 : l.pinned.indexOf(i.key) + 1 || Infinity);
+  return all
+    .filter((i) => (q ? fold(`${i.title} ${i.sub}`).includes(fold(q)) : !i.folder) && (!filter || kinds[filter](i)))
+    .sort((a, b) => pin(a) - pin(b) || order[sort](a, b));
+}
+
+// Items as a grid of covers or a list of rows. Playlists drag onto folders.
+function LibraryItems({ items, view }: { items: Item[]; view: "grid" | "list" }) {
+  const pinned = useLibrary((s) => s.pinned);
+  const [over, setOver] = useState<string>();
+  return (
+    <ul className={view === "grid" ? "mt-4 grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-6" : "mt-2"}>
+      {items.map((item) => {
+        const drop = item.kind === "folder";
+        return (
+          <li
+            key={item.key}
+            draggable={item.kind === "playlist"}
+            onDragStart={(e) => (e.dataTransfer.setData("sleeve/playlist", item.id), (e.dataTransfer.effectAllowed = "move"))}
+            onDragOver={(e) => drop && e.dataTransfer.types.includes("sleeve/playlist") && (e.preventDefault(), setOver(item.key))}
+            onDragLeave={() => setOver(undefined)}
+            onDrop={(e) => (setOver(undefined), drop && moveToFolder(e.dataTransfer.getData("sleeve/playlist"), item.id))}
+            onContextMenu={(e) => (e.preventDefault(), itemMenu(item))}
+            className={`group relative rounded-xl transition-[background-color,box-shadow] ${view === "list" ? "flex items-center gap-3 p-2 hover:bg-ink/[0.04]" : ""} ${over === item.key ? "bg-accent/15 shadow-[0_0_0_2px_var(--color-accent)]" : ""}`}
+          >
+            <button onClick={() => open(itemView(item))} aria-label={`Open ${item.title}`} className="hit" />
+            <div className={`pointer-events-none relative shrink-0 overflow-hidden bg-ink/[0.06] ${item.kind === "artist" ? "rounded-full" : view === "grid" ? "rounded-xl" : "rounded-lg"} ${view === "grid" ? "aspect-square w-full shadow-sm" : "size-12"}`}>
+              <ItemCover item={item} />
+            </div>
+            <div className={`pointer-events-none min-w-0 ${view === "grid" ? "mt-2.5" : "flex-1"}`}>
+              <div className="truncate font-semibold">{item.title}</div>
+              <div className="flex items-center gap-1 truncate text-sm text-muted">
+                {(item.kind === "liked" || pinned.includes(item.key)) && <Pin size={13} aria-label="Pinned" className="shrink-0 fill-accent text-accent" />}
+                {item.sub}
+              </div>
+            </div>
+            {item.kind !== "folder" && (
+              <button
+                onClick={() => void itemTracks(item).then((t) => (t.length ? play(t, firstPlayable(t), item.key) : notify({ text: "Nothing to Play", detail: item.title })), report)}
+                aria-label={`Play ${item.title}`}
+                className={`grid place-items-center rounded-full bg-accent text-paper shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:opacity-100 focus-visible:opacity-100 active:scale-95 ${
+                  view === "grid" ? "absolute right-2 bottom-[62px] size-11 translate-y-1 opacity-0 group-hover:translate-y-0" : "relative size-9 shrink-0 opacity-0"
+                }`}
+              >
+                <Play size={view === "grid" ? 18 : 15} className="ml-0.5 fill-current" />
+              </button>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const itemView = (i: Item): View => (i.kind === "liked" ? { name: "playlist", id: "liked" } : i.kind === "album" ? { name: "collection", id: i.id } : i.kind === "local" ? { name: "playlist", id: "local" } : { name: i.kind, id: i.id });
+
+// An item's songs, to play from its card: your own lists at once, the rest from YouTube Music.
+async function itemTracks(i: Item): Promise<Track[]> {
+  const l = useLibrary.getState();
+  if (i.kind === "liked") return l.liked;
+  if (i.kind === "playlist") return l.playlists.find((p) => p.id === i.id)?.tracks ?? [];
+  if (i.kind === "folder") return l.playlists.filter((p) => p.folder === i.id).flatMap((p) => p.tracks);
+  if (i.kind === "artist") return (await artist(i.id)).songs;
+  return (await collection(i.id)).tracks;
+}
+
+function ItemCover({ item }: { item: Item }) {
+  const l = useLibrary();
+  if (item.kind === "liked") return <PlaylistCover id="liked" tracks={[]} />;
+  if (item.kind === "playlist") {
+    const p = l.playlists.find((x) => x.id === item.id);
+    return <PlaylistCover id={item.id} tracks={p?.tracks ?? []} cover={p?.cover} />;
+  }
+  if (item.kind === "folder") return <FolderCover id={item.id} />;
+  if (item.kind === "artist") {
+    const thumb = l.followed.find((a) => a.id === item.id)?.thumb;
+    return thumb ? <img src={artistArt(thumb)} alt="" loading="lazy" className="size-full object-cover object-[50%_25%]" /> : <div className={`size-full ${tint(item.id)}`} />;
+  }
+  return <img src={art(l.saved.find((a) => a.id === item.id)?.thumb, 400)} alt="" loading="lazy" className="size-full object-cover" />;
+}
+// An artist's picture is their page's banner: asked for wide, so a circle cut from it stays sharp.
+const artistArt = (u: string) => art(u, 640, 267);
+
+// A folder's cover: its first four playlists' covers, or a folder on its own colour.
+function FolderCover({ id }: { id: string }) {
+  const inside = useLibrary((s) => s.playlists).filter((p) => p.folder === id).slice(0, 4);
+  if (inside.length === 4)
+    return (
+      <div className="grid size-full grid-cols-2">
+        {inside.map((p) => <PlaylistCover key={p.id} id={p.id} tracks={p.tracks} cover={p.cover} small />)}
+      </div>
+    );
+  return (
+    <div className={`grid size-full place-items-center text-white/85 ${tint(id)}`}>
+      <FolderIcon className="size-1/3" strokeWidth={1.5} />
+    </div>
+  );
+}
+
+// Right-click on a library item.
+function itemMenu(i: Item) {
+  const l = useLibrary.getState();
+  const pinned = l.pinned.includes(i.key);
+  const folder = l.playlists.find((p) => p.id === i.id)?.folder;
+  popup([
+    ...(i.kind !== "folder" ? [{ text: "Play", action: () => void itemTracks(i).then((t) => play(t, firstPlayable(t), i.key), report) }] : []),
+    ...(i.kind !== "liked" ? [{ text: pinned ? "Unpin" : "Pin to Top", action: () => togglePin(i.key) }] : []),
+    { item: "Separator" as const },
+    ...(i.kind === "playlist"
+      ? [
+          {
+            text: "Move to Folder",
+            items: [
+              { text: "New Folder", action: () => void newFolder([i.id]) },
+              ...(l.folders.length ? [{ item: "Separator" as const }] : []),
+              ...l.folders.map((f) => ({ text: f.name, checked: folder === f.id, action: () => moveToFolder(i.id, f.id) })),
+              ...(folder ? [{ item: "Separator" as const }, { text: "Remove from Folder", action: () => moveToFolder(i.id) }] : []),
+            ],
+          },
+          { text: "Duplicate", action: () => void duplicatePlaylist(i.id) },
+          { text: "Delete Playlist", action: () => deletePlaylist(i.id) },
+        ]
+      : []),
+    ...(i.kind === "folder" ? [{ text: "Delete Folder", action: () => deleteFolder(i.id) }] : []),
+    ...(i.kind === "album" ? [{ text: "Remove from Library", action: () => toggleSave({ id: i.id, title: i.title }) }] : []),
+    ...(i.kind === "artist" ? [{ text: "Unfollow", action: () => toggleFollow({ id: i.id, name: i.title }) }] : []),
+  ]);
+}
+
+function PlaylistCover({ id, tracks, cover, small }: { id: string; tracks: Track[]; cover?: string; small?: boolean }) {
   if (id === "liked")
     return (
       <div className={`grid size-full place-items-center ${LIKED}`}>
         <Heart className="size-[36%] fill-white text-white" strokeWidth={0} />
       </div>
     );
-  const thumbs = [...new Set(tracks.map((t) => t.thumb).filter(Boolean))].slice(0, 4);
+  if (cover) return <img src={cover} alt="" className="size-full object-cover" />;
+  const thumbs = [...new Set(tracks.map((t) => t.thumb).filter(Boolean))].slice(0, small ? 1 : 4);
   if (thumbs.length === 4)
     return (
       <div className="grid size-full grid-cols-2">
         {thumbs.map((src) => <img key={src} src={art(src, 300)} alt="" className="size-full object-cover" />)}
       </div>
     );
-  if (thumbs[0]) return <img src={art(thumbs[0], 600)} alt="" className="size-full object-cover" />;
+  if (thumbs[0]) return <img src={art(thumbs[0], small ? 300 : 600)} alt="" className="size-full object-cover" />;
   return (
     <div className={`grid size-full place-items-center text-white/85 ${tint(id)}`}>
       <Music className="size-1/3" strokeWidth={1.5} />
@@ -386,17 +603,87 @@ function PlaylistCover({ id, tracks }: { id: string; tracks: Track[] }) {
   );
 }
 
+// How a list of songs can be ordered. Custom is the list's own order (for Liked Songs, newest first).
+const secs = (d?: string) => d?.split(":").reduce((s, n) => s * 60 + +n, 0) ?? 0;
+const byText = (f: (t: Track) => string | undefined) => (a: Track, b: Track) => (f(a) ?? "").localeCompare(f(b) ?? "", undefined, { sensitivity: "base" });
+const TRACK_SORTS: Record<TrackSort, { label: string; cmp?: (a: Track, b: Track) => number }> = {
+  custom: { label: "Custom Order" },
+  added: { label: "Date Added", cmp: (a, b) => (b.at ?? 0) - (a.at ?? 0) },
+  title: { label: "Title", cmp: byText((t) => t.title) },
+  artist: { label: "Artist", cmp: byText((t) => t.artists[0]?.name) },
+  album: { label: "Album", cmp: byText((t) => t.album) },
+  duration: { label: "Duration", cmp: (a, b) => secs(a.duration) - secs(b.duration) },
+};
+// The songs in the order sort shows them, each with its place in the list it's kept in.
+function sorted(tracks: Track[], sort: TrackSort) {
+  const rows = tracks.map((t, i) => ({ t, i }));
+  const cmp = TRACK_SORTS[sort].cmp;
+  return cmp ? rows.sort((a, b) => cmp(a.t, b.t) || a.i - b.i) : rows;
+}
+
+function SortSelect({ value, onChange, liked }: { value: TrackSort; onChange: (s: TrackSort) => void; liked?: boolean }) {
+  return (
+    <div className="relative">
+      <select value={value} onChange={(e) => onChange(e.target.value as TrackSort)} aria-label="Order" className="press h-8 appearance-none rounded-full bg-ink/[0.07] pr-8 pl-3.5 text-sm font-semibold outline-none hover:bg-ink/[0.12] focus-visible:outline-2 focus-visible:outline-accent">
+        {(Object.keys(TRACK_SORTS) as TrackSort[]).filter((s) => !(liked && s === "added")).map((s) => (
+          <option key={s} value={s}>{liked && s === "custom" ? "Recently Added" : TRACK_SORTS[s].label}</option>
+        ))}
+      </select>
+      <ChevronDown size={15} aria-hidden className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-muted" />
+    </div>
+  );
+}
+
+// Liked Songs, or one of your playlists: rename it, describe it, give it your own cover, order it, drag
+// its songs about (in Custom Order), duplicate it, file it in a folder.
 export function PlaylistPage({ id }: { id: string }) {
   const liked = useLibrary((s) => s.liked);
   const playlist = useLibrary((s) => s.playlists.find((p) => p.id === id));
-  if (id !== "liked" && !playlist) return <p className="px-8 pt-20 text-muted">This playlist was deleted.</p>;
+  const likedSort = useSettings((s) => s.likedSort);
+  const pinned = useLibrary((s) => s.pinned.includes(libraryKey("playlist", id)));
+  const folder = useLibrary((s) => s.folders.find((f) => f.id === playlist?.folder));
+  const file = useRef<HTMLInputElement>(null);
   const tracks = playlist?.tracks ?? liked;
+  const sort = (playlist ? playlist.sort : likedSort) ?? "custom";
+  const rows = useMemo(() => sorted(tracks, sort), [tracks, sort]);
+  if (id !== "liked" && !playlist) return <p className="px-8 pt-20 text-muted">This playlist was deleted.</p>;
+  const from = playlist ? libraryKey("playlist", id) : "liked";
+  const shown = rows.map((r) => r.t);
+  const more = () =>
+    popup([
+      { text: pinned ? "Unpin" : "Pin to Top", action: () => togglePin(from) },
+      { text: "Choose Cover Image…", action: () => file.current?.click() },
+      ...(playlist?.cover ? [{ text: "Remove Cover Image", action: () => setCover(id) }] : []),
+      { item: "Separator" as const },
+      {
+        text: "Move to Folder",
+        items: [
+          { text: "New Folder", action: () => void newFolder([id]) },
+          ...useLibrary.getState().folders.map((f) => ({ text: f.name, checked: playlist?.folder === f.id, action: () => moveToFolder(id, f.id) })),
+          ...(playlist?.folder ? [{ item: "Separator" as const }, { text: "Remove from Folder", action: () => moveToFolder(id) }] : []),
+        ],
+      },
+      { text: "Duplicate", action: () => open({ name: "playlist", id: duplicatePlaylist(id)! }) },
+      { item: "Separator" as const },
+      { text: "Delete Playlist", action: () => (back(), deletePlaylist(id)) },
+    ]);
 
   return (
     <div className="animate-enter">
       <Masthead
-        cover={<PlaylistCover id={id} tracks={tracks} />}
-        bg={playlist && tracks[0]?.thumb}
+        cover={
+          playlist ? (
+            <button onClick={() => file.current?.click()} aria-label="Choose Cover Image" title="Choose Cover Image" className="group/cover relative block size-full">
+              <PlaylistCover id={id} tracks={tracks} cover={playlist.cover} />
+              <span className="absolute inset-0 grid place-items-center bg-black/45 text-white opacity-0 transition-opacity group-hover/cover:opacity-100 group-focus-visible/cover:opacity-100">
+                <ImagePlus size={36} strokeWidth={1.5} />
+              </span>
+            </button>
+          ) : (
+            <PlaylistCover id={id} tracks={tracks} />
+          )
+        }
+        bg={playlist && (playlist.cover ?? tracks[0]?.thumb)}
         fill={playlist ? tint(id) : LIKED}
         title={
           playlist ? (
@@ -416,24 +703,35 @@ export function PlaylistPage({ id }: { id: string }) {
             <h1 className={TITLE}>Liked Songs</h1>
           )
         }
-        meta={`${playlist ? "Playlist" : "Library"} · ${count(tracks.length)}`}
+        sub={
+          playlist && (
+            <input
+              value={playlist.about ?? ""}
+              onChange={(e) => describePlaylist(id, e.target.value)}
+              placeholder="Add a description"
+              aria-label="Description"
+              name="playlist-about"
+              autoComplete="off"
+              className="w-full bg-transparent text-base font-medium text-white/85 caret-white outline-none placeholder:text-white/50"
+            />
+          )
+        }
+        meta={[folder?.name ?? (playlist ? "Playlist" : "Library"), count(tracks.length)].join(" · ")}
       >
-        <PlayButtons tracks={tracks} />
-        {playlist && (
-          <button
-            onClick={() => popup([{ text: "Delete Playlist", action: () => (back(), deletePlaylist(id)) }])}
-            aria-label="More"
-            title="More"
-            aria-haspopup="menu"
-            className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30"
-          >
-            <Ellipsis size={20} />
-          </button>
-        )}
+        <PlayButtons tracks={shown} from={from} />
+        <button onClick={more} aria-label="More" title="More" aria-haspopup="menu" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
+          <Ellipsis size={20} />
+        </button>
       </Masthead>
+      {playlist && <input ref={file} type="file" accept="image/*" hidden onChange={(e) => (e.target.files?.[0] && void coverFrom(e.target.files[0]).then((c) => setCover(id, c), report), (e.target.value = ""))} />}
       <div className="mt-6 px-8">
+        {tracks.length > 1 && (
+          <div className="mb-2 flex justify-end">
+            <SortSelect value={sort} liked={!playlist} onChange={(s) => (playlist ? sortPlaylist(id, s) : useSettings.setState({ likedSort: s }))} />
+          </div>
+        )}
         {tracks.length ? (
-          <TrackList tracks={tracks} playlist={playlist?.id} />
+          <TrackList tracks={shown} playlist={playlist?.id} origin={rows.map((r) => r.i)} from={from} onMove={playlist && sort === "custom" ? (a, b) => movePlaylistTrack(id, a, b) : undefined} />
         ) : (
           <p className="text-muted">{playlist ? "Right-click any song and choose Add to Playlist." : "Tap the heart on any song and it lands here."}</p>
         )}
@@ -441,6 +739,100 @@ export function PlaylistPage({ id }: { id: string }) {
     </div>
   );
 }
+
+// An image you picked, as a playlist cover: cropped square and drawn at 640 px as a JPEG, so the library
+// stays small (about 80 KB a cover) and the cover loads at once.
+async function coverFrom(file: File) {
+  const img = await createImageBitmap(file);
+  const side = Math.min(img.width, img.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = Math.min(640, side);
+  canvas.getContext("2d")!.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+  img.close();
+  return canvas.toDataURL("image/jpeg", 0.86);
+}
+
+// A folder of your playlists: rename it, play them all, add a playlist straight into it.
+export function FolderPage({ id }: { id: string }) {
+  const folder = useLibrary((s) => s.folders.find((f) => f.id === id));
+  const playlists = useLibrary((s) => s.playlists);
+  const view = useSettings((s) => s.libraryView);
+  const items = useMemo(() => playlists.flatMap((p, i): Item[] => (p.folder === id ? [{ key: libraryKey("playlist", p.id), kind: "playlist", id: p.id, title: p.name, sub: `Playlist · ${count(p.tracks.length)}`, at: p.at ?? i, creator: "" }] : [])), [playlists, id]);
+  if (!folder) return <p className="px-8 pt-20 text-muted">This folder was deleted.</p>;
+  const tracks = playlists.filter((p) => p.folder === id).flatMap((p) => p.tracks);
+  const key = libraryKey("folder", id);
+  return (
+    <div className="animate-enter">
+      <Masthead
+        cover={<FolderCover id={id} />}
+        fill={tint(id)}
+        title={
+          <h1>
+            <input value={folder.name} onChange={(e) => renameFolder(id, e.target.value)} onBlur={(e) => !e.target.value.trim() && renameFolder(id, "Untitled Folder")} aria-label="Folder name" name="folder-name" autoComplete="off" spellCheck={false} className={`${TITLE} -my-2 w-full bg-transparent py-2 caret-white outline-none`} />
+          </h1>
+        }
+        meta={`Folder · ${plural(items.length, "playlist")}`}
+      >
+        <PlayButtons tracks={tracks} from={key} />
+        <button
+          onClick={() => popup([{ text: useLibrary.getState().pinned.includes(key) ? "Unpin" : "Pin to Top", action: () => togglePin(key) }, { text: "New Playlist in Folder", action: () => open({ name: "playlist", id: newPlaylist([], id) }) }, { item: "Separator" }, { text: "Delete Folder", action: () => (back(), deleteFolder(id)) }])}
+          aria-label="More"
+          title="More"
+          aria-haspopup="menu"
+          className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30"
+        >
+          <Ellipsis size={20} />
+        </button>
+      </Masthead>
+      <div className="px-8">
+        {items.length ? <LibraryItems items={items} view={view} /> : <p className="mt-6 text-muted">Drag a playlist onto this folder in your Library, or right-click one and choose Move to Folder.</p>}
+      </div>
+    </div>
+  );
+}
+
+// Everything you've listened to, newest first, by day; read from disk a page at a time.
+export function HistoryPage() {
+  const [rows, setRows] = useState<{ p: PlayRow; key: number }[]>([]);
+  const [done, setDone] = useState(false);
+  const recent = useHistory((s) => s.recent); // a new play, or the history cleared: read it again
+  const more = (from: { p: PlayRow; key: number }[]) => {
+    const got: { p: PlayRow; key: number }[] = [];
+    void plays((p, key) => (got.push({ p, key }), got.length < 200), from.at(-1)?.key).then(() => (setRows([...from, ...got]), setDone(got.length < 200)));
+  };
+  useEffect(() => more([]), [recent]);
+  const days = useMemo(() => {
+    const out: { day: string; rows: typeof rows }[] = [];
+    for (const r of rows) {
+      const day = dayName(r.p.at);
+      if (out.at(-1)?.day !== day) out.push({ day, rows: [] });
+      out.at(-1)!.rows.push(r);
+    }
+    return out;
+  }, [rows]);
+  return (
+    <div className="animate-enter px-8 pt-14">
+      <div className="flex items-end justify-between gap-6">
+        <h1 className="text-display">History</h1>
+        {rows.length > 0 && <button onClick={() => popup([{ text: "Clear History", action: clearHistory }])} className={quiet}>Clear…</button>}
+      </div>
+      {!rows.length && done && <p className="mt-6 text-muted">Songs you listen to for 30 seconds or more land here.</p>}
+      {days.map(({ day, rows }) => (
+        <Section key={day} title={day}>
+          <TrackList tracks={rows.map((r) => r.p.t)} times={rows.map((r) => r.p.at)} />
+        </Section>
+      ))}
+      {!done && rows.length > 0 && (
+        <button onClick={() => more(rows)} className={`${quiet} mt-6`}>Show More</button>
+      )}
+    </div>
+  );
+}
+const dayName = (at: number) => {
+  const d = new Date(at), today = new Date();
+  const days = Math.round((new Date(today.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86_400_000);
+  return days === 0 ? "Today" : days === 1 ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: days < 7 ? "long" : undefined, day: "numeric", month: "long", year: d.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+};
 
 // Songs in columns of four that scroll sideways, like a record shelf.
 function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }) {
@@ -474,8 +866,12 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
 export function Artist({ id }: { id: string }) {
   const { data, error } = useAsync(() => artist(id), [id]);
   const [all, setAll] = useState(false);
+  const following = useLibrary((s) => s.followed.some((a) => a.id === id));
+  const blocked = useLibrary((s) => !!data && s.blocked.some((b) => b.id === id || b.name.toLowerCase() === data.name.toLowerCase()));
   if (error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t load this artist. Go back and try again.</p>;
   if (!data) return <Skeleton className="h-[min(60vh,540px)] bg-ink/[0.03]" />;
+  const from = libraryKey("artist", id);
+  const me = { id, name: data.name };
 
   return (
     <div className="animate-enter">
@@ -490,16 +886,29 @@ export function Artist({ id }: { id: string }) {
         <div className="relative min-w-0 flex-1">
           <h1 className="text-display">{data.name}</h1>
           <div className="mt-6 flex gap-2.5">
-            <button onClick={() => play(data.songs, 0)} disabled={!data.songs.length} className={`${pill} bg-accent text-paper disabled:opacity-50`}>
+            <button onClick={() => play(data.songs, firstPlayable(data.songs), from)} disabled={!data.songs.length} className={`${pill} bg-accent text-paper disabled:opacity-50`}>
               <Play size={16} className="fill-current" /> Play
             </button>
-            <button onClick={() => shufflePlay(data.songs)} disabled={!data.songs.length} aria-label="Shuffle" title="Shuffle" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
+            <button onClick={() => toggleFollow({ ...me, thumb: data.banner })} aria-pressed={following} className={`${pill} bg-ink/[0.08] px-4 hover:bg-ink/[0.14]`}>
+              {following ? <UserCheck size={16} /> : <UserPlus size={16} />} {following ? "Following" : "Follow"}
+            </button>
+            <button onClick={() => shufflePlay(data.songs, from)} disabled={!data.songs.length} aria-label="Shuffle" title="Shuffle" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
               <Shuffle size={17} />
             </button>
-            <button onClick={() => radioFrom(data.songs)} disabled={!data.songs.length} aria-label="Artist radio" title="Artist radio" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
+            <button onClick={() => radioFrom(data.songs, from)} disabled={!data.songs.length} aria-label="Artist radio" title="Artist radio" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
               <Radio size={17} />
             </button>
+            <button
+              onClick={() => popup([...(following ? [{ text: useLibrary.getState().pinned.includes(from) ? "Unpin" : "Pin to Top", action: () => togglePin(from) }] : []), { text: blocked ? "Allow This Artist" : "Don’t Play This Artist", action: () => toggleBlock(me) }])}
+              aria-label="More"
+              title="More"
+              aria-haspopup="menu"
+              className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14]"
+            >
+              <Ellipsis size={18} />
+            </button>
           </div>
+          {blocked && <p className="mt-3 text-sm font-semibold text-muted">You won’t hear {data.name}: their songs are skipped and left out of radio.</p>}
         </div>
         {data.about && (
           <aside className="glass relative mb-1 hidden w-72 shrink-0 rounded-2xl p-5 @3xl:block">
@@ -516,7 +925,7 @@ export function Artist({ id }: { id: string }) {
             title="Popular Songs"
             action={data.songs.length > 5 && <button onClick={() => setAll(!all)} className="press text-sm font-semibold text-muted hover:text-ink">{all ? "Show less" : "Show all"}</button>}
           >
-            <TrackList tracks={all ? data.songs : data.songs.slice(0, 5)} numbered onPlay={(i) => play(data.songs, i)} />
+            <TrackList tracks={all ? data.songs : data.songs.slice(0, 5)} numbered onPlay={(i) => play(data.songs, i, from)} />
           </Section>
         )}
         {data.albums.length > 0 && (
@@ -1329,13 +1738,17 @@ const keys: [string, string[]][] = [
   ["Close full screen", ["Esc"]],
 ];
 
-// The file comes from anywhere, so check its shape before it replaces the library.
+// The file comes from anywhere, so check its shape before it replaces the library. Exports from before
+// follows, folders, pins and hiding have none of them.
 async function restore(file: File) {
   const ids = (x: unknown) => Array.isArray(x) && x.every((y) => typeof y?.id === "string");
+  const maybe = (x: unknown) => x === undefined || ids(x);
   try {
-    const { liked, saved, playlists } = JSON.parse(await file.text());
-    if (!ids(liked) || !ids(saved) || !ids(playlists) || !playlists.every((p: { tracks: unknown }) => ids(p.tracks))) throw 0;
-    restoreLibrary({ liked, saved, playlists });
+    const { liked, saved, playlists, followed, folders, pinned, hidden, blocked } = JSON.parse(await file.text());
+    const names = (x: unknown) => x === undefined || (Array.isArray(x) && x.every((y) => typeof y?.name === "string"));
+    const keys = pinned === undefined || (Array.isArray(pinned) && pinned.every((k: unknown) => typeof k === "string"));
+    if (!ids(liked) || !ids(saved) || !ids(playlists) || !playlists.every((p: { tracks: unknown }) => ids(p.tracks)) || !maybe(followed) || !maybe(folders) || !maybe(hidden) || !names(blocked) || !keys) throw 0;
+    restoreLibrary({ liked, saved, playlists, ...(followed && { followed }), ...(folders && { folders }), ...(pinned && { pinned }), ...(hidden && { hidden }), ...(blocked && { blocked }) });
   } catch {
     notify({ text: "Couldn’t Restore", detail: `${file.name} isn’t a Sleeve library export` });
   }
@@ -1589,9 +2002,8 @@ function Preview({ scheme, tint = "#ff375f" }: { scheme?: "light" | "dark"; tint
 }
 
 function exportLibrary() {
-  const { liked, saved, playlists } = useLibrary.getState();
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([JSON.stringify({ liked, saved, playlists })], { type: "application/json" }));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(useLibrary.getState())], { type: "application/json" }));
   a.download = `Sleeve Library ${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
@@ -1599,12 +2011,12 @@ function exportLibrary() {
 }
 
 function LibraryPane() {
-  const { liked, saved, playlists } = useLibrary();
+  const { liked, saved, playlists, followed, hidden, blocked } = useLibrary();
   const file = useRef<HTMLInputElement>(null);
-  const stats = [["Liked songs", liked.length, LIKED], ["Playlists", playlists.length, tint("a")], ["Albums", saved.length, tint("b")]] as const;
+  const stats = [["Liked songs", liked.length, LIKED], ["Playlists", playlists.length, tint("a")], ["Albums", saved.length, tint("b")], ["Artists", followed.length, tint("c")]] as const;
   return (
     <>
-      <dl className="grid grid-cols-3 gap-3">
+      <dl className="grid grid-cols-4 gap-3">
         {stats.map(([label, n, bg]) => (
           <div key={label} className={`flex flex-col-reverse rounded-2xl p-5 text-white ${bg}`}>
             <dt className="mt-1 font-semibold text-white/85">{label}</dt>
@@ -1621,6 +2033,42 @@ function LibraryPane() {
         </button>
         <input ref={file} type="file" accept=".json,application/json" hidden onChange={(e) => (e.target.files?.[0] && restore(e.target.files[0]), (e.target.value = ""))} />
       </div>
+      <section className="mt-10">
+        <h2 className="mb-1 text-xl font-bold tracking-tight">Hidden Songs</h2>
+        <p className="mb-3 text-sm text-muted">Skipped when a playlist or radio plays on by itself. They still play when you pick them.</p>
+        {hidden.length ? (
+          <div className="divide-y divide-ink/10">
+            {hidden.map((t) => (
+              <div key={t.id} className="flex h-14 items-center gap-3">
+                <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-10 rounded-lg bg-ink/[0.06] object-cover" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold">{t.title}</div>
+                  <div className="truncate text-sm text-muted">{t.artists.map((a) => a.name).join(", ")}</div>
+                </div>
+                <button onClick={() => toggleHide(t)} className={quiet}>Unhide</button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-muted">None. Right-click a song and choose Hide Song.</p>
+        )}
+      </section>
+      <section className="mt-10">
+        <h2 className="mb-1 text-xl font-bold tracking-tight">Artists You Don’t Play</h2>
+        <p className="mb-3 text-sm text-muted">Their songs are skipped and left out of radio.</p>
+        {blocked.length ? (
+          <div className="divide-y divide-ink/10">
+            {blocked.map((a) => (
+              <div key={a.id ?? a.name} className="flex h-14 items-center gap-3">
+                <div className="min-w-0 flex-1 truncate font-semibold">{a.name}</div>
+                <button onClick={() => toggleBlock(a)} className={quiet}>Allow</button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-muted">None. On an artist’s page, choose ••• then Don’t Play This Artist.</p>
+        )}
+      </section>
     </>
   );
 }
@@ -1782,30 +2230,51 @@ export function QueuePanel() {
   );
 }
 
-function TrackList({ tracks, numbered, plain, playlist, onPlay = (i) => play(tracks, i) }: { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; onPlay?: (i: number) => void }) {
+// A list of songs. from: the library key it's from (play() records it); origin: each row's place in the
+// list it's kept in, when shown in another order (for its menu); onMove: rows drag to reorder; times:
+// when each was played (History), shown in place of its length. Hidden songs and blocked artists' are dimmed.
+type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number, to: number) => void; times?: number[]; onPlay?: (i: number) => void };
+function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
   const current = useStore((s) => s.queue[s.index]?.id);
+  useLibrary((s) => s.hidden), useLibrary((s) => s.blocked); // re-dim as they change
+  const [drag, setDrag] = useState<number>();
+  const [over, setOver] = useState<number>();
   return (
     <ol>
-      {tracks.map((t, i) => (
-        <li
-          key={t.id + i}
-          onContextMenu={(e) => (e.preventDefault(), trackMenu(t, playlist ? { playlist, index: i } : undefined))}
-          className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors [contain-intrinsic-size:auto_56px] [content-visibility:auto] hover:bg-ink/[0.04] ${plain ? "grid-cols-[28px_1fr_32px_48px]" : numbered ? "grid-cols-[28px_40px_1fr_1fr_32px_48px]" : "grid-cols-[40px_1fr_1fr_32px_48px]"}`}
-        >
-          <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
-          {numbered && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
-          {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-10 rounded-lg bg-ink/[0.06] object-cover" />}
-          <div className="min-w-0">
-            <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>{t.title}</div>
-            <div className="truncate text-sm text-muted">
-              <Artists list={t.artists} />
+      {tracks.map((t, i) => {
+        const off = skipped(t);
+        return (
+          <li
+            key={t.id + i}
+            draggable={!!onMove}
+            onDragStart={(e) => ((e.dataTransfer.effectAllowed = "move"), setDrag(i))}
+            onDragOver={(e) => drag !== undefined && (e.preventDefault(), setOver(i))}
+            // Cleared here too: the move re-keys the rows, so dragend never reaches the moved one.
+            onDrop={() => (drag !== undefined && drag !== i && onMove?.(drag, i), setDrag(undefined), setOver(undefined))}
+            onDragEnd={() => (setDrag(undefined), setOver(undefined))}
+            onContextMenu={(e) => (e.preventDefault(), trackMenu(t, playlist ? { playlist, index: origin?.[i] ?? i } : undefined))}
+            className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors [contain-intrinsic-size:auto_56px] [content-visibility:auto] hover:bg-ink/[0.04] ${plain ? "grid-cols-[28px_1fr_32px_48px]" : numbered ? "grid-cols-[28px_40px_1fr_1fr_32px_48px]" : "grid-cols-[40px_1fr_1fr_32px_48px]"} ${drag === i ? "opacity-40" : ""} ${
+              over === i && drag !== undefined && drag !== i ? (drag > i ? "shadow-[inset_0_2px_var(--color-accent)]" : "shadow-[inset_0_-2px_var(--color-accent)]") : ""
+            }`}
+          >
+            <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
+            {numbered && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
+            {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" className={`size-10 rounded-lg bg-ink/[0.06] object-cover ${off ? "opacity-40" : ""}`} />}
+            <div className={`min-w-0 ${off ? "opacity-45" : ""}`}>
+              <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>
+                {off && <EyeOff size={14} aria-label="Hidden" className="mr-1.5 inline -translate-y-px text-muted" />}
+                {t.title}
+              </div>
+              <div className="truncate text-sm text-muted">
+                <Artists list={t.artists} />
+              </div>
             </div>
-          </div>
-          {!plain && <div className="truncate text-sm text-muted">{t.album}</div>}
-          <LikeButton track={t} />
-          <div className="flex justify-end text-sm text-muted tabular-nums">{current === t.id ? <AudioLines size={16} className="text-accent" /> : t.duration}</div>
-        </li>
-      ))}
+            {!plain && <div className={`truncate text-sm text-muted ${off ? "opacity-45" : ""}`}>{t.album}</div>}
+            <LikeButton track={t} />
+            <div className="flex justify-end text-sm text-muted tabular-nums">{current === t.id ? <AudioLines size={16} className="text-accent" /> : times ? new Date(times[i]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : t.duration}</div>
+          </li>
+        );
+      })}
     </ol>
   );
 }

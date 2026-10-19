@@ -41,7 +41,8 @@ Done first, because everything else builds on them.
 - [x] A full-screen lyrics view with the artwork-colour background. **S**
 - [x] A lyrics peek line on the player bar. **S**
 - [x] *Ours:* translation and romanisation toggles for non-English lyrics (Google Translate's free endpoints). **M**
-- [x] *Ours:* word-by-word karaoke highlighting where enhanced LRC or LRCLIB's word-synced Lyricsfile is available. **M**
+- [x] *Ours:* word-by-word karaoke highlighting: real timings where enhanced LRC or LRCLIB's word-synced Lyricsfile has them, and on every other synced song an estimate from each line's timing, weighted by syllables (Settings can limit it to real timings). **M**
+- [ ] *Ours:* real word timings for any song by aligning the lyrics to the audio on device, so the estimate is only a fallback. **L**
 
 ## Phase 4: Library and playlists (Spotify parity)
 - [ ] Library filters (~~Playlists / Albums~~ done; Artists / Songs), sort, search inside, grid and list views, pinning. **M**
@@ -78,7 +79,7 @@ The page and its first sections exist (Phase 1). These fill it in as each featur
 - [ ] **Playback:** ~~quality, crossfade, normalisation, EQ~~ (done); autoplay on or off. **S**
 - [ ] **Appearance:** ~~light, dark or system; accent from artwork on or off~~ (done); reduce motion; UI zoom. **S**
 - [ ] **Library:** ~~export, restore~~ (done); local folders, storage and cache size, import history. **S**
-- [ ] **Lyrics:** ~~translation language, the player bar line~~ (done); source. **S**
+- [ ] **Lyrics:** ~~translation language, the player bar line, word by word on every song~~ (done); source. **S**
 - [ ] **Privacy:** private session, listening history on or off, crash reports on or off. **S**
 - [ ] **Shortcuts:** ~~list~~ (done); remap. **S**
 - [ ] **Startup:** launch at login, open minimised, close to tray. **S**

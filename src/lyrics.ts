@@ -222,13 +222,37 @@ export function useLine(lyrics?: Lyrics | null) {
   return at;
 }
 
-// How far through each of a line's words the song is, 0 to 1. A last word with no end of its own
+// How far through each of line i's words the song is, 0 to 1. A last word with no end of its own
 // is held for a second at most, so a gap after it doesn't stretch it out.
-export function wordProgress(lines: Line[], i: number, now: number) {
+export function wordProgress(words: Word[], lines: Line[], i: number, now: number) {
   const line = lines[i];
-  return (line.words ?? []).map((w, j, ws) => {
-    const end = w.end ?? ws[j + 1]?.time ?? line.end ?? Math.min(lines[i + 1]?.time ?? Infinity, w.time + 1);
+  return words.map((w, j) => {
+    const end = w.end ?? words[j + 1]?.time ?? line.end ?? Math.min(lines[i + 1]?.time ?? Infinity, w.time + 1);
     return Math.min(1, Math.max(0, (now - w.time) / Math.max(0.05, end - w.time)));
+  });
+}
+
+// Chinese and Japanese go without spaces, so there each character is a word.
+const CJK = "\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}";
+const WORDS = new RegExp(`[${CJK}]\\s*|[^\\s${CJK}]+\\s*`, "gu");
+const BEATS = new RegExp(`[${CJK}\\p{Script=Hangul}]|[aeiouyаеиоуыэюяαεηιουω]+`, "giu");
+const syllables = (word: string) => word.normalize("NFD").match(BEATS)?.length || 1;
+
+// Word timings for a line that only has its own: its time shared out by syllables, so the fill moves
+// at the pace of singing. At most about 0.4 s a syllable, so a line before a long instrumental doesn't
+// crawl across it. A guess (a held note or a pause mid-line throws it), so real timings win.
+export function estimateWords(lines: Line[], i: number, text: string): Word[] {
+  const line = lines[i];
+  const parts = text.match(WORDS) ?? [];
+  const beats = parts.map(syllables);
+  const total = beats.reduce((a, b) => a + b, 0);
+  const room = (line.end ?? lines[i + 1]?.time ?? line.time + 10) - line.time;
+  const span = Math.min(room * 0.9, total * 0.4 + 0.5);
+  let at = line.time;
+  return parts.map((text, j) => {
+    const time = at;
+    at += (span * beats[j]) / total;
+    return { time, end: at, text };
   });
 }
 

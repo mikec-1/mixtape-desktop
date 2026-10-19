@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AudioLines, CaseSensitive, Check, ChevronDown, Download, Ellipsis, GripVertical, Heart, Languages, Maximize2, Music, Play, Plus, Radio, Shuffle, Sparkle, Upload, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import { EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearQueue, deletePlaylist, enqueue, jump, moveInQueue, newPlaylist, notify, open, play, removeFromPlaylist, radioFrom, removeFromQueue, renamePlaylist, report, restoreLibrary, shufflePlay, startRadio, toggle, toggleLike, toggleSave, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
-import { translateTarget, useExtras, useLine, useLyrics, wordProgress } from "./lyrics";
+import { estimateWords, translateTarget, useExtras, useLine, useLyrics, wordProgress } from "./lyrics";
 import { art, artist, collection, home, lastHome, search, type Album, type Track } from "./yt";
 import { version } from "../package.json";
 
@@ -692,7 +692,17 @@ function LyricLines({ track, lyrics, extras, live, big }: { track?: Track; lyric
   const shown = useRef(false);
   const synced = !!value?.synced;
   const lines = value?.lines ?? [];
-  const words = synced && live && !extras.romanised?.[at] ? lines[at]?.words : undefined;
+  // The line being sung, word by word: its own word timings when it has them (and shows its own words,
+  // not a romanisation); otherwise, unless Settings says not to, an estimate from the line's timing.
+  const estimate = useSettings((s) => s.lyricsWords);
+  const romanised = extras.romanised?.[at];
+  const timed = useMemo(() => {
+    const line = lines[at];
+    if (!synced || !line?.text) return undefined;
+    if (line.words && !romanised) return line.words;
+    return estimate ? estimateWords(lines, at, romanised ?? line.text) : undefined;
+  }, [value, at, romanised, estimate]);
+  const words = live ? timed : undefined;
 
   // The line being sung sits a third of the way down. Opening the sheet jumps there (before it's drawn,
   // so it never flashes the top); after that it glides.
@@ -705,19 +715,20 @@ function LyricLines({ track, lyrics, extras, live, big }: { track?: Track; lyric
     shown.current = true;
   }, [at, live, value, extras.translation, extras.romanised]);
 
-  // Karaoke: each word of the line being sung fills as it's sung, written straight to the DOM every frame.
-  const { paused } = useAudio();
+  // Karaoke: each word of the line being sung fills as it's sung, written straight to the DOM every frame
+  // while playing, and once more for a seek while paused.
+  const { paused, time } = useAudio();
   useEffect(() => {
     if (!words) return;
     const spans = box.current?.querySelectorAll<HTMLElement>(`[data-line="${at}"] [data-word]`);
     let frame = 0;
     const paint = () => {
-      wordProgress(lines, at, audio.currentTime).forEach((p, i) => spans?.[i]?.style.setProperty("--p", String(p)));
+      wordProgress(words, lines, at, audio.currentTime).forEach((p, i) => spans?.[i]?.style.setProperty("--p", String(p)));
       if (!audio.paused) frame = requestAnimationFrame(paint);
     };
     paint();
     return () => cancelAnimationFrame(frame);
-  }, [words, at, paused]);
+  }, [words, at, paused, paused && time]);
 
   const hold = () => void (held.current = Date.now());
   const seekTo = (time: number) => {
@@ -970,13 +981,16 @@ const names = new Intl.DisplayNames([navigator.language], { type: "language" });
 const languageName = (code: string) => names.of({ "zh-CN": "zh-Hans", "zh-TW": "zh-Hant" }[code] ?? code) ?? code;
 
 function LyricsPane() {
-  const { lyricsPeek, translateTo } = useSettings();
+  const { lyricsPeek, lyricsWords, translateTo } = useSettings();
   const set = useSettings.setState;
   return (
     <>
       <div className="mb-6 divide-y divide-ink/10">
         <Row label="Lyrics on the Player Bar" detail="The line being sung, under the song’s name">
           <Switch label="Lyrics on the Player Bar" on={lyricsPeek} onChange={(lyricsPeek) => set({ lyricsPeek })} />
+        </Row>
+        <Row label="Word by Word on Every Song" detail={lyricsWords ? "Songs that only time their lines get their words timed by estimate" : "Only songs whose lyrics time each word"}>
+          <Switch label="Word by Word on Every Song" on={lyricsWords} onChange={(lyricsWords) => set({ lyricsWords })} />
         </Row>
         <Row label="Translate To" detail="What Translate turns lyrics in other languages into">
           <div className="relative">

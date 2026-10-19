@@ -426,18 +426,19 @@ export const EQ_BANDS = [60, 150, 400, 1000, 2400, 15000];
 // Small and read synchronously at startup, so the theme is right on the first frame: localStorage.
 // sidebarWidth is the expanded width; closed, the sidebar is the icon rail. queue is the Queue panel, queueWidth its width.
 // crossfade is in seconds (0 is gapless); eq is dB per EQ_BANDS band. lyricsPeek is the line on the player bar;
-// translateTo is a language code, "" for the system's (lyrics.ts translateTarget).
+// lyricsWords estimates word timings for lyrics that only time lines; translateTo is a language code, "" for
+// the system's (lyrics.ts translateTarget).
 type Settings = {
   theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number;
   quality: Quality; normalize: boolean; crossfade: number; eq: number[];
-  lyricsPeek: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string;
+  lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string;
 };
 export const useSettings = create<Settings>()(
   persist(
     (): Settings => ({
       theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320,
       quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
-      lyricsPeek: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "",
+      lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "",
     }),
     { name: "settings" },
   ),

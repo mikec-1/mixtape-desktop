@@ -14,7 +14,7 @@ addEventListener("load", (e) => e.target instanceof HTMLImageElement && e.target
 
 // The welcome is for a new library: one that's already got things in it (from before it existed) skips it.
 function firstLaunch() {
-  if (localStorage.onboarded) return false;
+  if (localStorage.onboarded || !useLibrary.persist.hasHydrated()) return false; // not read yet: can't tell
   const l = useLibrary.getState();
   const fresh = !l.liked.length && !l.playlists.length && !l.saved.length && !l.followed.length && !useAccount.getState().user;
   if (!fresh) localStorage.onboarded = 1;

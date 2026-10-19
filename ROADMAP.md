@@ -6,9 +6,9 @@ Size: **S** ≈ a day · **M** ≈ a few days · **L** ≈ a week or more.
 
 ## Where it stands (Oct 2026)
 
-Done: compact layout (sidebar with Home, Search, Library and Settings that collapses to an icon rail (⌘B) and resizes by dragging its edge; one rounded content card with a Back pill; player bar with an artwork-colour wash; system font, SF Pro on Mac), search (songs + top artist, Browse All genres), Home (YT Music shelves), artist, album and playlist pages, Now Playing sheet, docked player bar with artwork accent colour, queue panel with drag to reorder, shuffle and Smart Shuffle, repeat, song, artist and playlist radio, autoplay radio, gapless playback and crossfade, volume normalisation, audio quality, equalizer, mini player, sleep timer, playback that resumes where it left off, likes, saved albums, your own playlists (create, rename, delete, add and remove tracks), undoable toasts, media keys, accessibility pass.
+Done: compact layout (sidebar with Home, Search, Library and Settings that collapses to an icon rail (⌘B) and resizes by dragging its edge; one rounded content card with a Back pill; player bar with an artwork-colour wash; system font, SF Pro on Mac), search (songs + top artist, Browse All genres), Home (YT Music shelves), artist, album and playlist pages, Now Playing sheet, docked player bar with artwork accent colour, queue panel with drag to reorder, shuffle and Smart Shuffle, repeat, song, artist and playlist radio, autoplay radio, gapless playback and crossfade, volume normalisation, audio quality, equalizer, mini player, sleep timer, playback that resumes where it left off, likes, saved albums, your own playlists (create, rename, delete, add and remove tracks), undoable toasts, media keys, accessibility pass, lyrics (synced and word by word, in Now Playing, full screen and on the player bar, with translation and romanisation).
 
-Missing: everything below. Notable gaps today: no lyrics, the macOS window buttons don't sit inside the sidebar card yet, macOS only tested, no web build.
+Missing: everything below. Notable gaps today: the macOS window buttons don't sit inside the sidebar card yet, macOS only tested, no web build.
 
 ---
 
@@ -37,11 +37,11 @@ Done first, because everything else builds on them.
 - [x] Mini player window (always-on-top Tauri window). **M**
 
 ## Phase 3: Lyrics
-- [ ] **Synced lyrics** in Now Playing: the current line is highlighted and auto-scrolls, and clicking a line seeks to it. Source: LRCLIB (free, synced), falling back to YT Music's plain lyrics. **M**
-- [ ] A full-screen lyrics view with the artwork-colour background. **S**
-- [ ] A lyrics peek line on the player bar. **S**
-- [ ] *Ours:* translation and romanisation toggles for non-English lyrics. **M**
-- [ ] *Ours:* word-by-word karaoke highlighting where enhanced LRC is available. **M**
+- [x] **Synced lyrics** in Now Playing: the current line is highlighted and auto-scrolls, and clicking a line seeks to it. Source: LRCLIB (free, synced), falling back to YT Music's plain lyrics. **M**
+- [x] A full-screen lyrics view with the artwork-colour background. **S**
+- [x] A lyrics peek line on the player bar. **S**
+- [x] *Ours:* translation and romanisation toggles for non-English lyrics (Google Translate's free endpoints). **M**
+- [x] *Ours:* word-by-word karaoke highlighting where enhanced LRC or LRCLIB's word-synced Lyricsfile is available. **M**
 
 ## Phase 4: Library and playlists (Spotify parity)
 - [ ] Library filters (~~Playlists / Albums~~ done; Artists / Songs), sort, search inside, grid and list views, pinning. **M**
@@ -78,7 +78,7 @@ The page and its first sections exist (Phase 1). These fill it in as each featur
 - [ ] **Playback:** ~~quality, crossfade, normalisation, EQ~~ (done); autoplay on or off. **S**
 - [ ] **Appearance:** ~~light, dark or system; accent from artwork on or off~~ (done); reduce motion; UI zoom. **S**
 - [ ] **Library:** ~~export, restore~~ (done); local folders, storage and cache size, import history. **S**
-- [ ] **Lyrics:** source, translation language. **S**
+- [ ] **Lyrics:** ~~translation language, the player bar line~~ (done); source. **S**
 - [ ] **Privacy:** private session, listening history on or off, crash reports on or off. **S**
 - [ ] **Shortcuts:** ~~list~~ (done); remap. **S**
 - [ ] **Startup:** launch at login, open minimised, close to tray. **S**

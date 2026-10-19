@@ -212,6 +212,14 @@ export async function radio(id: string): Promise<Track[]> {
     );
 }
 
+// YT Music's own lyrics (licensed from LyricFind and the like): plain text, no timing. Throws when it has none.
+export async function lyrics(id: string) {
+  const shelf = await (await yt).music.getLyrics(id);
+  const text = shelf?.description.toString();
+  if (!text) throw new Error("No lyrics");
+  return { text, credit: shelf?.footer?.toString().replace(/^Source:\s*/i, "") || undefined };
+}
+
 // YouTube serves fragmented (DASH) MP4, which WebKit can't play from a plain src, so feed it via MSE.
 // start resumes partway in (after a relaunch). autoplay false only buffers it (the next track, for gapless).
 export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duration }: Awaited<ReturnType<typeof fetchAudio>>, start = 0, autoplay = true) {

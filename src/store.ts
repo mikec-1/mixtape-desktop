@@ -12,7 +12,7 @@ export type View = { name: Root } | { name: "artist" | "collection" | "playlist"
 type State = {
   stack: View[];
   ahead: View[]; // what Back left, for Forward
-  nowPlaying: boolean; // the full-screen sheet
+  sheet?: "playing" | "lyrics"; // the full-screen sheet over everything but the player bar: Now Playing, or just the lyrics
   query: string; // the search field
   queue: Track[]; // what's been played, the current track, then Up Next
   index: number;
@@ -31,16 +31,18 @@ export type Toast = { id: number; text: string; detail?: string; thumb?: string;
 // The queue and modes survive a relaunch; where you were in the track is in localStorage.resume.
 export const useStore = create<State>()(
   persist(
-    (): State => ({ stack: [{ name: "home" }], ahead: [], nowPlaying: false, query: "", queue: [], index: -1, added: 0, shuffle: false, repeat: "off", loading: false, error: "" }),
+    (): State => ({ stack: [{ name: "home" }], ahead: [], query: "", queue: [], index: -1, added: 0, shuffle: false, repeat: "off", loading: false, error: "" }),
     { name: "player", partialize: ({ queue, index, added, original, shuffle, repeat }) => ({ queue, index, added, original, shuffle, repeat }) },
   ),
 );
 const { setState: set, getState: get } = useStore;
 
-export const open = (view: View) => set((s) => ({ stack: [...s.stack, view], ahead: [], nowPlaying: false }));
+export const open = (view: View) => set((s) => ({ stack: [...s.stack, view], ahead: [], sheet: undefined }));
 export const back = () => set((s) => (s.stack.length > 1 ? { stack: s.stack.slice(0, -1), ahead: [s.stack.at(-1)!, ...s.ahead] } : s));
 export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, s.ahead[0]], ahead: s.ahead.slice(1) } : s));
-export const go = (name: Root) => set({ stack: [{ name }], ahead: [], nowPlaying: false });
+export const go = (name: Root) => set({ stack: [{ name }], ahead: [], sheet: undefined });
+// Opens that sheet, or closes it if it's the one showing.
+export const toggleSheet = (sheet: State["sheet"]) => set((s) => ({ sheet: s.sheet === sheet ? undefined : sheet }));
 export const report = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e), loading: false });
 
 // Your library, in IndexedDB: no 5 MB cap like localStorage, and the same code runs in the web build.
@@ -423,10 +425,22 @@ export const EQ_BANDS = [60, 150, 400, 1000, 2400, 15000];
 
 // Small and read synchronously at startup, so the theme is right on the first frame: localStorage.
 // sidebarWidth is the expanded width; closed, the sidebar is the icon rail. queue is the Queue panel, queueWidth its width.
-// crossfade is in seconds (0 is gapless); eq is dB per EQ_BANDS band.
-type Settings = { theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number; quality: Quality; normalize: boolean; crossfade: number; eq: number[] };
+// crossfade is in seconds (0 is gapless); eq is dB per EQ_BANDS band. lyricsPeek is the line on the player bar;
+// translateTo is a language code, "" for the system's (lyrics.ts translateTarget).
+type Settings = {
+  theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number;
+  quality: Quality; normalize: boolean; crossfade: number; eq: number[];
+  lyricsPeek: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string;
+};
 export const useSettings = create<Settings>()(
-  persist((): Settings => ({ theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320, quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0) }), { name: "settings" }),
+  persist(
+    (): Settings => ({
+      theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320,
+      quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
+      lyricsPeek: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "",
+    }),
+    { name: "settings" },
+  ),
 );
 const applySettings = (s: Settings, was?: Settings) => {
   document.documentElement.dataset.theme = s.theme; // index.css: color-scheme picks every token's light or dark value

@@ -16,6 +16,10 @@
   );
   /* Always dark enough for white on it: the Now Playing sheet. */
   --color-accent-deep: oklch(from var(--accent-raw) clamp(0.22, l, 0.45) min(c, 0.2) h);
+  /* Full-screen lyrics: the artwork's colour at its brightest that still holds big white type (3:1
+     and up), with lines yet to come in its dark shade. */
+  --color-accent-vivid: oklch(from var(--accent-raw) clamp(0.5, l, 0.58) min(c, 0.16) h);
+  --color-accent-shade: oklch(from var(--accent-raw) 0.24 min(c, 0.12) h);
   /* The system's own: SF Pro on Mac, Segoe UI Variable on Windows. Mono is only for keys. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -67,6 +71,19 @@
   &:focus-visible {
     outline-offset: -2px;
   }
+}
+
+/* A word of karaoke lyrics, lit left to right as it's sung: --p runs 0 to 1 (views.tsx LyricLines).
+   The lit edge is soft, and fully off at 0 and fully on at 1. */
+@utility sung {
+  background-image: linear-gradient(
+    to right,
+    var(--lyric-now) calc(var(--p, 0) * (100% + 0.4em) - 0.4em),
+    var(--lyric-next) calc(var(--p, 0) * (100% + 0.4em))
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 /* Every pressable thing answers the press the same way. */

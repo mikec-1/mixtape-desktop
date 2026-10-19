@@ -1,6 +1,4 @@
 @import "tailwindcss";
-@import "@fontsource-variable/geist";
-@import "@fontsource-variable/geist-mono";
 
 @theme {
   /* Every colour is light-dark(): the root's color-scheme (system, or Settings' choice) picks one. */
@@ -18,9 +16,9 @@
   );
   /* Always dark enough for white on it: the Now Playing sheet. */
   --color-accent-deep: oklch(from var(--accent-raw) clamp(0.22, l, 0.45) min(c, 0.2) h);
-  /* Bundled, so Mac, Windows and web set the same type. Mono is only for keys. */
-  --font-sans: "Geist Variable", system-ui, sans-serif;
-  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  /* The system's own: SF Pro on Mac, Segoe UI Variable on Windows. Mono is only for keys. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Sized to the page card (main is a container), not the window. */
   --text-display: clamp(44px, 8cqw, 104px);
@@ -159,7 +157,8 @@ input[type="range"]::-webkit-slider-thumb {
   transition: opacity 0.15s;
 }
 input[type="range"]:hover::-webkit-slider-thumb,
-input[type="range"]:focus-visible::-webkit-slider-thumb {
+input[type="range"]:focus-visible::-webkit-slider-thumb,
+input[type="range"].knob::-webkit-slider-thumb {
   opacity: 1;
 }
 

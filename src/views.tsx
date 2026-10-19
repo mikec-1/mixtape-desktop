@@ -685,7 +685,7 @@ function LyricOptions({ extras: { can, on, to, loading, failed, retry } }: { ext
 // Lyrics that follow the song: the line being sung lights up and stays in view, sung lines stay lit, and
 // clicking a line plays from it. Word-synced lines light up word by word, like karaoke. live: on screen.
 function LyricLines({ track, lyrics, extras, live, big }: { track?: Track; lyrics: ReturnType<typeof useLyrics>; extras: Extras; live: boolean; big?: boolean }) {
-  const { value, loading, failed, retry } = lyrics;
+  const { value, loading } = lyrics;
   const at = useLine(value);
   const box = useRef<HTMLDivElement>(null);
   const held = useRef(0); // when you last scrolled by hand: the view leaves you there for a few seconds
@@ -748,13 +748,7 @@ function LyricLines({ track, lyrics, extras, live, big }: { track?: Track; lyric
         {[70, 55, 80, 45, 65].map((w) => <div key={w} className={`rounded-full bg-white/15 ${big ? "h-10" : "h-7"}`} style={{ width: `${w}%` }} />)}
       </div>
     );
-  if (failed && !value)
-    return (
-      <div className={`pt-6 ${pad}`}>
-        <p className={note}>Couldn’t load the lyrics.</p>
-        <button onClick={retry} className="press mt-4 h-9 rounded-full bg-white/15 px-4 text-sm font-semibold hover:bg-white/25">Try Again</button>
-      </div>
-    );
+  // No source had any, or none answered (they're asked again next time): no lyrics either way, no error.
   if (!value) return <p className={`pt-6 ${note} ${pad}`}>No lyrics for this one yet.</p>;
   if (value.instrumental) return <p className={`pt-6 ${note} ${pad}`}>♪ Instrumental</p>;
 
@@ -797,7 +791,7 @@ function LyricLines({ track, lyrics, extras, live, big }: { track?: Track; lyric
       {/* The padding under it lets the last line scroll up to where the others are read. */}
       <p className="mt-8 pb-[45vh] text-sm font-semibold text-white/70">
         {synced ? "" : "These lyrics aren’t synced to the song yet. "}
-        Lyrics from {value.source}{value.credit ? ` (${value.credit})` : ""}.{google && ` ${google} by Google.`}
+        Lyrics from {value.source}.{google && ` ${google} by Google.`}
       </p>
     </div>
   );
@@ -1008,7 +1002,7 @@ function LyricsPane() {
         </Row>
       </div>
       <p className="max-w-xl text-sm leading-relaxed text-muted">
-        Lyrics come from LRCLIB, a free library anyone can add to, and otherwise from YouTube Music. Translation and romanisation are by Google, and only happen when you switch them on.
+        Lyrics come from LRCLIB, a free library anyone can add to, and otherwise from NetEase Cloud Music. Translation and romanisation are by Google, and only happen when you switch them on.
       </p>
     </>
   );

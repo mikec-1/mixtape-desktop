@@ -1,6 +1,7 @@
 // Smoke test for the YouTube side, outside the app, mirroring src/yt.ts: search -> Home, artist and album
-// pages -> lyrics (YT Music, then src/lyrics.ts's LRCLIB and Google translation and romanisation) -> mint a PO
-// token with BotGuard -> resolve the YTMUSIC audio stream -> download all of it in 1 MB ranges.
+// pages -> lyrics as src/lyrics.ts gets them (LRCLIB exact match and search, NetEase Cloud Music, Google
+// translation and romanisation) -> mint a PO token with BotGuard -> resolve the YTMUSIC audio stream ->
+// download all of it in 1 MB ranges.
 // Run when playback breaks: node scripts/yt-check.mjs "query"
 import { JSDOM } from 'jsdom';
 import { Innertube, Platform } from 'youtubei.js';
@@ -30,11 +31,30 @@ await check('home sections', async () => (await yt.music.getHomeFeed()).sections
 await check('explore sections', async () => (await yt.music.getExplore()).sections?.length);
 await check('artist sections', async () => (await yt.music.getArtist(song.artists?.find((a) => a.channel_id)?.channel_id)).sections?.length);
 await check('album tracks', async () => (await yt.music.getAlbum(song.album?.id)).contents?.length);
-await check('yt lyrics lines', async () => (await yt.music.getLyrics(song.id))?.description?.toString().split('\n').length);
+const artist = song.artists?.[0]?.name ?? '';
+const LRCLIB = { 'Lrclib-Client': 'Sleeve smoke test' };
+// A 404 isn't a failure: the album can be named differently there, and the app moves on to a search.
+await check('lrclib exact match lines', async () => {
+  const q = new URLSearchParams({ track_name: song.title, artist_name: artist, ...(song.album?.name && { album_name: song.album.name }), ...(song.duration?.seconds && { duration: String(song.duration.seconds) }) });
+  const r = await fetch(`https://lrclib.net/api/get?${q}`, { headers: LRCLIB });
+  return r.status === 404 ? 'none (404)' : (await r.json()).syncedLyrics?.split('\n').length;
+});
 await check('lrclib synced lines', async () => {
-  const q = new URLSearchParams({ track_name: song.title, artist_name: song.artists?.[0]?.name ?? '' });
-  const hits = await (await fetch(`https://lrclib.net/api/search?${q}`, { headers: { 'Lrclib-Client': 'Sleeve smoke test' } })).json();
+  const q = new URLSearchParams({ track_name: song.title, artist_name: artist });
+  const hits = await (await fetch(`https://lrclib.net/api/search?${q}`, { headers: LRCLIB })).json();
   return hits.find((h) => h.syncedLyrics)?.syncedLyrics.split('\n').length;
+});
+const NETEASE = {
+  Referer: 'https://music.163.com/',
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+  Cookie: `NMTID=${crypto.randomUUID().replaceAll('-', '')}; os=pc; appver=3.1.17.204416`,
+};
+await check('netease synced lines', async () => {
+  const q = new URLSearchParams({ s: `${song.title} ${artist}`, type: '1', limit: '10', offset: '0' });
+  const songs = (await (await fetch(`https://music.163.com/api/search/pc?${q}`, { method: 'POST', headers: NETEASE })).json()).result?.songs ?? [];
+  const id = (songs.find((s) => s.name.toLowerCase() === song.title.toLowerCase()) ?? songs[0])?.id;
+  const lrc = id && (await (await fetch(`https://music.163.com/api/song/lyric?id=${id}&lv=1&kv=1&tv=-1`, { headers: NETEASE })).json()).lrc?.lyric;
+  return lrc?.split('\n').filter((l) => /^\[\d+:\d+/.test(l)).length;
 });
 const google = async (path, body) => (await fetch(`https://translate.googleapis.com/translate_a/${path}`, { method: 'POST', body })).json();
 await check('google translated lines', async () => (await google('t?client=dict-chrome-ex&sl=auto&tl=en', new URLSearchParams([['q', '사랑해'], ['q', '夜に駆ける']]))).length);

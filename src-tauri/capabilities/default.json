@@ -30,6 +30,9 @@
         },
         {
           "url": "https://lrclib.net/*"
+        },
+        {
+          "url": "https://music.163.com/*"
         }
       ]
     }

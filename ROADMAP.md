@@ -37,11 +37,13 @@ Done first, because everything else builds on them.
 - [x] Mini player window (always-on-top Tauri window). **M**
 
 ## Phase 3: Lyrics
-- [x] **Synced lyrics** in Now Playing: the current line is highlighted and auto-scrolls, and clicking a line seeks to it. Source: LRCLIB (free, synced), falling back to YT Music's plain lyrics. **M**
+- [x] **Synced lyrics** in Now Playing: the current line is highlighted and auto-scrolls, and clicking a line seeks to it. Sources, first that has lyrics: LRCLIB (free; an exact match, then a search), then NetEase Cloud Music (search, then the song's synced lyrics). None: no lyrics, no error. **M**
 - [x] A full-screen lyrics view with the artwork-colour background. **S**
 - [x] A lyrics peek line on the player bar. **S**
 - [x] *Ours:* translation and romanisation toggles for non-English lyrics (Google Translate's free endpoints). **M**
 - [x] *Ours:* word-by-word karaoke highlighting: real timings where enhanced LRC or LRCLIB's word-synced Lyricsfile has them, and on every other synced song an estimate from each line's timing, weighted by syllables (Settings can limit it to real timings). **M**
+- [ ] **Apple Music word-timed lyrics**, looked up by ISRC ahead of LRCLIB, and only when they're really timed word by word. Needs each song's ISRC first (Phase 5). **M**
+- [ ] *Ours:* your own lyrics: write or fix a song's lyrics in an editor; yours always come first. **M**
 - [ ] *Ours:* real word timings for any song by aligning the lyrics to the audio on device, so the estimate is only a fallback. **L**
 
 ## Phase 4: Library and playlists (Spotify parity)
@@ -50,7 +52,7 @@ Done first, because everything else builds on them.
 - [ ] Playlist editing: drag to reorder, description, custom cover image, sort, duplicate, folders. **M**
 - [ ] Recently played and listening history (stored locally). **S**
 - [ ] Hide a song, and "don't play this artist". **S**
-- [ ] Local files: add folders, read tags, play them alongside streamed tracks. **L**
+- [ ] Local files: add folders, read tags, play them alongside streamed tracks. Their lyrics come from your own, then the file's embedded lyrics, then a `.lrc` beside it, then the online sources. **L**
 - [ ] Offline downloads for playlists and albums (encrypted cache in app data). **L**
 
 ## Phase 5: Importing

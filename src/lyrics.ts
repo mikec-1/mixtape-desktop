@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { audio, useAudio, useOnline, useSettings, useStore } from "./store";
-import { lyrics as ytLyrics, type Track } from "./yt";
+import type { Track } from "./yt";
 import { version } from "../package.json";
 
 // A line starts at time (seconds) and, where the source says, ends at end. Text "" is a break (♪).
@@ -9,7 +9,7 @@ import { version } from "../package.json";
 export type Word = { time: number; end?: number; text: string };
 export type Line = { time: number; end?: number; text: string; words?: Word[] };
 // Unsynced lyrics have time 0 on every line, and "" between verses.
-export type Lyrics = { lines: Line[]; synced: boolean; source: string; credit?: string; instrumental?: boolean };
+export type Lyrics = { lines: Line[]; synced: boolean; source: string; instrumental?: boolean };
 
 // In the app requests go through Rust like YouTube's (yt.ts), so CORS never matters; a browser uses its own.
 const http: typeof fetch = "__TAURI_INTERNALS__" in window ? tauriFetch : (input, init) => fetch(input, init);
@@ -50,20 +50,26 @@ function pick(list: Hit[], secs?: number) {
   return list.filter((r) => rank(r) < 4 && off(r) <= 3).sort((a, b) => rank(a) - rank(b) || off(a) - off(b))[0];
 }
 
+// undefined: LRCLIB doesn't have it (404).
+async function lrclibApi<T>(path: "get" | "search", q: Record<string, string>): Promise<T | undefined> {
+  const go = () => http(`https://lrclib.net/api/${path}?${new URLSearchParams(q)}`, { headers: LRCLIB, signal: timeout() });
+  let r = await go();
+  if (r.status === 503) r = await new Promise((ok) => setTimeout(ok, 1000)).then(go); // busy, and it says Retry-After: 1
+  if (r.status === 404) return undefined;
+  if (!r.ok) throw new Error(`LRCLIB: ${r.status}`);
+  return r.json();
+}
+
 async function lrclib(t: Track): Promise<Lyrics | undefined> {
   const name = title(t);
   const artist = t.artists[0]?.name ?? "";
   const secs = seconds(t.duration);
-  const search = async (q: Record<string, string>) => {
-    const get = () => http(`https://lrclib.net/api/search?${new URLSearchParams(q)}`, { headers: LRCLIB, signal: timeout() });
-    let r = await get();
-    if (r.status === 503) r = await new Promise((ok) => setTimeout(ok, 1000)).then(get); // busy, and it says Retry-After: 1
-    if (!r.ok) throw new Error(`LRCLIB: ${r.status}`);
-    return (await r.json()) as Hit[];
-  };
-  // By title and artist; failing that as free text, which forgives credits written differently.
-  const best = pick(await search(artist ? { track_name: name, artist_name: artist } : { track_name: name }), secs)
-    ?? pick((await search({ q: `${name} ${artist}`.trim() })).filter((r) => alike(r.trackName, name) && (!artist || alike(r.artistName, artist))), secs);
+  // An exact match first (LRCLIB's own: title, artist, album, and length within 2 s), then a search by title
+  // and artist, then one as free text, which forgives credits written differently.
+  const exact = artist ? await lrclibApi<Hit>("get", { track_name: name, artist_name: artist, ...(t.album && { album_name: t.album }), ...(secs && { duration: String(secs) }) }) : undefined;
+  const best = pick(exact ? [exact] : [], secs)
+    ?? pick((await lrclibApi<Hit[]>("search", artist ? { track_name: name, artist_name: artist } : { track_name: name })) ?? [], secs)
+    ?? pick(((await lrclibApi<Hit[]>("search", { q: `${name} ${artist}`.trim() })) ?? []).filter((r) => alike(r.trackName, name) && (!artist || alike(r.artistName, artist))), secs);
   if (!best) return;
   const source = "LRCLIB";
   if (rank(best) === 0) {
@@ -156,14 +162,50 @@ function tidy(lines: Line[]): Line[] {
   return out;
 }
 
-// LRCLIB first, then YouTube Music's plain lyrics. null: neither has any for this song.
+// NetEase Cloud Music, for synced lyrics LRCLIB doesn't have: a search, then the song's lyrics. Its API
+// expects its own web player, so requests carry its Referer, a browser's User-Agent and an NMTID cookie (a
+// random one, as NeteaseCloudMusicApi sends). A page can't set those or call it across origins, so in a
+// browser this source fails and there are no lyrics; in the app it goes through Rust.
+const hex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+const NETEASE = {
+  Referer: "https://music.163.com/",
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  Cookie: `NMTID=${hex(16)}; os=pc; appver=3.1.17.204416`,
+};
+type Song = { id: number; name: string; artists?: { name: string }[]; duration?: number }; // duration in ms
+// The credits NetEase opens its lyrics with: "作词 : …", "Composer: …".
+const CREDIT = /^(作词|作曲|编曲|制作人?|监制|混音|母带|和声|录音|吉他|贝斯|鼓|弦乐|出品|发行|企划|统筹|词|曲|lyrics|lyricist|composer|producers?|arranger|written by|mix(ed|ing)?|master(ed|ing)?)\s*(by)?\s*[:：]/i;
+
+async function netease(t: Track): Promise<Lyrics | undefined> {
+  const name = title(t);
+  const artist = t.artists[0]?.name ?? "";
+  const secs = seconds(t.duration);
+  const call = async (path: string, q: Record<string, string>, method = "GET") => {
+    const r = await http(`https://music.163.com/api/${path}?${new URLSearchParams(q)}`, { method, headers: NETEASE, signal: timeout() });
+    if (!r.ok) throw new Error(`NetEase: ${r.status}`);
+    return r.json();
+  };
+  const songs: Song[] = (await call("search/pc", { s: `${name} ${artist}`.trim(), type: "1", limit: "10", offset: "0" }, "POST"))?.result?.songs ?? [];
+  const song = songs.find((s) => alike(s.name, name) && (!artist || s.artists?.some((a) => alike(a.name, artist))) && (!secs || !s.duration || Math.abs(s.duration / 1000 - secs) <= 3));
+  if (!song) return;
+  const lrc: unknown = (await call("song/lyric", { id: String(song.id), lv: "1", kv: "1", tv: "-1" }))?.lrc?.lyric;
+  if (typeof lrc !== "string") return;
+  const source = "NetEase Cloud Music";
+  if (lrc.includes("纯音乐，请欣赏")) return { lines: [], synced: false, source, instrumental: true }; // "pure music, enjoy"
+  const lines = parseLrc(lrc).filter((l) => !CREDIT.test(l.text));
+  // Synced only: NetEase's untimed lyrics come stamped all at 0.
+  return lines.filter((l) => l.time > 0).length > 1 ? { lines: tidy(lines), synced: true, source } : undefined;
+}
+
+// Where lyrics come from, the first that has them: LRCLIB, then NetEase Cloud Music. When none has any there
+// are just no lyrics, with no error; a source that didn't answer is asked again the next time they're shown.
 async function find(t: Track): Promise<Lyrics | null> {
   let down = false;
-  const found = await lrclib(t).catch(() => void (down = true));
-  if (found) return found;
-  const yt = await ytLyrics(t.id).catch(() => undefined);
-  if (yt) return { lines: plain(yt.text), synced: false, source: "YouTube Music", credit: yt.credit };
-  if (down) throw new Error("LRCLIB didn't answer"); // try again later rather than say there are none
+  for (const source of [lrclib, netease]) {
+    const found = await source(t).catch(() => void (down = true));
+    if (found) return found;
+  }
+  if (down) throw new Error("A lyrics source didn't answer");
   return null;
 }
 

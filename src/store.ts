@@ -226,7 +226,7 @@ async function fillNext() {
   filling--;
 }
 // Changes a song wherever it's kept: your lists, the queue, recently played.
-function patch(id: string, p: Partial<Track>) {
+export function patch(id: string, p: Partial<Track>) {
   const fix = (list: Track[]) => (list.some((x) => x.id === id) ? list.map((x) => (x.id === id ? { ...x, ...p } : x)) : list);
   const l = useLibrary.getState();
   const liked = fix(l.liked), hidden = fix(l.hidden), playlists = l.playlists.map((pl) => ((t) => (t === pl.tracks ? pl : { ...pl, tracks: t }))(fix(pl.tracks)));
@@ -652,12 +652,14 @@ export const EQ_BANDS = [60, 150, 400, 1000, 2400, 15000];
 // system's Reduce Motion, so they look the same for everyone unless this is on. The Library page keeps
 // its view, order and filter; likedSort is how Liked Songs lists its songs (a playlist keeps its own).
 export type LibrarySort = "recents" | "added" | "name" | "creator";
+// trackCols: how song lists share their width between Title, Album and Date Added (views.tsx TrackList).
+export const TRACK_COLS: [number, number, number] = [5, 3, 2];
 export type LibraryFilter = "playlists" | "albums" | "artists" | "songs" | "downloaded";
 type Settings = {
   theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number;
   quality: Quality; normalize: boolean; crossfade: number; eq: number[];
   lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean;
-  libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort;
+  libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort; trackCols: [number, number, number];
 };
 export const useSettings = create<Settings>()(
   persist(
@@ -665,7 +667,7 @@ export const useSettings = create<Settings>()(
       theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320,
       quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
       lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
-      libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom",
+      libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom", trackCols: TRACK_COLS,
     }),
     { name: "settings" },
   ),

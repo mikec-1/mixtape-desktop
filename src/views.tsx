@@ -1,14 +1,14 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowUpDown, AudioLines, CircleArrowDown, CaseSensitive, Check, ChevronDown, Copy, Download, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpDown, AudioLines, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover,
-  shufflePlay, skipped, sortPlaylist, unavailable, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, useRecents, useSettings, useStore,
+  shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, useRecents, useSettings, useStore,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, groups, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
-import { art, artist, artistByName, collection, home, lastHome, search, type Album, type Artist, type Track } from "./yt";
+import { albumByName, art, artist, artistByName, collection, topSongs, home, lastHome, search, type Album, type Artist, type Track } from "./yt";
 import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { version } from "../package.json";
@@ -151,7 +151,7 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
     { text: hidden.some((x) => x.id === t.id) ? "Unhide Song" : "Hide Song", action: () => toggleHide(t) },
     ...(by.length ? [{ item: "Separator" as const }] : []),
     ...(by.length === 1 ? [{ text: `Go to ${by[0].name}`, action: () => goToArtist(by[0]) }] : by.length ? [{ text: "Go to Artist", items: by.map((a) => ({ text: a.name, action: () => goToArtist(a) })) }] : []),
-    ...(t.albumId ? [{ text: "Go to Album", action: () => open({ name: "collection", id: t.albumId! }) }] : []),
+    ...(t.album ? [{ text: "Go to Album", action: () => goToAlbum(t) }] : []),
   ]);
 }
 
@@ -418,7 +418,7 @@ export function Library() {
         </div>
       </div>
       {filter === "songs" ? (
-        songs.length ? <div className="mt-2"><TrackList tracks={songs.map((r) => r.t)} from="liked" /></div> : <p className="mt-6 text-muted">{q ? "No liked songs match." : "Tap the heart on any song and it lands here."}</p>
+        songs.length ? <div className="mt-2"><TrackList tracks={songs.map((r) => r.t)} from="liked" added /></div> : <p className="mt-6 text-muted">{q ? "No liked songs match." : "Tap the heart on any song and it lands here."}</p>
       ) : items.length ? (
         <LibraryItems items={items} view={view} />
       ) : (
@@ -785,7 +785,7 @@ export function PlaylistPage({ id }: { id: string }) {
           </div>
         )}
         {tracks.length ? (
-          <TrackList tracks={shown} playlist={playlist?.id} origin={rows.map((r) => r.i)} from={from} onMove={playlist && sort === "custom" ? (a, b) => movePlaylistTrack(id, a, b) : undefined} />
+          <TrackList tracks={shown} playlist={playlist?.id} origin={rows.map((r) => r.i)} from={from} added onMove={playlist && sort === "custom" ? (a, b) => movePlaylistTrack(id, a, b) : undefined} />
         ) : (
           <p className="text-muted">{playlist ? "Right-click any song and choose Add to Playlist." : "Tap the heart on any song and it lands here."}</p>
         )}
@@ -965,7 +965,10 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
 
 // The banner runs edge to edge and fades into the page; the about text floats on it.
 export function Artist({ id }: { id: string }) {
-  const { data, error } = useAsync(() => artist(id), [id]);
+  const { data: page, error } = useAsync(() => artist(id), [id]);
+  // Their top ten with lengths and albums, a moment after the page's own five (which have neither).
+  const { data: top } = useAsync(() => (page?.more ? topSongs(page.more) : undefined), [page?.more]);
+  const data = page && { ...page, songs: top?.length ? top : page.songs };
   const [all, setAll] = useState(false);
   const following = useLibrary((s) => s.followed.some((a) => a.id === id));
   const blocked = useLibrary((s) => !!data && s.blocked.some((b) => b.id === id || b.name.toLowerCase() === data.name.toLowerCase()));
@@ -1024,9 +1027,9 @@ export function Artist({ id }: { id: string }) {
         {data.songs.length > 0 && (
           <Section
             title="Popular Songs"
-            action={data.songs.length > 5 && <button onClick={() => setAll(!all)} className="press text-sm font-semibold text-muted hover:text-ink">{all ? "Show less" : "Show all"}</button>}
+            action={data.songs.length > 5 && <button onClick={() => setAll(!all)} className="press text-sm font-semibold text-muted hover:text-ink">{all ? "Show less" : "Show more"}</button>}
           >
-            <TrackList tracks={all ? data.songs : data.songs.slice(0, 5)} numbered onPlay={(i) => play(data.songs, i, from)} />
+            <TrackList tracks={all ? data.songs : data.songs.slice(0, 5)} numbered header={false} onPlay={(i) => play(data.songs, i, from)} />
           </Section>
         )}
         {data.albums.length > 0 && (
@@ -2401,60 +2404,155 @@ export function QueuePanel() {
   );
 }
 
-// A list of songs. from: the library key it's from (play() records it); origin: each row's place in the
-// list it's kept in, when shown in another order (for its menu); onMove: rows drag to reorder; times:
-// when each was played (History), shown in place of its length. Hidden songs and blocked artists' are dimmed.
-type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number, to: number) => void; times?: number[]; onPlay?: (i: number) => void };
-function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
+// A list of songs, under a header of its columns: #, Title, Album, Date Added (added: your own lists) and
+// length. The dividers between Title, Album and Date Added drag to share out the width (kept for every
+// list; a double-click puts it back). from: the library key it's from (play() records it); origin: each
+// row's place in the list it's kept in, when shown in another order (for its menu); onMove: rows drag to
+// reorder; times: when each was played (History), shown in place of its length; header false: without
+// the header (an artist's few top songs). plain: an album's own songs, numbered, without covers or album.
+// Hidden songs and blocked artists' are dimmed.
+type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number, to: number) => void; times?: number[]; added?: boolean; header?: boolean; onPlay?: (i: number) => void };
+function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, added, header = true, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
   const current = useStore((s) => s.queue[s.index]?.id);
   useLibrary((s) => s.hidden), useLibrary((s) => s.blocked), useOnline(); // re-dim as they change
   const saved = useOffline((s) => s.songs);
   useOffline((s) => s.art); // a cover just kept is drawn from disk
+  const cols = useSettings((s) => s.trackCols);
   const [drag, setDrag] = useState<number>();
   const [over, setOver] = useState<number>();
+  const num = numbered || plain;
+  // Which of Title, Album and Date Added show (by their place in trackCols), and the grid they make.
+  const flex = [0, ...(plain ? [] : [1]), ...(added ? [2] : [])];
+  const grid = { gridTemplateColumns: `${num ? "28px " : ""}${flex.map((c) => `minmax(0,${cols[c]}fr)`).join(" ")} 32px 56px` };
   return (
-    <ol>
-      {tracks.map((t, i) => {
-        const off = skipped(t);
-        const dim = off || unavailable(t);
-        return (
-          <li
-            key={t.id + i}
-            draggable={!!onMove}
-            onDragStart={(e) => ((e.dataTransfer.effectAllowed = "move"), setDrag(i))}
-            onDragOver={(e) => drag !== undefined && (e.preventDefault(), setOver(i))}
-            // Cleared here too: the move re-keys the rows, so dragend never reaches the moved one.
-            onDrop={() => (drag !== undefined && drag !== i && onMove?.(drag, i), setDrag(undefined), setOver(undefined))}
-            onDragEnd={() => (setDrag(undefined), setOver(undefined))}
-            onContextMenu={(e) => (e.preventDefault(), trackMenu(t, playlist ? { playlist, index: origin?.[i] ?? i } : undefined))}
-            className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors [contain-intrinsic-size:auto_56px] [content-visibility:auto] hover:bg-ink/[0.04] ${plain ? "grid-cols-[28px_1fr_32px_48px]" : numbered ? "grid-cols-[28px_40px_1fr_1fr_32px_48px]" : "grid-cols-[40px_1fr_1fr_32px_48px]"} ${drag === i ? "opacity-40" : ""} ${
-              over === i && drag !== undefined && drag !== i ? (drag > i ? "shadow-[inset_0_2px_var(--color-accent)]" : "shadow-[inset_0_-2px_var(--color-accent)]") : ""
-            }`}
-          >
-            <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
-            {numbered && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
-            {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" className={`size-10 rounded-lg bg-ink/[0.06] object-cover ${dim ? "opacity-40" : ""}`} />}
-            <div className={`min-w-0 ${dim ? "opacity-45" : ""}`}>
-              <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>
-                {off && <EyeOff size={14} aria-label="Hidden" className="mr-1.5 inline -translate-y-px text-muted" />}
-                {t.title}
+    <>
+      {header && <TrackHeader grid={grid} num={!!num} flex={flex} played={!!times} />}
+      <ol>
+        {tracks.map((t, i) => {
+          const off = skipped(t);
+          const dim = off || unavailable(t);
+          return (
+            <li
+              key={t.id + i}
+              draggable={!!onMove}
+              onDragStart={(e) => ((e.dataTransfer.effectAllowed = "move"), setDrag(i))}
+              onDragOver={(e) => drag !== undefined && (e.preventDefault(), setOver(i))}
+              // Cleared here too: the move re-keys the rows, so dragend never reaches the moved one.
+              onDrop={() => (drag !== undefined && drag !== i && onMove?.(drag, i), setDrag(undefined), setOver(undefined))}
+              onDragEnd={() => (setDrag(undefined), setOver(undefined))}
+              onContextMenu={(e) => (e.preventDefault(), trackMenu(t, playlist ? { playlist, index: origin?.[i] ?? i } : undefined))}
+              style={grid}
+              className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors [contain-intrinsic-size:auto_56px] [content-visibility:auto] hover:bg-ink/[0.04] ${drag === i ? "opacity-40" : ""} ${
+                over === i && drag !== undefined && drag !== i ? (drag > i ? "shadow-[inset_0_2px_var(--color-accent)]" : "shadow-[inset_0_-2px_var(--color-accent)]") : ""
+              }`}
+            >
+              <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
+              {num && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
+              <div className="flex min-w-0 items-center gap-3">
+                {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" className={`size-10 shrink-0 rounded-lg bg-ink/[0.06] object-cover ${dim ? "opacity-40" : ""}`} />}
+                <div className={`min-w-0 ${dim ? "opacity-45" : ""}`}>
+                  <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>
+                    {off && <EyeOff size={14} aria-label="Hidden" className="mr-1.5 inline -translate-y-px text-muted" />}
+                    {t.title}
+                  </div>
+                  <div className="truncate text-sm text-muted">
+                    {saved[t.id] && <CircleArrowDown size={14} aria-label="Downloaded" className="mr-1 inline -translate-y-px fill-accent text-paper" />}
+                    <Artists list={t.artists} />
+                  </div>
+                </div>
               </div>
-              <div className="truncate text-sm text-muted">
-                {saved[t.id] && <CircleArrowDown size={14} aria-label="Downloaded" className="mr-1 inline -translate-y-px fill-accent text-paper" />}
-                <Artists list={t.artists} />
-              </div>
-            </div>
-            {!plain && (
-              <div className={`min-w-0 truncate text-sm text-muted ${dim ? "opacity-45" : ""}`}>
-                {t.albumId ? <button onClick={() => open({ name: "collection", id: t.albumId! })} className="relative max-w-full truncate text-left hover:text-ink hover:underline">{t.album}</button> : t.album}
-              </div>
-            )}
-            <LikeButton track={t} />
-            <div className="flex justify-end text-sm text-muted tabular-nums">{current === t.id ? <AudioLines size={16} className="text-accent" /> : times ? new Date(times[i]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : t.duration}</div>
-          </li>
-        );
-      })}
-    </ol>
+              {!plain && (
+                <div className={`min-w-0 truncate text-sm text-muted ${dim ? "opacity-45" : ""}`}>
+                  {t.album && <button onClick={() => goToAlbum(t)} className="relative max-w-full truncate text-left hover:text-ink hover:underline">{t.album}</button>}
+                </div>
+              )}
+              {added && <div className="min-w-0 truncate text-sm text-muted">{t.at && t.at > 1e11 ? ago(t.at) : ""}</div>}
+              <LikeButton track={t} />
+              <div className="flex justify-end text-sm text-muted tabular-nums">{current === t.id ? <AudioLines size={16} className="text-accent" /> : times ? new Date(times[i]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : t.duration}</div>
+            </li>
+          );
+        })}
+      </ol>
+    </>
+  );
+}
+
+const COLUMN_NAMES = ["Title", "Album", "Date Added"];
+// The header over a list's columns, the same grid as its rows. Dragging a divider moves width between the
+// two columns beside it; arrows do it from the keyboard.
+function TrackHeader({ grid, num, flex, played }: { grid: CSSProperties; num: boolean; flex: number[]; played: boolean }) {
+  const row = useRef<HTMLDivElement>(null);
+  const resizing = useRef<{ x: number; cols: [number, number, number]; per: number }>(undefined);
+  const move = (left: number, right: number, by: number) => {
+    const cols = [...(resizing.current?.cols ?? useSettings.getState().trackCols)] as [number, number, number];
+    const total = flex.reduce((n, c) => n + cols[c], 0);
+    const least = total * 0.12; // no column narrower than an eighth or so
+    const d = Math.max(least - cols[left], Math.min(cols[right] - least, by));
+    cols[left] += d, cols[right] -= d;
+    useSettings.setState({ trackCols: cols });
+  };
+  const divider = (k: number) => {
+    const [left, right] = [flex[k - 1], flex[k]];
+    return (
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={`Resize ${COLUMN_NAMES[left]} and ${COLUMN_NAMES[right]}`}
+        tabIndex={0}
+        onPointerDown={(e) => {
+          if (e.button !== 0 || !row.current) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const cols = useSettings.getState().trackCols;
+          // How wide one share is: the row less its fixed columns, padding and gaps, over the shares shown.
+          const fixed = (num ? 28 : 0) + 32 + 56 + 24 + 16 * (flex.length + (num ? 2 : 1));
+          resizing.current = { x: e.clientX, cols, per: (row.current.clientWidth - fixed) / flex.reduce((n, c) => n + cols[c], 0) };
+          document.documentElement.style.cursor = "col-resize";
+        }}
+        onPointerMove={(e) => resizing.current && move(left, right, (e.clientX - resizing.current.x) / resizing.current.per)}
+        onLostPointerCapture={() => ((resizing.current = undefined), (document.documentElement.style.cursor = ""))}
+        onDoubleClick={() => useSettings.setState({ trackCols: TRACK_COLS })}
+        onKeyDown={(e) => {
+          const by = { ArrowLeft: -0.25, ArrowRight: 0.25 }[e.key];
+          if (by) move(left, right, by), e.preventDefault();
+        }}
+        // Centred in the 16 px gap before its column.
+        className="absolute -inset-y-1.5 -left-[14px] z-10 w-3 cursor-col-resize outline-none before:absolute before:inset-y-1.5 before:left-[5px] before:w-0.5 before:rounded-full before:bg-ink/15 before:transition-colors hover:before:bg-accent focus-visible:before:bg-accent"
+      />
+    );
+  };
+  return (
+    <div ref={row} style={grid} className="mb-1 grid h-9 items-center gap-4 border-b border-ink/10 px-3 text-[13px] font-semibold text-muted select-none">
+      {num && <span className="text-center">#</span>}
+      {flex.map((c, k) => (
+        <div key={c} className="relative min-w-0">
+          {k > 0 && divider(k)}
+          <span className="block truncate">{COLUMN_NAMES[c]}</span>
+        </div>
+      ))}
+      <span />
+      <span className="flex justify-end">{played ? "Played" : <Clock3 size={15} aria-label="Length" />}</span>
+    </div>
+  );
+}
+
+// When a song was added: how long ago this week, the date before that.
+function ago(at: number) {
+  const s = (Date.now() - at) / 1000;
+  const n = (x: number, unit: string) => `${Math.floor(x)} ${unit}${Math.floor(x) === 1 ? "" : "s"} ago`;
+  if (s < 60) return "Just now";
+  if (s < 3600) return n(s / 60, "minute");
+  if (s < 86_400) return n(s / 3600, "hour");
+  if (s < 7 * 86_400) return n(s / 86_400, "day");
+  return new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+// An album's page. A song kept without the link to it looks it up by name and artist, then keeps the link.
+function goToAlbum(t: Track) {
+  if (t.albumId) return open({ name: "collection", id: t.albumId });
+  if (!t.album) return;
+  albumByName(t.album, t.artists[0]?.name).then(
+    (id) => (id ? (patch(t.id, { albumId: id }), open({ name: "collection", id })) : notify({ text: "No Page for This Album", detail: t.album })),
+    () => notify({ text: "Couldn’t Find This Album", detail: t.album }),
   );
 }
 

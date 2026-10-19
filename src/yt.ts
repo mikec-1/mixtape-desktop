@@ -120,16 +120,26 @@ async function loadHome(): Promise<Shelf[]> {
 export async function artist(id: string) {
   const a = await (await yt).music.getArtist(id);
   const header = a.header?.as(YTNodes.MusicImmersiveHeader, YTNodes.MusicVisualHeader);
-  const shelf = (title: string) =>
-    a.sections.find((s) => (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) === title)?.contents;
+  const section = (title: string) => a.sections.find((s) => (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) === title);
+  const shelf = (title: string) => section(title)?.contents;
+  const top = section("Top songs");
+  const more = top?.is(YTNodes.MusicShelf) ? (top.endpoint ?? top.bottom_button?.endpoint)?.payload?.browseId : undefined;
   return {
     name: header?.title.text ?? "",
     about: header?.is(YTNodes.MusicImmersiveHeader) ? header.description?.text : undefined,
     banner: (Array.isArray(header?.thumbnail) ? header.thumbnail : header?.thumbnail?.contents)?.[0]?.url,
+    // The page lists five, without their lengths; more is the whole list's playlist (topSongs).
     songs: toTracks(shelf("Top songs")?.filterType(YTNodes.MusicResponsiveListItem)),
+    more: more as string | undefined,
     albums: toAlbums(shelf("Albums")?.filterType(YTNodes.MusicTwoRowItem)),
     singles: toAlbums(shelf("Singles & EPs")?.filterType(YTNodes.MusicTwoRowItem)),
   };
+}
+
+// An artist's ten most played songs, with their lengths and albums: the first page of their top songs list.
+export async function topSongs(id: string) {
+  const p = await (await yt).music.getPlaylist(id);
+  return toTracks(p.items?.filterType(YTNodes.MusicResponsiveListItem)).slice(0, 10);
 }
 
 export type Collection = { title: string; by: Artist[]; kind?: string; meta: string[]; about?: string; thumb?: string; tracks: Track[] };
@@ -272,6 +282,21 @@ export function artistByName(name: string) {
       return (list.find((a) => a.name?.toLocaleLowerCase() === key) ?? list[0])?.id;
     })().catch((e) => (named.delete(key), Promise.reject(e))));
   return named.get(key)!;
+}
+
+// An album's page by its name and artist, for a song kept without the link (albumId): the album search,
+// the result with that name (by that artist, if there's more than one).
+const albums = new Map<string, Promise<string | undefined>>();
+export function albumByName(name: string, artist = "") {
+  const key = `${name}\u0000${artist}`.toLocaleLowerCase();
+  const same = (a = "", b = "") => a.toLocaleLowerCase() === b.toLocaleLowerCase();
+  if (!albums.has(key))
+    albums.set(key, (async () => {
+      const list = (await (await yt).music.search(`${name} ${artist}`.trim(), { type: "album" })).albums?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? [];
+      const named = list.filter((a) => same(a.title, name));
+      return (named.find((a) => same(a.author?.name, artist)) ?? named[0])?.id;
+    })().catch((e) => (albums.delete(key), Promise.reject(e))));
+  return albums.get(key)!;
 }
 
 // YouTube serves fragmented (DASH) MP4, which WebKit can't play from a plain src, so feed it via MSE.

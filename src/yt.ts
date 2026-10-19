@@ -272,17 +272,20 @@ export async function details(id: string) {
   }
 }
 
-// An artist's page by name, for one YT Music didn't link: the artist search finds by that name.
-const named = new Map<string, Promise<string | undefined>>();
-export function artistByName(name: string) {
+// An artist by name, for one YT Music didn't link (and the artists to pick from on first launch): the
+// artist search finds by that name.
+const named = new Map<string, Promise<{ id: string; name: string; thumb?: string } | undefined>>();
+export function findArtist(name: string) {
   const key = name.toLocaleLowerCase();
   if (!named.has(key))
     named.set(key, (async () => {
       const list = (await (await yt).music.search(name, { type: "artist" })).artists?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? [];
-      return (list.find((a) => a.name?.toLocaleLowerCase() === key) ?? list[0])?.id;
+      const a = list.find((x) => x.name?.toLocaleLowerCase() === key) ?? list[0];
+      return a?.id ? { id: a.id, name: a.name ?? name, thumb: a.thumbnail?.contents?.[0]?.url } : undefined;
     })().catch((e) => (named.delete(key), Promise.reject(e))));
   return named.get(key)!;
 }
+export const artistByName = (name: string) => findArtist(name).then((a) => a?.id);
 
 // An album's page by its name and artist, for a song kept without the link (albumId): the album search,
 // the result with that name (by that artist, if there's more than one).

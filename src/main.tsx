@@ -8,10 +8,10 @@ let Root;
 if (mini) Root = (await import("./mini")).default;
 else {
   Root = (await import("./App")).default;
-  // Draw once the library, your own lyrics and what's downloaded are read (a few ms), so none flashes in
-  // late, and offline the first covers come from disk.
-  const [{ useLibrary }, { useMine }, { useOffline, ready }] = await Promise.all([import("./store"), import("./lyrics"), import("./offline")]);
-  for (const { persist } of [useLibrary, useMine, useOffline]) if (!persist.hasHydrated()) await new Promise((r) => persist.onFinishHydration(r));
+  // Draw once the library, your own lyrics, what's downloaded and your files are read (a few ms), so none
+  // flashes in late, and offline the first covers come from disk.
+  const [{ useLibrary }, { useMine }, { useOffline, ready }, { useLocal }] = await Promise.all([import("./store"), import("./lyrics"), import("./offline"), import("./local")]);
+  for (const { persist } of [useLibrary, useMine, useOffline, useLocal]) if (!persist.hasHydrated()) await new Promise((r) => persist.onFinishHydration(r));
   await ready;
 }
 

@@ -2,7 +2,9 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
 import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { useExtras, useLine, useLyrics } from "./lyrics";
-import { Artist, Artists, CollectionPage, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, QueuePanel, Search, Settings, trackMenu } from "./views";
+import { Artist, Artists, CollectionPage, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, Search, Settings, SharedPage, trackMenu } from "./views";
+import { useAccount } from "./account";
+import { Welcome } from "./welcome";
 import { art, type Track } from "./yt";
 
 // A picture that can't load (offline, say) leaves its grey tile rather than WebKit's broken-image mark;
@@ -10,7 +12,17 @@ import { art, type Track } from "./yt";
 addEventListener("error", (e) => e.target instanceof HTMLImageElement && (e.target.style.visibility = "hidden"), true);
 addEventListener("load", (e) => e.target instanceof HTMLImageElement && e.target.style.visibility && (e.target.style.visibility = ""), true);
 
+// The welcome is for a new library: one that's already got things in it (from before it existed) skips it.
+function firstLaunch() {
+  if (localStorage.onboarded) return false;
+  const l = useLibrary.getState();
+  const fresh = !l.liked.length && !l.playlists.length && !l.saved.length && !l.followed.length && !useAccount.getState().user;
+  if (!fresh) localStorage.onboarded = 1;
+  return fresh;
+}
+
 export default function App() {
+  const [welcome, setWelcome] = useState(firstLaunch);
   const stack = useStore((s) => s.stack);
   const covered = useStore((s) => !!s.sheet || !!s.dialog); // the sheet or a dialog is over the page
   const root = stack[0].name;
@@ -37,8 +49,9 @@ export default function App() {
 
   return (
     // The sidebar and one big page card, the player under the page. The gaps drag the window.
-    // --sidebar and --panel centre the toasts on the page card.
-    <div data-tauri-drag-region className="flex h-full gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
+    // --sidebar and --panel centre the toasts on the page card. The welcome goes over all of it.
+    <>
+    <div data-tauri-drag-region inert={welcome} className="flex h-full gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
       <Sidebar root={root} open={open} width={width} inert={covered} />
 
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -49,7 +62,7 @@ export default function App() {
           {stack.map((view, i) => (
             <div key={i + view.name + ("id" in view ? view.id : "")} hidden={i !== stack.length - 1} className="absolute inset-0 overflow-x-hidden overflow-y-auto pb-10">
               {"id" in view ? (
-                view.name === "artist" ? <Artist id={view.id} /> : view.name === "playlist" ? <PlaylistPage id={view.id} /> : view.name === "folder" ? <FolderPage id={view.id} /> : <CollectionPage id={view.id} />
+                view.name === "artist" ? <Artist id={view.id} /> : view.name === "playlist" ? <PlaylistPage id={view.id} /> : view.name === "folder" ? <FolderPage id={view.id} /> : view.name === "shared" ? <SharedPage id={view.id} /> : view.name === "profile" ? <ProfilePage id={view.id} /> : <CollectionPage id={view.id} />
               ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : view.name === "settings" ? <Settings /> : view.name === "history" ? <HistoryPage /> : view.name === "local" ? <LocalPage /> : <Library />}
             </div>
           ))}
@@ -69,6 +82,8 @@ export default function App() {
       <Toast />
       <Offline />
     </div>
+    {welcome && <Welcome onDone={() => setWelcome(false)} />}
+    </>
   );
 }
 

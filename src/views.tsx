@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowUpDown, AudioLines, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpDown, AudioLines, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
-  EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
-  movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover,
+  EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
+  copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
   shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, useRecents, useSettings, useStore,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
@@ -11,6 +11,7 @@ import { asText, estimateWords, groups, isRtl, lineNow, lrcTime, lyricsNow, remo
 import { albumByName, art, artist, artistByName, collection, topSongs, home, lastHome, search, type Album, type Artist, type Track } from "./yt";
 import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
+import { canSignIn, deleteAccount, enterCode, exportAll, fromLink, playlistLink, profileLink, publicProfile, sendCode, setProfile, sharedLink, sharedPlaylist, signInWith, signOut, syncNow, useAccount, type Profile } from "./account";
 import { version } from "../package.json";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
@@ -54,7 +55,12 @@ export function Search() {
     return () => clearTimeout(t);
   }, [query]);
   const online = useOnline(); // a search that failed offline runs again on reconnect
-  const { data, error, loading } = useAsync(() => (term ? search(term) : undefined), [term, online]);
+  const { data, error, loading } = useAsync(() => (term && !fromLink(term) ? search(term) : undefined), [term, online]);
+  // A Sleeve link pasted in opens what it's for.
+  useEffect(() => {
+    const view = fromLink(query);
+    if (view) useStore.setState({ query: "" }), open(view);
+  }, [query]);
   const top = data?.top;
 
   return (
@@ -694,6 +700,7 @@ export function PlaylistPage({ id }: { id: string }) {
   const likedSort = useSettings((s) => s.likedSort);
   const pinned = useLibrary((s) => s.pinned.includes(libraryKey("playlist", id)));
   const folder = useLibrary((s) => s.folders.find((f) => f.id === playlist?.folder));
+  const signedIn = useAccount((s) => !!s.user);
   const file = useRef<HTMLInputElement>(null);
   const tracks = playlist?.tracks ?? liked;
   useEffect(() => fillIn(tracks), [tracks]); // albums, lengths and artists some songs came without
@@ -717,6 +724,14 @@ export function PlaylistPage({ id }: { id: string }) {
         ],
       },
       { text: "Duplicate", action: () => open({ name: "playlist", id: duplicatePlaylist(id)! }) },
+      // Sharing needs an account: the link is to your copy on the server.
+      ...(playlist && signedIn
+        ? [
+            { item: "Separator" as const },
+            { text: "Copy Link", action: () => (playlist.public || setPublic(id, true), copyLink(playlistLink(id), playlist.public ? undefined : "Anyone with it can see this playlist")) },
+            ...(playlist.public ? [{ text: "Make Private", action: () => setPublic(id, false) }] : []),
+          ]
+        : []),
       { item: "Separator" as const },
       { text: "Delete Playlist", action: () => (back(), deletePlaylist(id)) },
     ]);
@@ -769,7 +784,7 @@ export function PlaylistPage({ id }: { id: string }) {
             />
           )
         }
-        meta={[folder?.name ?? (playlist ? "Playlist" : "Library"), count(tracks.length)].join(" · ")}
+        meta={[folder?.name ?? (playlist ? (playlist.public && signedIn ? "Public Playlist" : "Playlist") : "Library"), count(tracks.length)].join(" · ")}
       >
         <PlayButtons tracks={shown} from={from} />
         <DownloadButton id={from} about={() => ({ title: playlist?.name ?? "Liked Songs", thumb: playlist?.cover ?? tracks[0]?.thumb })} />
@@ -795,15 +810,108 @@ export function PlaylistPage({ id }: { id: string }) {
 }
 
 // An image you picked, as a playlist cover: cropped square and drawn at 640 px as a JPEG, so the library
-// stays small (about 80 KB a cover) and the cover loads at once.
-async function coverFrom(file: File) {
+// stays small (about 80 KB a cover) and the cover loads at once. Profile pictures are 256 px.
+async function coverFrom(file: File, size = 640) {
   const img = await createImageBitmap(file);
   const side = Math.min(img.width, img.height);
   const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = Math.min(640, side);
+  canvas.width = canvas.height = Math.min(size, side);
   canvas.getContext("2d")!.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
   img.close();
   return canvas.toDataURL("image/jpeg", 0.86);
+}
+
+const copyLink = (link: string, detail = link) => navigator.clipboard.writeText(link).then(() => notify({ text: "Link Copied", detail }), report);
+
+// Someone's public playlist, from its link: play it, or save a copy to your library.
+export function SharedPage({ id }: { id: string }) {
+  const online = useOnline();
+  const { data, error } = useAsync(() => (canSignIn ? sharedPlaylist(id) : Promise.reject(new Error("Accounts aren’t set up"))), [id, online]);
+  if (data === null) return <p className="px-8 pt-20 text-muted">This playlist isn’t shared any more.</p>;
+  if (!data && error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t open this playlist. Check your connection and try again.</p>;
+  if (!data) return <Skeleton className="h-[380px] bg-ink/[0.04]" />;
+  const p = data.playlist;
+  const owner = id.split("/")[0];
+  return (
+    <div className="animate-enter">
+      <Masthead
+        cover={<PlaylistCover id={p.id} tracks={p.tracks} cover={p.cover} />}
+        bg={p.cover ?? p.tracks[0]?.thumb}
+        fill={tint(p.id)}
+        title={<h1 className={title(p.name)}>{p.name}</h1>}
+        sub={
+          <button onClick={() => open({ name: "profile", id: owner })} className="flex items-center gap-2 hover:underline">
+            <Avatar profile={data.owner} className="size-7 text-sm" /> {data.owner.name || "Someone"}
+          </button>
+        }
+        meta={["Public Playlist", count(p.tracks.length)].join(" · ")}
+      >
+        <PlayButtons tracks={p.tracks} />
+        <button onClick={() => copyPlaylist(p)} className={`${pill} bg-white/20 px-4 hover:bg-white/30`}>
+          <Plus size={16} strokeWidth={2.6} /> Save a Copy
+        </button>
+        <button onClick={() => copyLink(sharedLink(id))} aria-label="Copy Link" title="Copy Link" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
+          <Link size={17} />
+        </button>
+      </Masthead>
+      <div className="mt-6 px-8">
+        {p.about && <p className="mb-6 line-clamp-2 max-w-2xl text-[15px] leading-relaxed text-ink/65">{p.about}</p>}
+        {p.tracks.length ? <TrackList tracks={p.tracks} /> : <p className="text-muted">No songs in it yet.</p>}
+      </div>
+    </div>
+  );
+}
+
+// A picture, or the first letter of the name on a colour.
+function Avatar({ profile, className }: { profile?: Profile; className: string }) {
+  if (profile?.avatar) return <img src={profile.avatar} alt="" className={`shrink-0 rounded-full bg-ink/[0.06] object-cover ${className}`} />;
+  return <span className={`grid shrink-0 place-items-center rounded-full bg-linear-135 from-[#ff375f] to-[#ff9f0a] font-extrabold text-white ${className}`}>{(profile?.name || "?").trim()[0]?.toUpperCase()}</span>;
+}
+
+// Someone's profile: their name and picture, and the playlists they've made public.
+export function ProfilePage({ id }: { id: string }) {
+  const online = useOnline();
+  const mine = useAccount((s) => s.user?.id === id);
+  const synced = useAccount((s) => (mine ? s.synced : 0)); // your own: as it is after each sync
+  const { data, error } = useAsync(() => (canSignIn ? publicProfile(id) : Promise.reject(new Error("Accounts aren’t set up"))), [id, online, synced]);
+  if (data === null) return <p className="px-8 pt-20 text-muted">There’s no Sleeve profile here any more.</p>;
+  if (!data && error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t open this profile. Check your connection and try again.</p>;
+  if (!data) return <Skeleton className="h-[300px] bg-ink/[0.04]" />;
+  const name = data.profile.name || "Sleeve Listener";
+  return (
+    <div className="animate-enter px-8 pt-20">
+      <div className="flex items-end gap-8">
+        <Avatar profile={data.profile} className="size-[clamp(120px,16cqw,200px)] text-7xl shadow-xl shadow-black/20" />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-muted">Profile</div>
+          <h1 className={title(name)}>{name}</h1>
+          <div className="mt-2 text-muted">{plural(data.playlists.length, "public playlist")}</div>
+          <div className="mt-5 flex gap-2">
+            <button onClick={() => copyLink(profileLink(id))} className={quiet}><Link size={16} /> Copy Link</button>
+            {mine && <button onClick={() => (go("settings"), useStore.setState({ pane: "account" }))} className={quiet}>Edit Profile</button>}
+          </div>
+        </div>
+      </div>
+      <Section title="Public Playlists">
+        {data.playlists.length ? (
+          <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-6">
+            {data.playlists.map((p) => (
+              <li key={p.id} className="relative">
+                <button onClick={() => open({ name: "shared", id: `${id}/${p.id}` })} aria-label={`Open ${p.name}`} className="hit" />
+                <div className="pointer-events-none aspect-square w-full overflow-hidden rounded-xl bg-ink/[0.06] shadow-sm">
+                  <PlaylistCover id={p.id} cover={p.cover} tracks={p.thumbs.map((thumb, i) => ({ id: `${i}`, title: "", artists: [], thumb: thumb ?? undefined }))} />
+                </div>
+                <div className="pointer-events-none mt-2.5 truncate font-semibold">{p.name}</div>
+                <div className="pointer-events-none truncate text-sm text-muted">{count(p.count)}</div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-muted">{mine ? "Make a playlist public from its page: ••• then Copy Link." : "Nothing public yet."}</p>
+        )}
+      </Section>
+    </div>
+  );
 }
 
 // A folder of your playlists: rename it, play them all, add a playlist straight into it.
@@ -1844,21 +1952,24 @@ const keys: [string, string[]][] = [
 
 // The file comes from anywhere, so check its shape before it replaces the library. Exports from before
 // follows, folders, pins and hiding have none of them.
-async function restore(file: File) {
+export async function restore(file: File) {
   const ids = (x: unknown) => Array.isArray(x) && x.every((y) => typeof y?.id === "string");
   const maybe = (x: unknown) => x === undefined || ids(x);
   try {
-    const { liked, saved, playlists, followed, folders, pinned, hidden, blocked } = JSON.parse(await file.text());
+    const { liked, saved, playlists, followed, folders, pinned, hidden, blocked, lyrics } = JSON.parse(await file.text());
     const names = (x: unknown) => x === undefined || (Array.isArray(x) && x.every((y) => typeof y?.name === "string"));
     const keys = pinned === undefined || (Array.isArray(pinned) && pinned.every((k: unknown) => typeof k === "string"));
     if (!ids(liked) || !ids(saved) || !ids(playlists) || !playlists.every((p: { tracks: unknown }) => ids(p.tracks)) || !maybe(followed) || !maybe(folders) || !maybe(hidden) || !names(blocked) || !keys) throw 0;
     restoreLibrary({ liked, saved, playlists, ...(followed && { followed }), ...(folders && { folders }), ...(pinned && { pinned }), ...(hidden && { hidden }), ...(blocked && { blocked }) });
+    // A full export (Settings → Account) has your lyrics too: added to what's here.
+    if (lyrics && typeof lyrics === "object" && Object.values(lyrics).every((m) => typeof (m as { text?: unknown })?.text === "string")) useMine.setState((s) => ({ songs: { ...s.songs, ...lyrics } }));
   } catch {
     notify({ text: "Couldn’t Restore", detail: `${file.name} isn’t a Sleeve library export` });
   }
 }
 
 const panes = [
+  { id: "account", label: "Account" },
   { id: "appearance", label: "Appearance" },
   { id: "playback", label: "Playback" },
   { id: "lyrics", label: "Lyrics" },
@@ -1868,12 +1979,13 @@ const panes = [
 ] as const;
 
 const btn = "press flex h-9 items-center gap-2 rounded-full px-4 text-sm font-semibold disabled:opacity-50";
-const solid = `${btn} bg-ink text-paper`;
-const quiet = `${btn} bg-ink/[0.07] hover:bg-ink/[0.12]`;
+export const solid = `${btn} bg-ink text-paper`;
+export const quiet = `${btn} bg-ink/[0.07] hover:bg-ink/[0.12]`;
 
 // Its own list of panes beside the content, like System Settings.
 export function Settings() {
-  const [pane, setPane] = useState<(typeof panes)[number]["id"]>("appearance");
+  const pane = useStore((s) => s.pane) ?? "account";
+  const setPane = (pane: string) => useStore.setState({ pane });
   return (
     <div className="animate-enter px-8 pt-14">
       <h1 className="text-display">Settings</h1>
@@ -1886,10 +1998,168 @@ export function Settings() {
           ))}
         </nav>
         <div key={pane} className="max-w-3xl min-w-0 flex-1 animate-enter">
-          {pane === "appearance" ? <Appearance /> : pane === "playback" ? <Playback /> : pane === "lyrics" ? <LyricsPane /> : pane === "library" ? <LibraryPane /> : pane === "shortcuts" ? <Shortcuts /> : <About />}
+          {pane === "account" ? <AccountPane /> : pane === "appearance" ? <Appearance /> : pane === "playback" ? <Playback /> : pane === "lyrics" ? <LyricsPane /> : pane === "library" ? <LibraryPane /> : pane === "shortcuts" ? <Shortcuts /> : <About />}
         </div>
       </div>
     </div>
+  );
+}
+
+// Signing in: Apple, Google, or a six-digit code by email (it goes in as soon as it's typed).
+export function SignIn() {
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState<string>();
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState<string>();
+  const [error, setError] = useState("");
+  const run = (what: string, fn: () => Promise<unknown>) => {
+    setBusy(what), setError("");
+    fn().catch((e) => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(undefined));
+  };
+  const verify = (c: string) => sent && run("code", () => enterCode(sent, c).catch((e) => (setCode(""), Promise.reject(e))));
+  const wide = "press flex h-11 w-full items-center justify-center gap-2.5 rounded-full font-semibold disabled:opacity-50";
+  const field = "h-11 rounded-full bg-ink/[0.07] px-5 outline-none placeholder:text-muted focus-visible:outline-2 focus-visible:outline-accent";
+  return (
+    <div className="flex w-full max-w-sm flex-col gap-2.5">
+      <button onClick={() => run("apple", () => signInWith("apple"))} disabled={!!busy} className={`${wide} bg-ink text-paper`}>
+        <svg viewBox="0 0 24 24" aria-hidden className="size-[18px] fill-current"><path d="M16.37 1.43c0 1.14-.5 2.27-1.18 3.08-.74.9-1.99 1.57-2.99 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.57-2.27 1.2-2.98.81-.94 2.15-1.64 3.25-1.68.03.13.06.28.06.43zm4.56 15.71c-.03.07-.46 1.58-1.52 3.12-.94 1.34-1.94 2.71-3.43 2.71-1.52 0-1.9-.88-3.63-.88-1.7 0-2.3.91-3.67.91-1.38 0-2.33-1.26-3.43-2.8C4 18.38 2.97 15.57 2.97 12.92c0-4.28 2.8-6.55 5.55-6.55 1.45 0 2.67.95 3.6.95.86 0 2.22-1.01 3.9-1.01.61 0 2.89.06 4.37 2.19-.13.09-2.38 1.37-2.38 4.19 0 3.26 2.85 4.42 2.95 4.45z" /></svg>
+        Continue with Apple
+      </button>
+      <button onClick={() => run("google", () => signInWith("google"))} disabled={!!busy} className={`${wide} bg-ink/[0.07] hover:bg-ink/[0.12]`}>
+        <svg viewBox="0 0 48 48" aria-hidden className="size-[18px]">
+          <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z" />
+          <path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+          <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2A11.9 11.9 0 0 1 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+          <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3a12 12 0 0 1-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z" />
+        </svg>
+        Continue with Google
+      </button>
+      <div className="my-1.5 flex items-center gap-3 text-sm text-muted"><span className="h-px flex-1 bg-ink/10" />or<span className="h-px flex-1 bg-ink/10" /></div>
+      {!sent ? (
+        <form onSubmit={(e) => (e.preventDefault(), run("email", () => sendCode(email.trim()).then(() => setSent(email.trim()))))} className="flex gap-2">
+          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" aria-label="Email address" name="email" autoComplete="email" spellCheck={false} className={`${field} min-w-0 flex-1`} />
+          <button disabled={!!busy || !/\S@\S/.test(email)} className="press h-11 shrink-0 rounded-full bg-ink/[0.07] px-5 font-semibold hover:bg-ink/[0.12] disabled:opacity-50">{busy === "email" ? "Sending…" : "Send Code"}</button>
+        </form>
+      ) : (
+        <form onSubmit={(e) => (e.preventDefault(), verify(code))} className="flex flex-col gap-2">
+          <p className="text-sm text-muted">Enter the code we sent to <span className="font-semibold text-ink">{sent}</span>.</p>
+          <input
+            value={code}
+            onChange={(e) => {
+              const c = e.target.value.replace(/\D/g, "").slice(0, 6);
+              setCode(c);
+              if (c.length === 6) verify(c);
+            }}
+            disabled={busy === "code"}
+            autoFocus
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            placeholder="000000"
+            aria-label="Code"
+            name="code"
+            className={`${field} w-full text-center text-xl font-bold tracking-[0.4em] tabular-nums`}
+          />
+          <button type="button" onClick={() => (setSent(undefined), setCode(""), setError(""))} className="self-center text-sm text-muted hover:text-ink">Use a different email</button>
+        </form>
+      )}
+      {(busy === "apple" || busy === "google") && <p className="text-center text-sm text-muted">Finish signing in in your browser…</p>}
+      {error && <p role="alert" className="text-center text-sm font-medium text-[#ff375f]">{error}</p>}
+    </div>
+  );
+}
+
+// Your account: profile, sync, what's public, your data. Without one, signing in.
+function AccountPane() {
+  const { user, profile, state, synced, error } = useAccount();
+  const online = useOnline();
+  const playlists = useLibrary((s) => s.playlists);
+  const picture = useRef<HTMLInputElement>(null);
+  const [deleting, setDeleting] = useState<"ask" | "busy">();
+  if (!canSignIn)
+    return (
+      <>
+        <p className="max-w-xl text-muted">Accounts aren’t set up in this copy of Sleeve, so your library stays on this computer. Everything works without one.</p>
+        <button onClick={() => void exportAll()} className={`${quiet} mt-6`}><Download size={16} /> Export Your Data</button>
+      </>
+    );
+  if (!user)
+    return (
+      <>
+        <h2 className="text-3xl font-extrabold tracking-[-0.03em]">Sign in to Sleeve</h2>
+        <p className="mt-2 mb-8 max-w-md text-muted">Your library, playlists and lyrics, the same on every computer you use. Everything works without an account too.</p>
+        <SignIn />
+      </>
+    );
+  const status = !online ? "You’re offline. Changes sync when you’re back." : state === "syncing" ? "Syncing…" : state === "error" ? `Couldn’t sync: ${error}` : synced ? `Up to date. Last synced ${ago(synced).toLowerCase()}` : "Not synced yet";
+  return (
+    <>
+      <div className="flex items-center gap-5">
+        <button
+          onClick={() => (profile?.avatar ? popup([{ text: "Choose Picture…", action: () => picture.current?.click() }, { text: "Remove Picture", action: () => setProfile({ avatar: undefined }) }]) : picture.current?.click())}
+          aria-label="Change Picture"
+          title="Change Picture"
+          className="press group/avatar relative rounded-full"
+        >
+          <Avatar profile={profile} className="size-20 text-3xl" />
+          <span className="absolute inset-0 grid place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover/avatar:opacity-100"><ImagePlus size={22} /></span>
+        </button>
+        <input ref={picture} type="file" accept="image/*" hidden onChange={(e) => (e.target.files?.[0] && void coverFrom(e.target.files[0], 256).then((avatar) => setProfile({ avatar }), report), (e.target.value = ""))} />
+        <div className="min-w-0 flex-1">
+          <input value={profile?.name ?? ""} onChange={(e) => setProfile({ name: e.target.value })} placeholder="Your name" aria-label="Your name" name="profile-name" autoComplete="off" className="room w-full bg-transparent text-3xl font-extrabold tracking-[-0.03em] outline-none placeholder:text-muted" />
+          <div className="truncate text-muted">{user.email}</div>
+        </div>
+      </div>
+      <div className="mt-6 divide-y divide-ink/10">
+        <Row label="Library Sync" detail={status}>
+          <button onClick={() => void syncNow()} disabled={state === "syncing" || !online} className={quiet}>Sync Now</button>
+        </Row>
+        <Row label="Your Profile" detail="Your name, picture and public playlists, for anyone with the link">
+          <div className="flex gap-2">
+            <button onClick={() => open({ name: "profile", id: user.id })} className={quiet}>View</button>
+            <button onClick={() => copyLink(profileLink())} className={quiet}><Link size={16} /> Copy Link</button>
+          </div>
+        </Row>
+      </div>
+      <section className="mt-10">
+        <h2 className="mb-1 text-xl font-bold tracking-tight">Public Playlists</h2>
+        <p className="mb-3 text-sm text-muted">Anyone with a public playlist’s link can see it and play it, and it shows on your profile.</p>
+        {playlists.length ? (
+          <div className="divide-y divide-ink/10">
+            {playlists.map((p) => (
+              <div key={p.id} className="flex h-14 items-center gap-3">
+                <div className="size-10 shrink-0 overflow-hidden rounded-lg"><PlaylistCover id={p.id} tracks={p.tracks} cover={p.cover} small /></div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold">{p.name}</div>
+                  <div className="truncate text-sm text-muted">{count(p.tracks.length)}</div>
+                </div>
+                {p.public && <button onClick={() => copyLink(playlistLink(p.id))} aria-label={`Copy Link to ${p.name}`} title="Copy Link" className="press grid size-9 place-items-center rounded-full text-muted hover:bg-ink/[0.07] hover:text-ink"><Link size={16} /></button>}
+                <Switch label={`${p.name} is public`} on={!!p.public} onChange={(on) => setPublic(p.id, on)} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-muted">Playlists you make show here.</p>
+        )}
+      </section>
+      <section className="mt-10">
+        <h2 className="mb-3 text-xl font-bold tracking-tight">Your Data</h2>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => void exportAll()} className={quiet}><Download size={16} /> Export Your Data</button>
+          <button onClick={() => void signOut().catch(report)} className={quiet}>Sign Out</button>
+          <button onClick={() => setDeleting("ask")} className={`${quiet} text-[#ff375f]`}>Delete Account…</button>
+        </div>
+        {deleting && (
+          <div ref={(el) => el?.scrollIntoView({ block: "nearest", behavior: "smooth" })} role="alertdialog" aria-label="Delete Account" className="mt-4 max-w-xl animate-enter rounded-2xl bg-[#ff375f]/10 p-5">
+            <p className="font-semibold">Delete your Sleeve account?</p>
+            <p className="mt-1 text-sm text-muted">Everything synced with it is deleted for good, and your public playlists and profile go with it. Your library stays on this computer.</p>
+            <div className="mt-4 flex gap-2">
+              <button onClick={() => (setDeleting("busy"), void deleteAccount().catch((e) => (setDeleting(undefined), report(e))))} disabled={deleting === "busy"} className={`${btn} bg-[#ff375f] text-white`}>{deleting === "busy" ? "Deleting…" : "Delete Account"}</button>
+              <button onClick={() => setDeleting(undefined)} className={quiet}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </section>
+    </>
   );
 }
 

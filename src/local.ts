@@ -3,7 +3,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { idb, notify, plural } from "./store";
+import { files, idb, notify, plural } from "./store";
 import type { Track } from "./yt";
 
 // Your own music: folders on this computer, read by src-tauri/src/local.rs. What a scan found is kept,
@@ -41,6 +41,7 @@ export function useLocalTracks() {
   return useMemo(() => Object.values(files).sort(by).map(fileTrack), [files]);
 }
 export const localTracks = () => Object.values(useLocal.getState().files).sort(by).map(fileTrack);
+files.has = (path) => !!useLocal.getState().files[path];
 
 export async function addFolder() {
   const picked = await open({ directory: true, multiple: true, title: "Add Music Folder" }).catch(() => null);

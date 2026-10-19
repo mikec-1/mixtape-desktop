@@ -8,13 +8,15 @@ import { art, details, fetchAudio, playAudio, radio, SEP, type Album, type Artis
 
 type Root = "home" | "search" | "library" | "settings";
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
-export type View = { name: Root | "history" | "local" } | { name: "artist" | "collection" | "playlist" | "folder"; id: string };
+// "shared" is someone's public playlist (id "<owner>/<playlist>"), "profile" someone's profile (account.ts).
+export type View = { name: Root | "history" | "local" } | { name: "artist" | "collection" | "playlist" | "folder" | "shared" | "profile"; id: string };
 
 type State = {
   stack: View[];
   ahead: View[]; // what Back left, for Forward
   sheet?: "playing" | "lyrics"; // the full-screen sheet over everything but the player bar: Now Playing, or just the lyrics
   dialog?: Dialog;
+  pane?: string; // the Settings pane showing
   query: string; // the search field
   queue: Track[]; // what's been played, the current track, then Up Next
   index: number;
@@ -49,7 +51,9 @@ export const open = (view: View) => {
 };
 // The library key of a page's subject (libraryKey), if it can be in your library.
 export const viewKey = (v: View) =>
-  !("id" in v) ? (v.name === "local" ? libraryKey("local") : undefined) : v.name === "collection" ? libraryKey("album", v.id) : v.id === "liked" ? libraryKey("liked") : libraryKey(v.name, v.id);
+  !("id" in v) ? (v.name === "local" ? libraryKey("local") : undefined)
+  : v.name === "shared" || v.name === "profile" ? undefined
+  : v.name === "collection" ? libraryKey("album", v.id) : v.id === "liked" ? libraryKey("liked") : libraryKey(v.name, v.id);
 export const back = () => set((s) => (s.stack.length > 1 ? { stack: s.stack.slice(0, -1), ahead: [s.stack.at(-1)!, ...s.ahead] } : s));
 export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, s.ahead[0]], ahead: s.ahead.slice(1) } : s));
 export const go = (name: Root) => set({ stack: [{ name }], ahead: [], sheet: undefined });
@@ -87,14 +91,14 @@ export const idb: StateStorage = {
 };
 
 // about, cover (a data URL, the image you picked) and sort (how its page lists the songs) are yours to
-// set; folder is the folder it's in.
-export type Playlist = { id: string; name: string; tracks: Track[]; about?: string; cover?: string; folder?: string; sort?: TrackSort; at?: number };
+// set; folder is the folder it's in. public: anyone with its link can see it (account.ts).
+export type Playlist = { id: string; name: string; tracks: Track[]; about?: string; cover?: string; folder?: string; sort?: TrackSort; public?: boolean; at?: number };
 export type TrackSort = "custom" | "title" | "artist" | "album" | "added" | "duration";
 export type Folder = { id: string; name: string; at?: number };
 export type Followed = { id: string; name: string; thumb?: string; at?: number };
 // pinned holds library keys (libraryKey), newest pin first. hidden songs and blocked artists are
 // skipped wherever a queue moves on by itself, and left out of radio.
-export type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[]; followed: Followed[]; folders: Folder[]; pinned: string[]; hidden: Track[]; blocked: Artist[] };
+export type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[]; followed: Followed[]; folders: Folder[]; pinned: string[]; hidden: Track[]; blocked: (Artist & { at?: number })[] };
 const empty = (): Library => ({ liked: [], saved: [], playlists: [], followed: [], folders: [], pinned: [], hidden: [], blocked: [] });
 export const useLibrary = create<Library>()(persist(empty, { name: "library", storage: createJSONStorage(() => idb) }));
 const lib = useLibrary.setState;
@@ -122,6 +126,9 @@ export const toggleLike = (t: Track) =>
   change(has(useLibrary.getState().liked, t.id) ? "Removed from Liked Songs" : "Added to Liked Songs", t, (s) => ({ liked: toggleIn(s.liked, entry(t)) }));
 export const toggleSave = (a: Album) =>
   change(has(useLibrary.getState().saved, a.id) ? "Removed from Library" : "Saved to Library", a, (s) => ({ saved: toggleIn(s.saved, a) }));
+// Several at once, quietly (the artists picked when you first open Sleeve).
+export const follow = (artists: Followed[]) =>
+  lib((s) => ({ followed: [...artists.filter((a) => !has(s.followed, a.id)).map((a) => ({ ...a, at: Date.now() })), ...s.followed] }));
 export const toggleFollow = (a: Followed) =>
   change(has(useLibrary.getState().followed, a.id) ? "Unfollowed" : "Following", { title: a.name, thumb: a.thumb }, (s) => ({ followed: toggleIn(s.followed, a) }));
 export const addToPlaylist = (id: string, tracks: Track[]) =>
@@ -161,6 +168,16 @@ export function newPlaylist(tracks: Track[] = [], folder?: string) {
   return p.id;
 }
 
+// Public: anyone with its link can see it and play it (account.ts playlistLink).
+export const setPublic = (id: string, on: boolean) =>
+  change(on ? "Playlist Is Public" : "Playlist Is Private", { title: on ? "Anyone with its link can see it" : playlist(id)?.name }, edit(id, () => ({ public: on || undefined })));
+// Someone's shared playlist, as one of yours.
+export function copyPlaylist({ public: _, folder: __, ...p }: Playlist) {
+  const copy = { ...p, id: crypto.randomUUID(), at: Date.now() };
+  change("Saved to Your Library", { title: p.name, thumb: p.cover ?? p.tracks[0]?.thumb }, (s) => ({ playlists: [...s.playlists, copy] }));
+  return copy.id;
+}
+
 // Folders hold playlists (one level, as in Spotify's sidebar). Deleting one keeps its playlists.
 export function newFolder(playlists: string[] = []) {
   const f = { id: crypto.randomUUID(), name: `Folder ${useLibrary.getState().folders.length + 1}`, at: Date.now() };
@@ -186,11 +203,11 @@ export const togglePin = (key: string) => lib((s) => ({ pinned: s.pinned.include
 // them yourself; a queue moving on by itself passes over them.
 export const toggleHide = (t: Track) =>
   change(has(useLibrary.getState().hidden, t.id) ? "Song Unhidden" : "Song Hidden", t, (s) => ({ hidden: toggleIn(s.hidden, entry(t)) }));
-const artistKey = (a: Artist) => a.id ?? a.name.toLowerCase();
+export const artistKey = (a: Artist) => a.id ?? a.name.toLowerCase();
 export function toggleBlock(a: Artist) {
   const on = useLibrary.getState().blocked.some((b) => artistKey(b) === artistKey(a));
   change(on ? `You’ll hear ${a.name} again` : `You won’t hear ${a.name}`, { title: on ? undefined : "Their songs are skipped and left out of radio" }, (s) => ({
-    blocked: on ? s.blocked.filter((b) => artistKey(b) !== artistKey(a)) : [{ id: a.id, name: a.name }, ...s.blocked],
+    blocked: on ? s.blocked.filter((b) => artistKey(b) !== artistKey(a)) : [{ id: a.id, name: a.name, at: Date.now() }, ...s.blocked],
   }));
 }
 let off: { hidden: Track[]; blocked: Artist[]; ids: Set<string>; artists: Set<string> } | undefined;
@@ -325,9 +342,11 @@ export const subscribeAudio = subscribe;
 export const shuffled = <T,>(list: T[]) => list.map((x) => [Math.random(), x] as const).sort((a, b) => a[0] - b[0]).map((p) => p[1]);
 
 // Downloaded songs (offline.ts sets these) play from disk, and while offline they and your own files are
-// all that can play: a queue moving on by itself passes over the rest, and lists dim them.
+// all that can play: a queue moving on by itself passes over the rest, and lists dim them. A song file
+// that isn't on this computer (synced from another) can't play either; local.ts says which are.
 export const downloads: { read?: (id: string) => ReturnType<typeof fetchAudio> | undefined; has?: (id: string) => boolean } = {};
-export const unavailable = (t: Track) => !navigator.onLine && !t.file && !downloads.has?.(t.id);
+export const files: { has?: (path: string) => boolean } = {};
+export const unavailable = (t: Track) => (t.file ? files.has?.(t.file) === false : !navigator.onLine && !downloads.has?.(t.id));
 const playable = (t: Track) => !skipped(t) && !unavailable(t);
 
 // Instant skip: the next track's audio is fetched while this one plays, and recent ones are kept.

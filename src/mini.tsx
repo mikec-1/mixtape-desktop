@@ -44,7 +44,12 @@ export default function Mini() {
       <div data-tauri-drag-region className="flex min-w-0 flex-1 flex-col justify-between py-3 pr-4 pl-4">
         <div data-tauri-drag-region className="min-w-0 pr-5">
           <div data-tauri-drag-region className="truncate text-[15px] leading-tight font-bold">{t?.title ?? "Nothing playing"}</div>
-          <div data-tauri-drag-region className="truncate text-[13px] text-muted">{t?.artists.map((a) => a.name).join(", ") || "Sleeve"}</div>
+          {/* The line being sung, in place of the artist, when the song has synced lyrics. */}
+          {s?.line ? (
+            <div key={s.line} data-tauri-drag-region className="animate-enter truncate text-[13px] font-semibold text-accent">{s.line}</div>
+          ) : (
+            <div data-tauri-drag-region className="truncate text-[13px] text-muted">{t?.artists.map((a) => a.name).join(", ") || "Sleeve"}</div>
+          )}
         </div>
         <div className="flex items-center justify-center gap-3">
           <button onClick={() => send("prev")} aria-label="Previous" className={side}><SkipBack size={18} className="fill-current" /></button>

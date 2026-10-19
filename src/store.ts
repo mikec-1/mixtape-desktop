@@ -13,6 +13,7 @@ type State = {
   stack: View[];
   ahead: View[]; // what Back left, for Forward
   sheet?: "playing" | "lyrics"; // the full-screen sheet over everything but the player bar: Now Playing, or just the lyrics
+  dialog?: Dialog;
   query: string; // the search field
   queue: Track[]; // what's been played, the current track, then Up Next
   index: number;
@@ -25,6 +26,9 @@ type State = {
   error: string;
   toast?: Toast;
 };
+// A modal over everything: the lyrics editor (for a song, by its key in lyrics.ts useMine; track when it's
+// one Sleeve knows, to stamp times with while it plays), or a lyric card of the playing song.
+export type Dialog = { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track } | { kind: "card"; track: Track; pick: number[] };
 // Feedback for a library change: what happened, to what, and a way back.
 export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void };
 
@@ -59,7 +63,10 @@ const kv = <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<
     r.onsuccess = () => ok(r.result);
     r.onerror = () => fail(r.error);
   }));
-const idb: StateStorage = {
+// Lyrics found online are kept here too (lyrics.ts), one entry a song.
+export const idbGet = <T,>(key: string) => kv<T | undefined>("readonly", (s) => s.get(key));
+export const idbPut = (key: string, value: unknown) => kv("readwrite", (s) => s.put(value, key));
+export const idb: StateStorage = {
   // Libraries saved before the move are still in localStorage until their first write here.
   getItem: async (k) => (await kv<string | undefined>("readonly", (s) => s.get(k))) ?? localStorage.getItem(k),
   setItem: (k, v) => kv("readwrite", (s) => s.put(v, k)).then(() => localStorage.removeItem(k)),
@@ -160,6 +167,8 @@ const on = (e: string, fn: () => void) => players.forEach((p) => p.addEventListe
 for (const e of ["timeupdate", "durationchange", "play", "pause", "emptied"]) on(e, emit);
 const subscribe = (cb: () => void) => (listeners.add(cb), () => void listeners.delete(cb));
 export const useAudio = () => useSyncExternalStore(subscribe, () => snapshot);
+// For what needs the player's events without re-rendering on each (lyrics.ts useLine, the karaoke fill).
+export const subscribeAudio = subscribe;
 
 export const shuffled = <T,>(list: T[]) => list.map((x) => [Math.random(), x] as const).sort((a, b) => a[0] - b[0]).map((p) => p[1]);
 
@@ -427,18 +436,19 @@ export const EQ_BANDS = [60, 150, 400, 1000, 2400, 15000];
 // sidebarWidth is the expanded width; closed, the sidebar is the icon rail. queue is the Queue panel, queueWidth its width.
 // crossfade is in seconds (0 is gapless); eq is dB per EQ_BANDS band. lyricsPeek is the line on the player bar;
 // lyricsWords estimates word timings for lyrics that only time lines; translateTo is a language code, "" for
-// the system's (lyrics.ts translateTarget).
+// the system's (lyrics.ts translateTarget). lyricsStill keeps the lyrics from moving: they don't follow the
+// system's Reduce Motion, so they look the same for everyone unless this is on.
 type Settings = {
   theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number;
   quality: Quality; normalize: boolean; crossfade: number; eq: number[];
-  lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string;
+  lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean;
 };
 export const useSettings = create<Settings>()(
   persist(
     (): Settings => ({
       theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320,
       quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
-      lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "",
+      lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
     }),
     { name: "settings" },
   ),
@@ -513,11 +523,14 @@ if (restored) setMediaSession(restored), setAccent(art(restored.thumb, 64));
 
 // The mini player (mini.tsx) is its own always-on-top window with no audio of its own: this window
 // sends it what's playing and runs the buttons it presses.
-export type MiniState = ReturnType<typeof read> & { track?: Track; loading: boolean; accent: string };
+// line is the lyric being sung, when lyrics.ts has one (it sets lyricLine).
+export type MiniState = ReturnType<typeof read> & { track?: Track; loading: boolean; accent: string; line?: string };
+let lyricLine: () => string | undefined = () => undefined;
+export const setLyricLine = (fn: typeof lyricLine) => void (lyricLine = fn);
 if ("__TAURI_INTERNALS__" in window) {
   const share = () => {
     const { queue, index, loading } = get();
-    void emitTo("mini", "player", { ...snapshot, track: queue[index], loading, accent: document.documentElement.style.getPropertyValue("--accent-raw") } satisfies MiniState);
+    void emitTo("mini", "player", { ...snapshot, track: queue[index], loading, accent: document.documentElement.style.getPropertyValue("--accent-raw"), line: lyricLine() } satisfies MiniState);
   };
   listeners.add(share);
   useStore.subscribe(share);

@@ -17,9 +17,8 @@
   /* Always dark enough for white on it: the Now Playing sheet. */
   --color-accent-deep: oklch(from var(--accent-raw) clamp(0.22, l, 0.45) min(c, 0.2) h);
   /* Full-screen lyrics: the artwork's colour at its brightest that still holds big white type (3:1
-     and up), with lines yet to come in its dark shade. */
+     and up). */
   --color-accent-vivid: oklch(from var(--accent-raw) clamp(0.5, l, 0.58) min(c, 0.16) h);
-  --color-accent-shade: oklch(from var(--accent-raw) 0.24 min(c, 0.12) h);
   /* The system's own: SF Pro on Mac, Segoe UI Variable on Windows. Mono is only for keys. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -73,17 +72,266 @@
   }
 }
 
-/* A word of karaoke lyrics, lit left to right as it's sung: --p runs 0 to 1 (views.tsx LyricLines).
-   The lit edge is soft, and fully off at 0 and fully on at 1. */
+/* A word of karaoke lyrics, lit as it's sung: --p runs 0 to 1 (views.tsx LyricLines), and the lit edge
+   feathers over --feather (am-lyrics' 0.75em; 0.3em on single letters). --lit is the sung colour, which
+   fades to the line's dim one when it's done. Right-to-left lines wipe the other way. */
 @utility sung {
   background-image: linear-gradient(
-    to right,
-    var(--lyric-now) calc(var(--p, 0) * (100% + 0.4em) - 0.4em),
-    var(--lyric-next) calc(var(--p, 0) * (100% + 0.4em))
+    var(--wipe, to right),
+    var(--lit) calc(var(--p, 0) * (100% + var(--feather, 0.75em)) - var(--feather, 0.75em)),
+    var(--off) calc(var(--p, 0) * (100% + var(--feather, 0.75em)))
   );
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+@property --lit {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: white;
+}
+
+/* The lyrics (views.tsx LyricLines), after am-lyrics. The line being sung is bright and full size; the
+   rest are dim, a touch smaller, and fainter and softer the further they are (--f, set per line). The
+   line coming up wakes a moment early; a hovered line sharpens; scrolling by hand sharpens them all. */
+.lyrics {
+  --on: white;
+  --off: rgb(255 255 255 / 0.55);
+}
+.lyric {
+  --lit: var(--off);
+  color: var(--off);
+  opacity: 0.8;
+  transition:
+    opacity 0.7s ease,
+    filter 0.7s ease,
+    color 0.35s ease-out,
+    --lit 0.35s ease-out;
+}
+.lyric[data-dist="2"] {
+  opacity: 0.7;
+}
+.lyric[data-dist="3"] {
+  opacity: 0.58;
+}
+.lyric[data-dist="4"] {
+  opacity: 0.46;
+}
+.lyrics[data-blur] .lyric:not([data-state]) {
+  filter: var(--f, none);
+}
+.lyric[data-state] {
+  opacity: 1;
+  filter: none;
+}
+.lyric[data-state="now"] {
+  --lit: var(--on);
+  color: var(--on);
+  transition-duration: 0.7s, 0.7s, 0.18s, 0.18s;
+}
+.lyric-body {
+  display: block;
+  width: calc(100% + 16px);
+  margin-inline: -8px;
+  padding: 6px 8px;
+  border-radius: 16px;
+  text-align: inherit;
+  transform: scale(0.98);
+  transform-origin: left;
+  transition:
+    transform 0.7s ease,
+    background-color 0.18s;
+}
+.lyric[data-state] > .lyric-body {
+  transform: none;
+  transition:
+    transform 0.5s ease,
+    background-color 0.18s;
+}
+.lyric > .lyric-body:active {
+  transform: scale(0.96);
+  transition-duration: 120ms;
+}
+.lyric-body:focus-visible {
+  outline: none;
+  background-color: rgb(255 255 255 / 0.08);
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.72);
+}
+@media (hover: hover) and (pointer: fine) {
+  .lyrics[data-blur] .lyric:hover {
+    filter: none;
+  }
+  .lyric-body:hover {
+    background-color: rgb(255 255 255 / 0.08);
+  }
+}
+/* Duets: the other singer on the right, each side kept clear of the other's lane. */
+.lyric[data-side="end"] {
+  text-align: end;
+}
+.lyric[dir="rtl"] {
+  text-align: right;
+}
+.lyric[data-side="end"] > .lyric-body,
+.lyric[dir="rtl"] > .lyric-body {
+  transform-origin: right;
+}
+.lyric[dir="rtl"] {
+  --wipe: to left;
+}
+.lyrics[data-duet] .lyric:not([data-side]) {
+  padding-inline-end: 15%;
+}
+.lyrics[data-duet] .lyric[data-side="end"] {
+  padding-inline-start: 15%;
+}
+.lyrics[data-scrolling] .lyric {
+  filter: none;
+  opacity: 0.8;
+  transition: none;
+}
+.lyrics[data-plain] .lyric {
+  opacity: 1;
+  color: var(--on);
+  filter: none;
+}
+
+/* Words lift as they're sung; a held word's letters move on their own (views.tsx letter), each with a
+   glow painted once whose opacity alone changes. */
+.lw {
+  display: inline-block;
+  white-space: nowrap;
+  transition: transform 1s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.lw[data-on] {
+  transform: translateY(-3px);
+}
+.lc {
+  --feather: 0.3em;
+  display: inline-block;
+  transform-origin: 50% 80%;
+  will-change: transform;
+}
+.lc > .sung {
+  position: relative;
+}
+.lc > .sung::after {
+  content: attr(data-glyph);
+  position: absolute;
+  inset: 0;
+  background: none;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 0.3em var(--on);
+  opacity: var(--glow, 0);
+  pointer-events: none;
+}
+
+/* Backing vocals: small and muted under the line, opening out while it's sung. The room they take opens
+   and closes at once and the lines' springs carry the move (views.tsx cascade); the words fade. */
+.bgv {
+  --on: color-mix(in srgb, white 50%, #888);
+  --off: color-mix(in srgb, rgb(255 255 255 / 0.55) 50%, #888);
+  --lit: var(--on);
+  display: block;
+  height: 0;
+  font-size: 0.65em;
+  line-height: 1.22;
+  color: var(--off);
+  opacity: 0;
+  transform: translateY(6px) scale(0.96);
+  transform-origin: left center;
+  transition:
+    opacity 450ms ease,
+    transform 450ms ease;
+}
+.bgv > span {
+  display: block;
+  padding-top: 0.08em;
+}
+.lyric[data-state] .bgv {
+  height: auto;
+  opacity: 1;
+  transform: none;
+  transition-duration: 650ms;
+}
+.lyric[data-side="end"] .bgv,
+.lyric[dir="rtl"] .bgv {
+  transform-origin: right center;
+}
+
+/* An instrumental break's dots (views.tsx breathe). The row opens as the view comes to the break and
+   closes as it moves on, at once, carried by the springs like the backing vocals. */
+.lyric-gap {
+  display: flex;
+  align-items: center;
+  height: 0;
+}
+.lyric-gap[data-on] {
+  height: 1.6em;
+}
+.lyric-dots {
+  display: flex;
+  gap: 0.16em;
+  transform-origin: left center;
+  opacity: var(--go, 0);
+  transform: scale(var(--gs, 0));
+}
+.lyric-gap:not([data-state]) .lyric-dots {
+  opacity: 0;
+  transform: scale(0);
+  transition:
+    opacity 0.35s,
+    transform 0.35s;
+}
+.lyric-dots > i {
+  width: 0.4em;
+  height: 0.4em;
+  border-radius: 50%;
+  background: var(--on);
+  opacity: var(--d, 0.25);
+}
+
+/* The karaoke backdrop (views.tsx Drift): three big soft blobs in the artwork's colours, drifting. No
+   blur filter, just gradients that fade out, so the GPU only moves them. Kept within the lightness range
+   of accent-vivid, so white and dark lyrics stay readable over them. */
+.drift > i {
+  position: absolute;
+  width: 75vmax;
+  height: 75vmax;
+  border-radius: 50%;
+  will-change: transform;
+  animation: drift 28s ease-in-out infinite alternate;
+}
+.drift[data-paused] > i {
+  animation-play-state: paused;
+}
+.drift > i:nth-child(1) {
+  top: -30vmax;
+  left: -25vmax;
+  background: radial-gradient(closest-side, oklch(from var(--accent-raw) 0.62 min(c, 0.18) h / 0.85), transparent);
+}
+.drift > i:nth-child(2) {
+  top: 5vmax;
+  right: -30vmax;
+  background: radial-gradient(closest-side, oklch(from var(--accent-raw) 0.46 min(c, 0.2) calc(h + 40) / 0.85), transparent);
+  animation-duration: 34s;
+  animation-delay: -9s;
+}
+.drift > i:nth-child(3) {
+  bottom: -40vmax;
+  left: 15vmax;
+  background: radial-gradient(closest-side, oklch(from var(--accent-raw) 0.56 min(c, 0.2) calc(h - 35) / 0.8), transparent);
+  animation-duration: 40s;
+  animation-delay: -18s;
+}
+@keyframes drift {
+  50% {
+    transform: translate(8vmax, 6vmax) scale(1.15) rotate(25deg);
+  }
+  to {
+    transform: translate(-6vmax, 10vmax) scale(0.9) rotate(-20deg);
+  }
 }
 
 /* Every pressable thing answers the press the same way. */
@@ -179,11 +427,12 @@ input[type="range"].knob::-webkit-slider-thumb {
   opacity: 1;
 }
 
-/* Reduced motion: things still fade and recolour, nothing travels. */
+/* Reduced motion: things still fade and recolour, nothing travels. Not the lyrics, which looked broken
+   without their motion: they have their own switch (Reduce Lyric Motion, below). */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  ::before,
-  ::after {
+  :not(.lyrics, .lyrics *),
+  :not(.lyrics *)::before,
+  :not(.lyrics *)::after {
     transition-property: opacity, color, background-color, --accent-raw !important;
   }
   @keyframes enter {
@@ -191,4 +440,16 @@ input[type="range"].knob::-webkit-slider-thumb {
       opacity: 0;
     }
   }
+}
+/* Settings → Lyrics → Reduce Lyric Motion (views.tsx LyricLines): the same for the lyrics. Lines jump,
+   words and letters stay put and nothing glows; colours still fade. */
+.lyrics[data-still],
+.lyrics[data-still] * {
+  transition-property: opacity, color, background-color !important;
+}
+.lyrics[data-still] :is(.lw, .lc, .lyric-body, .bgv) {
+  transform: none !important;
+}
+.lyrics[data-still] .lc > .sung::after {
+  display: none;
 }

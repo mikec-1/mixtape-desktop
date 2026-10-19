@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { AudioLines, CaseSensitive, Check, ChevronDown, Download, Ellipsis, GripVertical, Heart, Languages, Maximize2, Music, Play, Plus, Radio, Shuffle, Sparkle, Upload, X } from "lucide-react";
+import { AudioLines, CaseSensitive, Check, ChevronDown, Copy, Download, Ellipsis, GripVertical, Heart, ImageDown, Languages, Maximize2, Music, PencilLine, Play, Plus, Quote, Radio, Shuffle, Sparkle, Upload, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
-import { EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearQueue, deletePlaylist, enqueue, jump, moveInQueue, newPlaylist, notify, open, play, removeFromPlaylist, radioFrom, removeFromQueue, renamePlaylist, report, restoreLibrary, shufflePlay, startRadio, toggle, toggleLike, toggleSave, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
-import { estimateWords, translateTarget, useExtras, useLine, useLyrics, wordProgress } from "./lyrics";
+import { EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, clearQueue, deletePlaylist, enqueue, jump, moveInQueue, newPlaylist, notify, open, play, removeFromPlaylist, radioFrom, removeFromQueue, renamePlaylist, report, restoreLibrary, shufflePlay, startRadio, subscribeAudio, toggle, toggleLike, toggleSave, useLibrary, useOnline, useSettings, useStore, type Dialog } from "./store";
+import { asText, estimateWords, groups, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { art, artist, collection, home, lastHome, search, type Album, type Track } from "./yt";
 import { version } from "../package.json";
 
@@ -129,6 +129,7 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
           { text: "Remove from Queue", action: () => removeFromQueue(q) },
         ]),
     { text: "Start Radio", action: () => startRadio(t) },
+    { text: "Edit Lyrics…", action: () => editLyrics(t) },
     { item: "Separator" as const },
     { text: liked.some((x) => x.id === t.id) ? "Remove from Liked Songs" : "Add to Liked Songs", action: () => toggleLike(t) },
     {
@@ -535,13 +536,21 @@ export function Artist({ id }: { id: string }) {
 
 // A sheet that rises from the player bar: Now Playing (the artwork, with lyrics or Up Next beside it), or
 // just the lyrics, big, on the artwork's colour. Always mounted so it can slide both ways; transitions,
-// not keyframes, so a quick open-close reverses from wherever it is.
+// not keyframes, so a quick open-close reverses from wherever it is. Its contents go once it's down,
+// so a closed sheet costs nothing.
 export function NowPlaying() {
   const sheet = useStore((s) => s.sheet);
   // Which one it was stays while it slides away, so it doesn't change on the way down.
   const [last, setLast] = useState(sheet);
   if (sheet && sheet !== last) setLast(sheet);
   const open = !!sheet;
+  const [drawn, setDrawn] = useState(open);
+  if (open && !drawn) setDrawn(true);
+  useEffect(() => {
+    if (open) return;
+    const t = setTimeout(() => setDrawn(false), 320);
+    return () => clearTimeout(t);
+  }, [open]);
   const big = (sheet ?? last) === "lyrics";
   const queue = useStore((s) => s.queue);
   const index = useStore((s) => s.index);
@@ -550,6 +559,8 @@ export function NowPlaying() {
   const [tab, setTab] = useState<"lyrics" | "queue">("lyrics");
   const lyrics = useLyrics(track);
   const extras = useExtras(track, lyrics.value);
+  const karaoke = !!lyrics.value?.lines.some((l) => l.words);
+  const still = useSettings((s) => s.lyricsStill);
   const close = useRef<HTMLButtonElement>(null);
 
   // Focus moves into the sheet, and back to wherever it was when the sheet closes.
@@ -567,16 +578,17 @@ export function NowPlaying() {
       role="dialog"
       aria-modal="true"
       aria-label={big ? "Lyrics" : "Now Playing"}
-      className={`fixed inset-0 z-30 overflow-hidden ${big ? "bg-accent-vivid" : "bg-accent-deep"} ${
+      className={`fixed inset-0 z-30 overflow-clip ${big ? "bg-accent-vivid" : "bg-accent-deep"} ${
         open
           ? "visible translate-y-0 [transition:transform_450ms_var(--ease-drawer),background-color_300ms]"
           : "invisible translate-y-full [transition:transform_300ms_var(--ease-drawer),visibility_0s_300ms]"
       }`}
     >
-      {track && <img src={art(track.thumb, 120)} alt="" className={`absolute inset-0 size-full scale-125 object-cover blur-3xl saturate-150 transition-opacity duration-300 ${big ? "opacity-0" : "opacity-35"}`} />}
+      {drawn && track && <img src={art(track.thumb, 120)} alt="" className={`absolute inset-0 size-full scale-125 object-cover blur-3xl saturate-150 transition-opacity duration-300 ${big ? "opacity-0" : "opacity-35"}`} />}
+      {drawn && big && karaoke && <Drift moving={open && !still} />}
       <div className={`absolute inset-0 transition-opacity duration-300 ${big ? "bg-linear-to-b from-black/0 to-black/15" : "bg-linear-to-t from-black/45 to-black/5"}`} />
       {/* Everything on the sheet is white: the palette is remapped rather than restyled. */}
-      {big ? (
+      {!drawn ? null : big ? (
         <div key="lyrics" className="relative flex h-full animate-enter flex-col pt-[42px] pb-24 text-white [--color-accent:white] [--color-ink:white] [--color-muted:rgb(255_255_255/0.75)]">
           <header className="mb-4 flex min-h-12 items-center gap-6 pr-20 pl-16">
             {track && (
@@ -590,9 +602,12 @@ export function NowPlaying() {
                 </div>
               </div>
             )}
-            <div className="ml-auto flex shrink-0 gap-2"><LyricOptions extras={extras} /></div>
+            <div className="ml-auto flex shrink-0 gap-2">
+              <LyricOptions extras={extras} />
+              <LyricTools track={track} lyrics={lyrics.value} />
+            </div>
           </header>
-          <LyricLines track={track} lyrics={lyrics} extras={extras} live={open} big />
+          <LyricLines track={track} lyrics={lyrics} extras={extras} live={open} size="big" />
         </div>
       ) : (
         <div key="playing" className="relative grid h-full animate-enter grid-cols-2 gap-16 px-16 pt-20 pb-32 text-white [--color-accent:white] [--color-ink:white] [--color-muted:rgb(255_255_255/0.68)]">
@@ -618,8 +633,9 @@ export function NowPlaying() {
               {tab === "lyrics" && (
                 <div className="ml-auto flex gap-2">
                   <LyricOptions extras={extras} />
+                  <LyricTools track={track} lyrics={lyrics.value} />
                   {lyrics.value?.lines.length ? (
-                    <button onClick={() => useStore.setState({ sheet: "lyrics" })} aria-label="Full Screen Lyrics" title="Full Screen Lyrics" className="press grid size-8 place-items-center rounded-full bg-white/15 hover:bg-white/25">
+                    <button onClick={() => useStore.setState({ sheet: "lyrics" })} aria-label="Full Screen Lyrics" title="Full Screen Lyrics" className={round}>
                       <Maximize2 size={15} />
                     </button>
                   ) : null}
@@ -656,6 +672,19 @@ export function NowPlaying() {
   );
 }
 
+// The karaoke view's own backdrop, for word-timed lyrics: soft blobs of the artwork's colours drifting
+// under the words. Only transforms move, which the GPU does without repainting; it stops while the sheet
+// is going away, and stays still with Reduce Lyric Motion.
+function Drift({ moving }: { moving: boolean }) {
+  return (
+    <div aria-hidden data-paused={!moving || undefined} className="drift absolute inset-0 overflow-hidden [contain:strict]">
+      <i /><i /><i />
+    </div>
+  );
+}
+
+const round = "press grid size-8 shrink-0 place-items-center rounded-full bg-white/15 hover:bg-white/25";
+
 type Extras = ReturnType<typeof useExtras>;
 
 // Romanise and Translate, on songs they apply to. Their state is a setting, so it carries to the next song.
@@ -682,86 +711,172 @@ function LyricOptions({ extras: { can, on, to, loading, failed, retry } }: { ext
   );
 }
 
-// Lyrics that follow the song: the line being sung lights up and stays in view, sung lines stay lit, and
-// clicking a line plays from it. Word-synced lines light up word by word, like karaoke. live: on screen.
-function LyricLines({ track, lyrics, extras, live, big }: { track?: Track; lyrics: ReturnType<typeof useLyrics>; extras: Extras; live: boolean; big?: boolean }) {
-  const { value, loading, failed, retry } = lyrics;
+// Edit a song's lyrics (yours then beat every source), and make a lyric card from them.
+function LyricTools({ track, lyrics }: { track?: Track; lyrics?: Lyrics | null }) {
+  if (!track) return null;
+  return (
+    <>
+      <button onClick={() => editLyrics(track)} aria-label="Edit Lyrics" title="Edit Lyrics" className={round}>
+        <PencilLine size={15} />
+      </button>
+      {lyrics?.lines.some((l) => l.text) && (
+        <button onClick={() => makeCard(track)} aria-label="Lyric Card" title="Lyric Card" className={round}>
+          <Quote size={14} className="fill-current" />
+        </button>
+      )}
+    </>
+  );
+}
+
+// The editor opens on your own lyrics, or else the song's current ones (as LRC when synced) to fix.
+export function editLyrics(t: Track) {
+  const key = songKey(t);
+  const now = lyricsNow(t);
+  const text = useMine.getState().songs[key]?.text ?? (now ? asText(now) : "");
+  useStore.setState({ dialog: { kind: "edit", key, title: titleOf(t), artist: t.artists[0]?.name ?? "", text, track: t } });
+}
+// A card starts from the line being sung, or the first one with words.
+function makeCard(t: Track) {
+  const lines = lyricsNow(t)?.lines ?? [];
+  const at = lineNow(lyricsNow(t));
+  const first = lines[at]?.text ? at : lines.findIndex((l) => l.text);
+  useStore.setState({ dialog: { kind: "card", track: t, pick: first >= 0 ? [first] : [] } });
+}
+
+const SIZES = {
+  big: { ol: "max-w-5xl text-[clamp(30px,3.6vw,56px)] leading-[1.12] font-extrabold tracking-[-0.025em]", note: "text-[clamp(28px,3.2vw,44px)] tracking-tight", bar: "h-10", pad: "px-16" },
+  panel: { ol: "text-[clamp(22px,2.1vw,32px)] leading-tight font-bold tracking-tight", note: "text-2xl", bar: "h-7", pad: "" },
+};
+const LEAD = 0.35; // the view moves this early (s), so it lands as the line starts (am-lyrics' look-ahead)
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+// How soft a line is, by where it sits from the one in focus (am-lyrics' falloff): the next few barely,
+// the rest a little more. Lines farther than eight away go unblurred: they're off screen, and blur costs.
+const blurAt = (d: number) => (Math.abs(d) > 8 ? undefined : d === -1 ? 0.035 : d === 1 || d === 2 ? 0.028 : d === 3 ? 0.05 : 0.07);
+type Words = { words: Word[]; groups: Group[] };
+
+// Lyrics that follow the song, moving the way am-lyrics (and Apple Music) does. The line being sung is
+// bright and full size, the rest smaller, dimmer and softer the further they are; as the song moves on,
+// the lines glide up on springs, each a beat after the last. Words lift as they're sung, the fill wipes
+// across them with a soft edge, held words swell and glow letter by letter, and long instrumental
+// breaks breathe with three dots. Clicking a line plays from it; scrolling by hand makes every line
+// sharp for five seconds. live: on screen. It re-renders only when the line changes; all motion is
+// painted straight to the DOM, and lines move on the GPU. The system's Reduce Motion doesn't stop it (it
+// looked broken without its motion); Settings → Lyrics has a switch of its own.
+function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: Track; lyrics: ReturnType<typeof useLyrics>; extras: Extras; live: boolean; size?: keyof typeof SIZES }) {
+  const { value, loading } = lyrics;
   const at = useLine(value);
+  const ahead = useLine(value, LEAD);
   const box = useRef<HTMLDivElement>(null);
-  const held = useRef(0); // when you last scrolled by hand: the view leaves you there for a few seconds
-  const shown = useRef(false);
+  const held = useRef(0); // when you last scrolled by hand: the view leaves you there for five seconds
+  const [scrolling, setScrolling] = useState(false);
+  const motion = useRef<Motion>({ springs: new Map(), tops: new WeakMap(), width: 0 });
+  const shown = useRef<Lyrics | null>(null); // the lyrics last laid out: new ones jump, rather than glide
   const synced = !!value?.synced;
   const lines = value?.lines ?? [];
-  // The line being sung, word by word: its own word timings when it has them (and shows its own words,
-  // not a romanisation); otherwise, unless Settings says not to, an estimate from the line's timing.
+  const sz = SIZES[size];
   const estimate = useSettings((s) => s.lyricsWords);
-  const romanised = extras.romanised?.[at];
-  const timed = useMemo(() => {
-    const line = lines[at];
-    if (!synced || !line?.text) return undefined;
-    if (line.words && !romanised) return line.words;
-    return estimate ? estimateWords(lines, at, romanised ?? line.text) : undefined;
-  }, [value, at, romanised, estimate]);
-  const words = live ? timed : undefined;
+  const still = useSettings((s) => s.lyricsStill);
 
-  // The line being sung sits a third of the way down. Opening the sheet jumps there (before it's drawn,
-  // so it never flashes the top); after that it glides.
+  // The lines around the one being sung, as words: their own timings when they have them (and show their
+  // own words, not a romanisation); otherwise, unless Settings says not to, spread by the words' lengths.
+  const near = useMemo(() => {
+    const out = new Map<number, Words>();
+    for (const i of synced ? new Set([at - 1, at, ahead]) : []) {
+      const line = lines[i];
+      if (!line?.text) continue;
+      const roman = extras.romanised?.[i];
+      const real = !!line.words && !roman;
+      const words = real ? line.words! : estimate ? estimateWords(lines, i, roman ?? line.text) : undefined;
+      if (words) out.set(i, { words, groups: groups(words, real) });
+    }
+    return out;
+  }, [value, at, ahead, extras.romanised, estimate]);
+
+  // The line coming up sits a third of the way down. Opening, or a new song, jumps there (before it's
+  // drawn, so it never flashes the top); after that the lines spring there. Any render that moves lines
+  // (backing vocals opening, a break's row closing, a translation coming in) springs them from where they
+  // were too, so nothing jumps; while you scroll by hand the view stays where you put it.
   useLayoutEffect(() => {
-    const el = box.current?.querySelector<HTMLElement>(`[data-line="${Math.max(0, at)}"]`);
-    if (!live) return void (shown.current = false);
-    if (!el || !synced || Date.now() - held.current < 3000) return;
-    const glide = shown.current && !matchMedia("(prefers-reduced-motion: reduce)").matches;
-    box.current!.scrollTo({ top: el.offsetTop - box.current!.clientHeight * 0.3, behavior: glide ? "smooth" : "auto" });
-    shown.current = true;
-  }, [at, live, value, extras.translation, extras.romanised]);
+    const root = box.current;
+    if (!live || !root || !value) return void (shown.current = null);
+    const el = synced && Date.now() - held.current >= 5000 ? root.querySelector<HTMLElement>(`[data-line="${Math.max(0, ahead)}"]`) : null;
+    const glide = shown.current === value && !still;
+    shown.current = value;
+    cascade(root, el, Math.max(0, ahead), motion.current, glide);
+  });
 
-  // Karaoke: each word of the line being sung fills as it's sung, written straight to the DOM every frame
-  // while playing, and once more for a seek while paused.
-  const { paused, time } = useAudio();
+  // The line being sung, every frame while playing and again on a pause or seek: the fill, each word's
+  // lift, held words' letters, backing vocals, and an instrumental break's dots. The player's events
+  // wake it without a re-render.
   useEffect(() => {
-    if (!words) return;
-    const spans = box.current?.querySelectorAll<HTMLElement>(`[data-line="${at}"] [data-word]`);
+    const root = box.current;
+    if (!live || !root) return;
+    // After a seek back, lines still to come lose the lift they had.
+    root.querySelectorAll<HTMLElement>("[data-line]").forEach((l) => {
+      if (+l.dataset.line! <= at) return;
+      l.querySelectorAll(".lw[data-on]").forEach((w) => w.removeAttribute("data-on"));
+      l.querySelectorAll<HTMLElement>(".lc").forEach((c) => (c.style.transform = ""));
+    });
+    const el = root.querySelector<HTMLElement>(`[data-line="${at}"]`);
+    if (!el) return;
+    const set = near.get(at);
+    const line = lines[at];
+    const all = (sel: string) => [...el.querySelectorAll<HTMLElement>(sel)];
+    const syl = all("[data-s]:not([data-c])"), chars = all("[data-c]"), lifts = all(".lw[data-g]"), letters = all(".lc"), bg = all("[data-b]");
+    const gap = el.classList.contains("lyric-gap") && el.firstElementChild ? (el.firstElementChild as HTMLElement) : undefined;
     let frame = 0;
     const paint = () => {
-      wordProgress(words, lines, at, audio.currentTime).forEach((p, i) => spans?.[i]?.style.setProperty("--p", String(p)));
-      if (!audio.paused) frame = requestAnimationFrame(paint);
+      const now = audio.currentTime;
+      if (set) {
+        const p = wordProgress(set.words, lines, at, now);
+        syl.forEach((s) => s.style.setProperty("--p", String(p[+s.dataset.s!])));
+        chars.forEach((c) => c.style.setProperty("--p", String(clamp01(p[+c.dataset.s!] * +c.dataset.n! - +c.dataset.k!))));
+        lifts.forEach((w) => w.toggleAttribute("data-on", now >= set.groups[+w.dataset.g!].start));
+        if (!still) letters.forEach((c) => letter(c, set.groups[+c.dataset.g!], now));
+      }
+      if (line?.bgWords && bg.length) {
+        const p = wordProgress(line.bgWords, lines, at, now);
+        bg.forEach((s) => s.style.setProperty("--p", String(p[+s.dataset.b!])));
+      }
+      if (gap) breathe(gap, line.time, lines[at + 1].time, now, still);
+      frame = audio.paused ? 0 : requestAnimationFrame(paint);
     };
-    paint();
-    return () => cancelAnimationFrame(frame);
-  }, [words, at, paused, paused && time]);
+    const wake = () => (cancelAnimationFrame(frame), paint());
+    wake();
+    const off = subscribeAudio(wake);
+    // Held words left mid-swell (a seek, or the line moving on) come to rest, raised and unlit.
+    return () => (off(), cancelAnimationFrame(frame), set && letters.forEach((c) => letter(c, set.groups[+c.dataset.g!], Infinity)));
+  }, [live, at, near, still]);
 
-  const hold = () => void (held.current = Date.now());
+  const quiet = useRef(0);
+  const hold = () => {
+    held.current = Date.now();
+    setScrolling(true);
+    clearTimeout(quiet.current);
+    quiet.current = setTimeout(() => setScrolling(false), 5000);
+  };
   const seekTo = (time: number) => {
     held.current = 0;
+    setScrolling(false);
     audio.currentTime = time;
     if (audio.paused) void toggle();
   };
-  const note = `font-bold ${big ? "text-[clamp(28px,3.2vw,44px)] tracking-tight" : "text-2xl"}`;
-  const google = extras.translation && extras.romanised ? "Translation and romanisation" : extras.translation ? "Translation" : extras.romanised ? "Romanisation" : "";
-  const pad = big ? "px-16" : "";
+  const note = `font-bold ${sz.note}`;
+  const google = extras.translation && extras.romanised && !value?.lines.some((l) => l.roman) ? "Translation and romanisation" : extras.translation ? "Translation" : extras.romanised && !value?.lines.some((l) => l.roman) ? "Romanisation" : "";
 
   if (!track) return null;
   if (loading && !value)
     return (
-      <div role="status" className={`flex animate-pulse flex-col gap-4 pt-6 ${pad}`}>
+      <div role="status" className={`flex animate-pulse flex-col gap-4 pt-6 ${sz.pad}`}>
         <span className="sr-only">Loading lyrics…</span>
-        {[70, 55, 80, 45, 65].map((w) => <div key={w} className={`rounded-full bg-white/15 ${big ? "h-10" : "h-7"}`} style={{ width: `${w}%` }} />)}
+        {[70, 55, 80, 45, 65].map((w) => <div key={w} className={`rounded-full bg-white/15 ${sz.bar}`} style={{ width: `${w}%` }} />)}
       </div>
     );
-  if (failed && !value)
-    return (
-      <div className={`pt-6 ${pad}`}>
-        <p className={note}>Couldn’t load the lyrics.</p>
-        <button onClick={retry} className="press mt-4 h-9 rounded-full bg-white/15 px-4 text-sm font-semibold hover:bg-white/25">Try Again</button>
-      </div>
-    );
-  if (!value) return <p className={`pt-6 ${note} ${pad}`}>No lyrics for this one yet.</p>;
-  if (value.instrumental) return <p className={`pt-6 ${note} ${pad}`}>♪ Instrumental</p>;
+  // No source had any, or none answered (they're asked again next time): no lyrics either way, no error.
+  if (!value) return <p className={`pt-6 ${note} ${sz.pad}`}>No lyrics for this one yet.</p>;
+  if (value.instrumental) return <p className={`pt-6 ${note} ${sz.pad}`}>♪ Instrumental</p>;
 
-  // Sung lines stay lit; the one being sung is brightest; the rest wait, dimmer (on the full-screen colour, dark).
-  const tone = big
-    ? "[--lyric-now:white] [--lyric-past:rgb(255_255_255/0.8)] [--lyric-next:var(--color-accent-shade)]"
-    : "[--lyric-now:white] [--lyric-past:rgb(255_255_255/0.6)] [--lyric-next:rgb(255_255_255/0.32)]";
+  const focus = Math.max(0, ahead);
   return (
     <div
       ref={box}
@@ -769,24 +884,56 @@ function LyricLines({ track, lyrics, extras, live, big }: { track?: Track; lyric
       onTouchMove={hold}
       onKeyDown={hold}
       onPointerDown={(e) => e.target === e.currentTarget && hold()}
-      className={`relative min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [mask-image:linear-gradient(to_bottom,transparent,black_5%,black_75%,transparent)] ${tone} ${pad}`}
+      data-plain={!synced || undefined}
+      data-blur={(synced && !scrolling) || undefined}
+      data-scrolling={scrolling || undefined}
+      data-duet={lines.some((l) => l.side) || undefined}
+      data-still={still || undefined}
+      className={`lyrics relative min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [mask-image:linear-gradient(to_bottom,transparent,black_5%,black_75%,transparent)] ${sz.pad}`}
     >
-      <ol className={`pt-[8vh] ${big ? "max-w-5xl text-[clamp(30px,3.6vw,56px)] leading-[1.12] font-extrabold tracking-[-0.025em]" : "text-[clamp(22px,2.1vw,32px)] leading-tight font-bold tracking-tight"}`}>
+      <ol className={`pt-[8vh] ${sz.ol}`}>
         {lines.map((l, i) => {
+          if (!l.text) {
+            if (!synced) return <li key={i} aria-hidden className="h-[0.8em]" />;
+            // A break: three dots when it's an instrumental of 7 s or more, otherwise nothing to see. Its row
+            // opens with the view moving to it and closes as the view moves on; the dots show while it plays.
+            const long = lines[i + 1] && lines[i + 1].time - l.time >= 7;
+            return (
+              <li key={i} data-line={i} aria-hidden className="lyric-gap" data-on={(long && i === ahead) || undefined} data-state={i === at ? "now" : undefined}>
+                {long && <span className="lyric-dots"><i /><i /><i /></span>}
+              </li>
+            );
+          }
           const text = extras.romanised?.[i] ?? l.text;
           const sub = extras.translation?.[i];
-          if (!synced && !l.text) return <li key={i} aria-hidden className="h-[0.8em]" />;
-          const colour = !synced || i === at ? "text-(--lyric-now)" : i < at ? "text-(--lyric-past)" : "text-(--lyric-next)";
+          const d = i - focus;
+          const state = !synced ? undefined : i === at ? "now" : i === ahead ? "pre" : undefined;
+          const blur = synced && !state ? blurAt(d) : undefined;
+          const words = near.get(i);
           const body = (
             <>
-              {i === at && words ? words.map((w, j) => <span key={j} data-word className="sung">{w.text}</span>) : text || "♪"}
-              {sub && <span className="mt-1 block text-[0.6em] leading-snug font-semibold opacity-80">{sub}</span>}
+              {words ? <LineWords {...words} /> : text}
+              {l.bg && (
+                <span className="bgv">
+                  <span>{i === at && l.bgWords ? l.bgWords.map((w, j) => <span key={j} data-b={j} className="sung">{w.text}</span>) : l.bg}</span>
+                </span>
+              )}
+              {sub && <span dir="auto" className="mt-1 block text-[0.6em] leading-snug font-semibold opacity-80">{sub}</span>}
             </>
           );
           return (
-            <li key={i} data-line={i} className={`transition-colors duration-300 ${colour}`}>
+            <li
+              key={i}
+              data-line={i}
+              data-state={state}
+              data-dist={synced && d ? Math.min(4, Math.abs(d)) : undefined}
+              data-side={l.side}
+              dir={isRtl(text) ? "rtl" : undefined}
+              className="lyric"
+              style={blur ? ({ "--f": `blur(${blur}em)` } as CSSProperties) : undefined}
+            >
               {synced ? (
-                <button onClick={() => seekTo(l.time)} className="-mx-2 w-[calc(100%+16px)] rounded-xl px-2 py-1.5 text-left hover:bg-white/[0.07]">{body}</button>
+                <button onClick={() => seekTo(l.time)} className="lyric-body">{body}</button>
               ) : (
                 <p className="py-1">{body}</p>
               )}
@@ -797,10 +944,369 @@ function LyricLines({ track, lyrics, extras, live, big }: { track?: Track; lyric
       {/* The padding under it lets the last line scroll up to where the others are read. */}
       <p className="mt-8 pb-[45vh] text-sm font-semibold text-white/70">
         {synced ? "" : "These lyrics aren’t synced to the song yet. "}
-        Lyrics from {value.source}{value.credit ? ` (${value.credit})` : ""}.{google && ` ${google} by Google.`}
+        {value.source === "you" ? "Your own lyrics." : `Lyrics from ${value.source}.`}
+        {value.writers && ` Written by ${value.writers}.`}
+        {google && ` ${google} by Google.`}
       </p>
     </div>
   );
+}
+
+// A line as words. A word wraps its syllables, filled one by one, and lifts as it's sung; a word that
+// moves letter by letter (held, or Chinese and Japanese) wraps each letter instead, filled in turn.
+function LineWords({ words, groups }: Words) {
+  return groups.map((g, gi) => {
+    const syl = words.slice(g.first, g.first + g.count).map((w, j) => (j === g.count - 1 ? w.text.trimEnd() : w.text));
+    let n = 0;
+    const size = syl.reduce((a, t) => a + [...t].length, 0);
+    return (
+      <Fragment key={gi}>
+        <span className="lw" data-g={g.motion === "none" ? gi : undefined}>
+          {g.motion === "none"
+            ? syl.map((t, j) => <span key={j} data-s={g.first + j} className="sung">{t}</span>)
+            : syl.flatMap((t, j) =>
+                [...t].map((c, k, cs) => (
+                  <span key={`${j}.${k}`} className="lc" data-g={gi} data-i={n++} data-w={size}>
+                    <span className="sung" data-c data-s={g.first + j} data-k={k} data-n={cs.length} data-glyph={c}>{c}</span>
+                  </span>
+                )),
+              )}
+        </span>
+        {g.space}
+      </Fragment>
+    );
+  });
+}
+
+// A held word's letter (am-lyrics' character motion): one after another, each swells, lifts and fans out
+// from the word's middle, glowing, then settles a little raised. The longer the hold, the more (full at
+// 2 s). Chinese and Japanese characters instead rise in on a bouncier spring, without the glow.
+function letter(el: HTMLElement, g: Group, now: number) {
+  const i = +el.dataset.i!, n = +el.dataset.w!;
+  const d = Math.max(0.001, g.end - g.start);
+  const rise = g.motion === "rise";
+  const stagger = (d / n) * (rise ? 0.4 : 0.35);
+  const delay = rise ? Math.min(stagger, 0.05, 0.2 / n) : Math.min(stagger, 0.35);
+  const hold = (2 * d) / n, response = Math.min(3, d);
+  const strength = rise ? 0 : clamp01(d - 1);
+  const glow = rise ? 0 : 0.45 * clamp01((d - 1) / 0.5);
+  const span = Math.max(hold + response * 2, rise ? 3 : 0);
+  const t = now - g.start - (i + 1) * delay;
+  const glyph = el.firstElementChild as HTMLElement;
+  if (t <= 0 || t >= span) {
+    el.style.transform = t <= 0 ? "" : "translateY(-3px)";
+    return glyph.style.removeProperty("--glow");
+  }
+  const up = rise ? 1 - sampleSpring(1, 0, t, Math.sqrt(14), 3.5).position : springProgress(t, response);
+  const swell = springProgress(t, response) * (1 - springProgress(t - hold, response));
+  el.style.transform = `translate(${(i - (n - 1) / 2) * 0.05 * strength * swell}em, ${-3 * up - 2.5 * strength * swell}px) scale(${1 + 0.1 * strength * swell})`;
+  if (glow) {
+    const x = t / span; // the glow's curve: up fast, peak at 30 %, gone by the end
+    const k = x < 0.15 ? (x / 0.15) * 0.8 : x < 0.3 ? 0.8 + ((x - 0.15) / 0.15) * 0.2 : x < 0.6 ? 1 - ((x - 0.3) / 0.3) * 0.7 : 0.3 * (1 - (x - 0.6) / 0.4);
+    glyph.style.setProperty("--glow", String(glow * k));
+  }
+}
+
+// An instrumental break (am-lyrics' gap): three dots grow in, breathe, fill one by one across the break,
+// then pop and vanish just before the singing comes back.
+function breathe(el: HTMLElement, start: number, end: number, now: number, still: boolean) {
+  const t = now - start, out = end - start - 0.6; // the pop takes the last 0.6 s
+  let scale: number, opacity: number;
+  if (t >= out) {
+    const x = clamp01((t - out) / 0.6), pop = x <= 0.35, y = pop ? x / 0.35 : (x - 0.35) / 0.65, ease = y * y * (3 - 2 * y);
+    scale = pop ? 0.85 + 0.35 * ease : 1.2 * (1 - ease);
+    opacity = pop ? 1 : 1 - ease;
+  } else {
+    // Breathing between 1.12 and 0.85 every 4 s, timed to be at its smallest as the pop starts.
+    const phase = (((t + 4 - (out % 8)) % 8) + 8) % 8;
+    const mix = (1 - Math.cos((Math.PI * phase) / 4)) / 2;
+    const grow = Math.min(1, t / 0.4);
+    scale = still ? 1 : (1.12 - 0.27 * mix) * (grow === 1 ? 1 : 1 - 2 ** (-10 * grow));
+    opacity = clamp01(t / 0.16);
+  }
+  el.style.setProperty("--gs", String(scale));
+  el.style.setProperty("--go", String(opacity));
+  [...el.children].forEach((dot, k) => (dot as HTMLElement).style.setProperty("--d", String(0.25 + 0.75 * clamp01((t - (k * out) / 3) / (out / 3)))));
+}
+
+// am-lyrics' scroll: the view jumps to the line (el; none while you scroll by hand), then every line near
+// it springs from where it was on screen to where it now is, each a beat (50 ms) after the one before.
+// Where it was counts its spring so far and any change of layout since the last render: as in am-lyrics,
+// heights change at once and the springs carry the move. Only translate is animated, which the GPU runs
+// on its own. glide false: just jump.
+type Spring = { anim: Animation; pos: number; vel: number; delay: number };
+type Motion = { springs: Map<Element, Spring>; tops: WeakMap<Element, number>; width: number };
+let unit: { offset: number; p: number; v: number }[] | undefined;
+const springFrames = (pos: number, vel: number) =>
+  (unit ??= Array.from({ length: 97 }, (_, f) => ({ offset: f / 96, p: f === 96 ? 0 : sampleSpring(1, 0, (1.2 * f) / 96, 10).position, v: f === 96 ? 0 : sampleSpring(0, 1, (1.2 * f) / 96, 10).position }))).map(({ offset, p, v }) => ({ offset, translate: `0 ${pos * p + vel * v}px` }));
+function cascade(root: HTMLElement, el: HTMLElement | null, ref: number, m: Motion, glide: boolean) {
+  const { springs } = m;
+  const items = [...root.querySelectorAll<HTMLElement>("[data-line]")];
+  const known = glide && root.clientWidth === m.width; // no resize since, so the old places still hold
+  const moved = items.map((item) => (known ? (m.tops.get(item) ?? item.offsetTop) - item.offsetTop : 0));
+  const from = root.scrollTop;
+  if (el) root.scrollTop = el.offsetTop - root.clientHeight * 0.3;
+  const delta = root.scrollTop - from;
+  m.width = root.clientWidth;
+  items.forEach((item) => m.tops.set(item, item.offsetTop));
+  if (!glide || (Math.abs(delta) < 1 && moved.every((d) => Math.abs(d) < 0.5))) {
+    if (!glide) springs.forEach((s) => s.anim.cancel()), springs.clear();
+    return;
+  }
+  const retarget = springs.size > 0;
+  const poses = items.map((item) => {
+    const s = springs.get(item);
+    const ran = s ? Number(s.anim.currentTime ?? 0) / 1000 : 0;
+    return s && { ...sampleSpring(s.pos, s.vel, Math.max(0, ran - s.delay), 10), delay: Math.max(0, s.delay - ran) };
+  });
+  springs.forEach((s) => s.anim.cancel());
+  springs.clear();
+  const lo = Math.min(from, root.scrollTop) - 200, hi = Math.max(from, root.scrollTop) + root.clientHeight + 200;
+  items.forEach((item, i) => {
+    const pose = poses[i] || { position: 0, velocity: 0, delay: 0 };
+    const pos = pose.position + delta + moved[i];
+    const top = item.offsetTop;
+    if (Math.abs(i - ref) > 20 || (!poses[i] && (top + item.offsetHeight < lo || top > hi)) || (Math.abs(pos) < 0.1 && Math.abs(pose.velocity) < 0.1)) return;
+    const wait = retarget ? pose.delay : Math.max(0, Math.min(4, delta >= 0 ? i - ref : ref - i)) * 0.05;
+    const anim = item.animate(springFrames(pos, pose.velocity), { duration: 1200, delay: wait * 1000, fill: "both", easing: "linear" });
+    const s = { anim, pos, vel: pose.velocity, delay: wait };
+    springs.set(item, s);
+    anim.onfinish = () => springs.get(item) === s && (anim.cancel(), springs.delete(item));
+  });
+}
+
+// One style for every modal: a card over a dimmed window. A click outside or Esc closes it, and it keeps
+// the keyboard to itself, so app shortcuts (⌘S is Shuffle) don't fire while you type in it.
+function Modal({ label, onClose, className, children }: { label: string; onClose: () => void; className: string; children: ReactNode }) {
+  return (
+    <div onPointerDown={(e) => e.target === e.currentTarget && onClose()} className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-6">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        onKeyDown={(e) => (e.stopPropagation(), e.key === "Escape" && onClose())}
+        className={`flex max-h-full animate-enter flex-col overflow-hidden rounded-2xl bg-paper text-ink shadow-2xl ring-1 shadow-black/30 ring-ink/10 ${className}`}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+export function Dialogs() {
+  const dialog = useStore((s) => s.dialog);
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : null;
+}
+const closeDialog = () => useStore.setState({ dialog: undefined });
+
+// Your own lyrics for a song: plain text, or LRC ("[01:02.50] line") to sync them. While the song plays,
+// Stamp Line (⌘↩) puts its time on the line the cursor is in and moves to the next, so a song can be synced
+// by tapping along.
+function LyricsEditor({ d }: { d: Extract<Dialog, { kind: "edit" }> }) {
+  const [text, setText] = useState(d.text);
+  const area = useRef<HTMLTextAreaElement>(null);
+  const mine = useMine((s) => s.songs[d.key]);
+  const playing = useStore((s) => !!d.track && s.queue[s.index]?.id === d.track.id);
+  const save = () => (saveMine(d.key, d, text), closeDialog());
+  const stampLine = () => {
+    const el = area.current!;
+    const start = text.lastIndexOf("\n", el.selectionStart - 1) + 1;
+    const end = text.indexOf("\n", el.selectionStart) < 0 ? text.length : text.indexOf("\n", el.selectionStart);
+    const line = `[${lrcTime(audio.currentTime)}] ${text.slice(start, end).replace(/^\s*(\[\d+:\d+(?:[.:]\d+)?\]\s*)+/, "")}`;
+    const next = text.slice(0, start) + line + text.slice(end);
+    const caret = Math.min(next.length, start + line.length + 1);
+    setText(next);
+    requestAnimationFrame(() => el.setSelectionRange(caret, caret));
+  };
+  return (
+    <Modal label="Edit Lyrics" onClose={closeDialog} className="h-[min(640px,86vh)] w-[min(620px,92vw)]">
+      <header className="px-6 pt-5">
+        <h2 className="text-xl font-bold tracking-tight">Edit Lyrics</h2>
+        <p className="truncate text-sm text-muted">{d.title} · {d.artist}</p>
+      </header>
+      <textarea
+        ref={area}
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          const mod = e.metaKey || e.ctrlKey;
+          if (mod && e.key === "Enter" && playing) e.preventDefault(), stampLine();
+          else if (mod && e.key.toLowerCase() === "s") e.preventDefault(), save();
+        }}
+        aria-label="Lyrics"
+        spellCheck={false}
+        placeholder="Type or paste the lyrics. To sync them, put a time before each line, like [01:02.50], or play the song and use Stamp Line."
+        className="mx-6 mt-4 min-h-0 flex-1 resize-none rounded-xl bg-ink/[0.05] p-4 font-mono text-[13px] leading-relaxed outline-none select-text placeholder:font-sans placeholder:text-sm placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent"
+      />
+      <footer className="flex flex-wrap items-center gap-2 px-6 py-4">
+        {playing && (
+          <button onClick={stampLine} title="Put the song’s time on this line (⌘↩)" className={quiet}>
+            Stamp Line <kbd className="font-sans text-xs text-muted">{mod}↩</kbd>
+          </button>
+        )}
+        {mine && <button onClick={() => (removeMine(d.key), closeDialog())} className={quiet}>Remove My Lyrics</button>}
+        <div className="ml-auto flex gap-2">
+          <button onClick={closeDialog} className={quiet}>Cancel</button>
+          <button onClick={save} className={solid}>Save</button>
+        </div>
+      </footer>
+    </Modal>
+  );
+}
+
+// A lyric card: up to four lines over one of four backdrops, as an image to save or copy.
+const BACKDROPS = ["Artwork", "Colour", "Dark", "Light"] as const;
+type Backdrop = (typeof BACKDROPS)[number];
+function LyricCard({ d }: { d: Extract<Dialog, { kind: "card" }> }) {
+  const lyrics = useMemo(() => lyricsNow(d.track), [d.track]);
+  const lines = lyrics?.lines ?? [];
+  const [pick, setPick] = useState(d.pick);
+  const [backdrop, setBackdrop] = useState<Backdrop>("Artwork");
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => void drawCard(canvas.current!, d.track, pick.map((i) => lines[i].text), backdrop), [pick, backdrop]);
+  const choose = (i: number) => setPick((p) => (p.includes(i) ? p.filter((x) => x !== i) : p.length < 4 ? [...p, i].sort((a, b) => a - b) : p));
+  const name = `${d.track.title} - ${d.track.artists[0]?.name ?? ""}`.replace(/[\\/:*?"<>|]/g, "");
+  const save = () =>
+    canvas.current!.toBlob((blob) => {
+      if (!blob) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${name}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+      notify({ text: "Lyric Card Saved", detail: "Saved to your Downloads folder" });
+    }, "image/png");
+  // The blob as a promise keeps the click's permission to write to the clipboard (Safari needs that).
+  const copy = () =>
+    navigator.clipboard
+      .write([new ClipboardItem({ "image/png": new Promise<Blob>((ok, fail) => canvas.current!.toBlob((b) => (b ? ok(b) : fail()), "image/png")) })])
+      .then(() => notify({ text: "Lyric Card Copied", detail: name }), () => notify({ text: "Couldn’t Copy the Card", detail: "Save it instead" }));
+  return (
+    <Modal label="Lyric Card" onClose={closeDialog} className="h-[min(700px,90vh)] w-[min(940px,94vw)]">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_min(360px,38vw)] gap-6 overflow-y-auto p-6">
+        <div className="flex min-h-0 flex-col">
+          <h2 className="text-xl font-bold tracking-tight">Lyric Card</h2>
+          <p className="text-sm text-muted">Pick up to four lines.</p>
+          <ol className="-mx-2 mt-4 min-h-0 flex-1 overflow-y-auto">
+            {lines.map((l, i) =>
+              l.text ? (
+                <li key={i}>
+                  <button onClick={() => choose(i)} aria-pressed={pick.includes(i)} disabled={!pick.includes(i) && pick.length >= 4} className={`w-full rounded-lg px-2 py-1.5 text-left font-semibold transition-colors disabled:opacity-40 ${pick.includes(i) ? "bg-accent text-paper" : "hover:bg-ink/[0.05]"}`}>
+                    {l.text}
+                  </button>
+                </li>
+              ) : null,
+            )}
+          </ol>
+        </div>
+        <div className="flex flex-col items-center gap-4">
+          {/* Drawn at 1080 × 1350, shown at the column's width. */}
+          <canvas ref={canvas} aria-label="Card preview" className="aspect-[4/5] w-full rounded-xl shadow-xl shadow-black/25" />
+          <div role="radiogroup" aria-label="Backdrop" className="flex flex-wrap justify-center gap-2">
+            {BACKDROPS.map((b) => (
+              <button key={b} role="radio" aria-checked={backdrop === b} onClick={() => setBackdrop(b)} className={`press h-8 rounded-full px-3.5 text-sm font-semibold transition-colors ${backdrop === b ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`}>
+                {b}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={copy} disabled={!pick.length} className={quiet}><Copy size={15} /> Copy Image</button>
+            <button onClick={save} disabled={!pick.length} className={solid}><ImageDown size={16} /> Save Image</button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// The card, 1080 × 1350: the backdrop, the song at the top, the lines big in the middle, Sleeve at the foot.
+// The artwork backdrop is the cover drawn tiny and stretched, which blurs it the same in every WebView.
+const cardArt = (t: Track) =>
+  new Promise<HTMLImageElement | undefined>((ok) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => ok(img);
+    img.onerror = () => ok(undefined);
+    img.src = art(t.thumb, 600) ?? "";
+  });
+const covers = new Map<string, ReturnType<typeof cardArt>>();
+async function drawCard(c: HTMLCanvasElement, t: Track, texts: string[], backdrop: Backdrop) {
+  const W = 1080, H = 1350, pad = 96;
+  const run = (c.dataset.run = String(+(c.dataset.run ?? 0) + 1)); // a newer draw wins
+  if (!covers.has(t.id)) covers.set(t.id, cardArt(t));
+  const cover = await covers.get(t.id);
+  if (c.dataset.run !== run) return;
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d")!;
+  const probe = document.createElement("i");
+  document.body.append(probe);
+  probe.style.color = "var(--color-accent-vivid)";
+  const vivid = getComputedStyle(probe).color;
+  probe.remove();
+  const light = backdrop === "Light";
+  ctx.fillStyle = light ? "#f5f5f7" : backdrop === "Dark" ? "#121214" : vivid;
+  ctx.fillRect(0, 0, W, H);
+  if (backdrop === "Artwork" && cover) {
+    const tiny = document.createElement("canvas");
+    tiny.width = 12;
+    tiny.height = 15;
+    tiny.getContext("2d")!.drawImage(cover, 0, 0, 12, 15);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(tiny, 0, 0, W, H);
+    ctx.fillStyle = "rgb(0 0 0 / 0.38)";
+    ctx.fillRect(0, 0, W, H);
+  }
+  const ink = light ? "#121212" : "#fff";
+  const font = (weight: number, px: number) => `${weight} ${px}px -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", system-ui, sans-serif`;
+  // The song: cover and name at the top.
+  if (cover) {
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(pad, pad, 132, 132, 18);
+    else ctx.rect(pad, pad, 132, 132);
+    ctx.clip();
+    ctx.drawImage(cover, pad, pad, 132, 132);
+    ctx.restore();
+  }
+  const x = cover ? pad + 132 + 32 : pad;
+  ctx.fillStyle = ink;
+  ctx.font = font(700, 42);
+  ctx.fillText(fit(ctx, t.title, W - pad - x), x, pad + 58);
+  ctx.globalAlpha = 0.7;
+  ctx.font = font(500, 36);
+  ctx.fillText(fit(ctx, t.artists.map((a) => a.name).join(", "), W - pad - x), x, pad + 108);
+  ctx.globalAlpha = 1;
+  // The lines, wrapped, smaller the more there are, centred in the space left.
+  const px = texts.length > 2 ? 64 : 76;
+  ctx.font = font(800, px);
+  const rows = texts.flatMap((s) => wrap(ctx, s, W - pad * 2).concat(""));
+  rows.pop();
+  const lead = px * 1.18;
+  let y = (pad + 132 + H - pad - 60) / 2 - (rows.length * lead) / 2 + px * 0.8;
+  for (const row of rows) {
+    if (row) ctx.fillText(row, pad, y);
+    y += row ? lead : lead * 0.45;
+  }
+  ctx.globalAlpha = 0.7;
+  ctx.font = font(800, 34);
+  ctx.fillText("Sleeve", pad, H - pad + 10);
+  ctx.globalAlpha = 1;
+}
+const fit = (ctx: CanvasRenderingContext2D, s: string, w: number) => {
+  if (ctx.measureText(s).width <= w) return s;
+  while (s && ctx.measureText(`${s}…`).width > w) s = s.slice(0, -1);
+  return `${s.trimEnd()}…`;
+};
+function wrap(ctx: CanvasRenderingContext2D, s: string, w: number) {
+  const rows: string[] = [];
+  for (const word of s.split(/\s+/)) {
+    const row = rows.length ? `${rows[rows.length - 1]} ${word}` : word;
+    if (rows.length && ctx.measureText(row).width <= w) rows[rows.length - 1] = row;
+    else rows.push(fit(ctx, word, w));
+  }
+  return rows;
 }
 
 const isMac = /Mac/.test(navigator.userAgent);
@@ -981,8 +1487,9 @@ const names = new Intl.DisplayNames([navigator.language], { type: "language" });
 const languageName = (code: string) => names.of({ "zh-CN": "zh-Hans", "zh-TW": "zh-Hant" }[code] ?? code) ?? code;
 
 function LyricsPane() {
-  const { lyricsPeek, lyricsWords, translateTo } = useSettings();
+  const { lyricsPeek, lyricsWords, lyricsStill, translateTo } = useSettings();
   const set = useSettings.setState;
+  const mine = Object.entries(useMine((s) => s.songs)).sort((a, b) => b[1].at - a[1].at);
   return (
     <>
       <div className="mb-6 divide-y divide-ink/10">
@@ -991,6 +1498,9 @@ function LyricsPane() {
         </Row>
         <Row label="Word by Word on Every Song" detail={lyricsWords ? "Songs that only time their lines get their words timed by estimate" : "Only songs whose lyrics time each word"}>
           <Switch label="Word by Word on Every Song" on={lyricsWords} onChange={(lyricsWords) => set({ lyricsWords })} />
+        </Row>
+        <Row label="Reduce Lyric Motion" detail={lyricsStill ? "Lines jump to the one being sung, and words stay put" : "Lines glide and words move, whatever the system’s Reduce Motion is set to"}>
+          <Switch label="Reduce Lyric Motion" on={lyricsStill} onChange={(lyricsStill) => set({ lyricsStill })} />
         </Row>
         <Row label="Translate To" detail="What Translate turns lyrics in other languages into">
           <div className="relative">
@@ -1008,8 +1518,27 @@ function LyricsPane() {
         </Row>
       </div>
       <p className="max-w-xl text-sm leading-relaxed text-muted">
-        Lyrics come from LRCLIB, a free library anyone can add to, and otherwise from YouTube Music. Translation and romanisation are by Google, and only happen when you switch them on.
+        Lyrics are your own first, then Apple Music’s word by word, then LRCLIB, a free library anyone can add to, then NetEase Cloud Music. Translation and romanisation are by Google, and only happen when you switch them on.
       </p>
+      <section className="mt-10">
+        <h2 className="mb-3 text-xl font-bold tracking-tight">Your Lyrics</h2>
+        {mine.length ? (
+          <div className="divide-y divide-ink/10">
+            {mine.map(([key, m]) => (
+              <div key={key} className="flex h-14 items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold">{m.title}</div>
+                  <div className="truncate text-sm text-muted">{m.artist}</div>
+                </div>
+                <button onClick={() => useStore.setState({ dialog: { kind: "edit", key, title: m.title, artist: m.artist, text: m.text } })} className={quiet}>Edit</button>
+                <button onClick={() => removeMine(key)} className={quiet}>Remove</button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-muted">Lyrics you write or fix land here. Right-click any song and choose Edit Lyrics.</p>
+        )}
+      </section>
     </>
   );
 }

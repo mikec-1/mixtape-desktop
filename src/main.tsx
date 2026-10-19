@@ -8,9 +8,9 @@ let Root;
 if (mini) Root = (await import("./mini")).default;
 else {
   Root = (await import("./App")).default;
-  // Draw once the library is read (a few ms), so it never flashes empty.
-  const { persist } = (await import("./store")).useLibrary;
-  if (!persist.hasHydrated()) await new Promise((r) => persist.onFinishHydration(r));
+  // Draw once the library and your own lyrics are read (a few ms), so neither flashes in late.
+  const [{ useLibrary }, { useMine }] = await Promise.all([import("./store"), import("./lyrics")]);
+  for (const { persist } of [useLibrary, useMine]) if (!persist.hasHydrated()) await new Promise((r) => persist.onFinishHydration(r));
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

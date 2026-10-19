@@ -2,12 +2,12 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
 import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { useExtras, useLine, useLyrics } from "./lyrics";
-import { Artist, Artists, CollectionPage, Home, Library, NowPlaying, PlaylistPage, popup, QueuePanel, Search, Settings, trackMenu } from "./views";
+import { Artist, Artists, CollectionPage, Dialogs, Home, Library, NowPlaying, PlaylistPage, popup, QueuePanel, Search, Settings, trackMenu } from "./views";
 import { art, type Track } from "./yt";
 
 export default function App() {
   const stack = useStore((s) => s.stack);
-  const sheet = useStore((s) => !!s.sheet);
+  const covered = useStore((s) => !!s.sheet || !!s.dialog); // the sheet or a dialog is over the page
   const root = stack[0].name;
   const open = useSettings((s) => s.sidebar);
   const width = useSettings((s) => s.sidebarWidth);
@@ -34,11 +34,11 @@ export default function App() {
     // The sidebar and one big page card, the player under the page. The gaps drag the window.
     // --sidebar and --panel centre the toasts on the page card.
     <div data-tauri-drag-region className="flex h-full gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
-      <Sidebar root={root} open={open} width={width} inert={sheet} />
+      <Sidebar root={root} open={open} width={width} inert={covered} />
 
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex min-h-0 flex-1 gap-2">
-        <main inert={sheet} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
+        <main inert={covered} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
           <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-11" />
           {/* Every view in the stack stays mounted, so going back keeps its results and scroll position. */}
           {stack.map((view, i) => (
@@ -60,6 +60,7 @@ export default function App() {
       </div>
 
       <NowPlaying />
+      <Dialogs />
       <Toast />
       <Offline />
     </div>
@@ -165,7 +166,7 @@ function PlayerBar() {
   const shuffle = useStore((s) => s.shuffle);
   const repeat = useStore((s) => s.repeat);
   const sleep = useStore((s) => s.sleep);
-  const sheet = useStore((s) => s.sheet);
+  const lyrics = useStore((s) => s.sheet === "lyrics");
   const queue = useSettings((s) => s.queue);
   const icon = "press grid size-8 shrink-0 place-items-center rounded-full text-ink/60 hover:text-ink";
   const roomy = icon.replace("grid", "hidden @2xl:grid"); // only when the bar has room
@@ -221,7 +222,7 @@ function PlayerBar() {
           <button onClick={sleepMenu} aria-label="Sleep Timer" title={sleep === "track" ? "Sleep Timer: end of track" : sleep ? `Sleep Timer: ${Math.ceil((sleep - Date.now()) / 60_000)} min left` : "Sleep Timer"} className={mode(!!sleep)}>
             <Moon size={17} />
           </button>
-          <button onClick={() => toggleSheet("lyrics")} aria-label="Lyrics" aria-pressed={sheet === "lyrics"} title="Lyrics" className={mode(sheet === "lyrics")}>
+          <button onClick={() => toggleSheet("lyrics")} aria-label="Lyrics" aria-pressed={lyrics} title="Lyrics" className={mode(lyrics)}>
             <MicVocal size={17} />
           </button>
           <button onClick={() => useSettings.setState({ queue: !queue })} aria-label="Queue" aria-pressed={queue} title="Queue" className={mode(queue)}>

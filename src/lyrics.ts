@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { audio, useAudio, useOnline, useSettings, useStore } from "./store";
-import { lyrics as ytLyrics, type Track } from "./yt";
+import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { audio, idb, idbGet, idbPut, notify, setLyricLine, subscribeAudio, useOnline, useSettings, useStore } from "./store";
+import type { Track } from "./yt";
 import { version } from "../package.json";
 
 // A line starts at time (seconds) and, where the source says, ends at end. Text "" is a break (♪).
-// Word-synced lyrics time each word too, and the words make up the line's text.
+// Word-synced lyrics time each word (Apple's, each syllable) too, and the words make up the line's text.
+// bg is backing vocals; roman the source's own romanisation of the line.
 export type Word = { time: number; end?: number; text: string };
-export type Line = { time: number; end?: number; text: string; words?: Word[] };
-// Unsynced lyrics have time 0 on every line, and "" between verses.
-export type Lyrics = { lines: Line[]; synced: boolean; source: string; credit?: string; instrumental?: boolean };
+// bgWords times the backing vocals the same way; side "end" puts a duet's other singer on the right.
+export type Line = { time: number; end?: number; text: string; words?: Word[]; bg?: string; bgWords?: Word[]; roman?: string; side?: "end" };
+// Unsynced lyrics have time 0 on every line, and "" between verses. source "you": your own (useMine).
+export type Lyrics = { lines: Line[]; synced: boolean; source: string; instrumental?: boolean; writers?: string };
 
 // In the app requests go through Rust like YouTube's (yt.ts), so CORS never matters; a browser uses its own.
 const http: typeof fetch = "__TAURI_INTERNALS__" in window ? tauriFetch : (input, init) => fetch(input, init);
@@ -50,20 +54,26 @@ function pick(list: Hit[], secs?: number) {
   return list.filter((r) => rank(r) < 4 && off(r) <= 3).sort((a, b) => rank(a) - rank(b) || off(a) - off(b))[0];
 }
 
+// undefined: LRCLIB doesn't have it (404).
+async function lrclibApi<T>(path: "get" | "search", q: Record<string, string>): Promise<T | undefined> {
+  const go = () => http(`https://lrclib.net/api/${path}?${new URLSearchParams(q)}`, { headers: LRCLIB, signal: timeout() });
+  let r = await go();
+  if (r.status === 503) r = await new Promise((ok) => setTimeout(ok, 1000)).then(go); // busy, and it says Retry-After: 1
+  if (r.status === 404) return undefined;
+  if (!r.ok) throw new Error(`LRCLIB: ${r.status}`);
+  return r.json();
+}
+
 async function lrclib(t: Track): Promise<Lyrics | undefined> {
   const name = title(t);
   const artist = t.artists[0]?.name ?? "";
   const secs = seconds(t.duration);
-  const search = async (q: Record<string, string>) => {
-    const get = () => http(`https://lrclib.net/api/search?${new URLSearchParams(q)}`, { headers: LRCLIB, signal: timeout() });
-    let r = await get();
-    if (r.status === 503) r = await new Promise((ok) => setTimeout(ok, 1000)).then(get); // busy, and it says Retry-After: 1
-    if (!r.ok) throw new Error(`LRCLIB: ${r.status}`);
-    return (await r.json()) as Hit[];
-  };
-  // By title and artist; failing that as free text, which forgives credits written differently.
-  const best = pick(await search(artist ? { track_name: name, artist_name: artist } : { track_name: name }), secs)
-    ?? pick((await search({ q: `${name} ${artist}`.trim() })).filter((r) => alike(r.trackName, name) && (!artist || alike(r.artistName, artist))), secs);
+  // An exact match first (LRCLIB's own: title, artist, album, and length within 2 s), then a search by title
+  // and artist, then one as free text, which forgives credits written differently.
+  const exact = artist ? await lrclibApi<Hit>("get", { track_name: name, artist_name: artist, ...(t.album && { album_name: t.album }), ...(secs && { duration: String(secs) }) }) : undefined;
+  const best = pick(exact ? [exact] : [], secs)
+    ?? pick((await lrclibApi<Hit[]>("search", artist ? { track_name: name, artist_name: artist } : { track_name: name })) ?? [], secs)
+    ?? pick(((await lrclibApi<Hit[]>("search", { q: `${name} ${artist}`.trim() })) ?? []).filter((r) => alike(r.trackName, name) && (!artist || alike(r.artistName, artist))), secs);
   if (!best) return;
   const source = "LRCLIB";
   if (rank(best) === 0) {
@@ -156,16 +166,228 @@ function tidy(lines: Line[]): Line[] {
   return out;
 }
 
-// LRCLIB first, then YouTube Music's plain lyrics. null: neither has any for this song.
+// NetEase Cloud Music, for synced lyrics LRCLIB doesn't have: a search, then the song's lyrics. Its API
+// expects its own web player, so requests carry its Referer, a browser's User-Agent and an NMTID cookie (a
+// random one, as NeteaseCloudMusicApi sends). A page can't set those or call it across origins, so in a
+// browser this source fails and there are no lyrics; in the app it goes through Rust.
+const hex = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+const NETEASE = {
+  Referer: "https://music.163.com/",
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+  Cookie: `NMTID=${hex(16)}; os=pc; appver=3.1.17.204416`,
+};
+type Song = { id: number; name: string; artists?: { name: string }[]; duration?: number }; // duration in ms
+// The credits NetEase opens its lyrics with: "作词 : …", "Composer: …".
+const CREDIT = /^(作词|作曲|编曲|制作人?|监制|混音|母带|和声|录音|吉他|贝斯|鼓|弦乐|出品|发行|企划|统筹|词|曲|lyrics|lyricist|composer|producers?|arranger|written by|mix(ed|ing)?|master(ed|ing)?)\s*(by)?\s*[:：]/i;
+
+async function netease(t: Track): Promise<Lyrics | undefined> {
+  const name = title(t);
+  const artist = t.artists[0]?.name ?? "";
+  const secs = seconds(t.duration);
+  const call = async (path: string, q: Record<string, string>, method = "GET") => {
+    const r = await http(`https://music.163.com/api/${path}?${new URLSearchParams(q)}`, { method, headers: NETEASE, signal: timeout() });
+    if (!r.ok) throw new Error(`NetEase: ${r.status}`);
+    return r.json();
+  };
+  const songs: Song[] = (await call("search/pc", { s: `${name} ${artist}`.trim(), type: "1", limit: "10", offset: "0" }, "POST"))?.result?.songs ?? [];
+  const song = songs.find((s) => alike(s.name, name) && (!artist || s.artists?.some((a) => alike(a.name, artist))) && (!secs || !s.duration || Math.abs(s.duration / 1000 - secs) <= 3));
+  if (!song) return;
+  const lrc: unknown = (await call("song/lyric", { id: String(song.id), lv: "1", kv: "1", tv: "-1" }))?.lrc?.lyric;
+  if (typeof lrc !== "string") return;
+  const source = "NetEase Cloud Music";
+  if (lrc.includes("纯音乐，请欣赏")) return { lines: [], synced: false, source, instrumental: true }; // "pure music, enjoy"
+  const lines = parseLrc(lrc).filter((l) => !CREDIT.test(l.text));
+  // Synced only: NetEase's untimed lyrics come stamped all at 0.
+  return lines.filter((l) => l.time > 0).length > 1 ? { lines: tidy(lines), synced: true, source } : undefined;
+}
+
+// Apple Music's lyrics, timed word by word, from the index am-lyrics uses: looked up by title, artist,
+// album and length, then the TTML file it points to (on lrc.red). A result counts only if it's the same
+// recording (title and main artist, length within 3 s) and timed by the word, which the index says, so
+// anything else costs no second request; and only if every line fits inside the song. One 3 s budget
+// for both requests, so a slow answer never holds up LRCLIB's.
+type AppleHit = { track_name?: string; artist_name?: string; duration?: number; timing_type?: string; lyricsUrl?: unknown };
+async function apple(t: Track): Promise<Lyrics | undefined> {
+  const name = title(t);
+  const artist = t.artists[0]?.name ?? "";
+  const secs = seconds(t.duration);
+  if (!artist) return;
+  const signal = timeout(3000);
+  const q = new URLSearchParams({ track: name, artist, ...(t.album && { album: t.album }), ...(secs && { duration: String(secs) }) });
+  const r = await http(`https://lyrics-api.binimum.org/?${q}`, { signal });
+  if (r.status === 404) return;
+  if (!r.ok) throw new Error(`Apple lyrics: ${r.status}`);
+  const hits: AppleHit[] = (await r.json())?.results ?? [];
+  const url = hits.find(
+    (h) =>
+      typeof h.lyricsUrl === "string" &&
+      (!h.timing_type || h.timing_type === "word") &&
+      (!h.track_name || alike(h.track_name, name)) &&
+      (!h.artist_name || alike(h.artist_name, artist)) &&
+      (!secs || !h.duration || Math.abs(h.duration - secs) <= 3),
+  )?.lyricsUrl as string | undefined;
+  if (!url) return;
+  // The file lives wherever the index says; off the app's allowlist, the webview fetches it itself.
+  const file = await http(url, { signal }).catch(() => fetch(url, { signal }));
+  if (!file.ok) throw new Error(`Apple lyrics file: ${file.status}`);
+  const lyrics = parseTtml(await file.text());
+  const last = lyrics?.lines.at(-1);
+  if (!lyrics?.lines.some((l) => l.words) || (secs && last && (last.end ?? last.time) > secs + 3)) return;
+  return lyrics;
+}
+
+// "12.3", "1:02.345", "1:02:03.4", or with a unit: "12.3s", "450ms".
+const UNITS: Record<string, number> = { h: 3600, m: 60, s: 1, ms: 0.001 };
+function clock(v: string | null) {
+  const unit = v && /^([\d.]+)(h|m|s|ms)$/.exec(v.trim());
+  if (unit) return +unit[1] * UNITS[unit[2]];
+  const n = v?.trim().split(":").reduce((s, x) => s * 60 + +x, 0);
+  return n === undefined || Number.isNaN(n) ? undefined : n;
+}
+
+// Apple's TTML: a <p> a line and a timed <span> a syllable, with a space between spans where a word ends.
+// Backing vocals are spans marked ttm:role="x-bg"; songwriters and sometimes a romanisation (by each line's
+// key) sit in the head. Attributes are read by namespace too, as lrc.red's copies name some (the key)
+// in its own. undefined unless the file is timed by the word.
+const NS = { itunes: "http://music.apple.com/lyric-ttml-internal", ttm: "http://www.w3.org/ns/ttml#metadata", lrc: "http://lrc.red/lyric-ttml-internal" };
+const attr = (el: Element, name: string, ...ns: string[]) => el.getAttribute(name) || ns.map((n) => el.getAttributeNS(n, name.split(":")[1])).find(Boolean) || null;
+export function parseTtml(xml: string): Lyrics | undefined {
+  const doc = new DOMParser().parseFromString(xml, "text/xml");
+  const timing = attr(doc.documentElement, "itunes:timing", NS.itunes);
+  if (doc.getElementsByTagName("parsererror").length || (timing && timing !== "Word")) return;
+  const roman = new Map<string, string>();
+  for (const x of doc.querySelectorAll("transliteration text")) {
+    const key = x.getAttribute("for");
+    if (key && x.textContent?.trim()) roman.set(key, x.textContent.trim().replace(/\s+/g, " "));
+  }
+  const agents = new Map([...doc.getElementsByTagNameNS(NS.ttm, "agent")].map((a) => [attr(a, "xml:id", "http://www.w3.org/XML/1998/namespace") ?? "", a.getAttribute("type") ?? ""]));
+  const singers: (string | undefined)[] = [];
+  const lines: Line[] = [];
+  for (const p of doc.getElementsByTagName("p")) {
+    const main = syllables(p.childNodes);
+    const time = clock(p.getAttribute("begin")) ?? main.words[0]?.time;
+    if (time === undefined) continue;
+    const key = attr(p, "itunes:key", NS.itunes, NS.lrc);
+    const bg = main.bg && syllables(main.bg.childNodes);
+    const bgText = bg && (bg.words.length ? bg.words.map((w) => w.text).join("") : bg.loose).trim();
+    singers.push(attr(p, "ttm:agent", NS.ttm) ?? undefined);
+    lines.push({
+      time,
+      end: clock(p.getAttribute("end")),
+      text: (main.words.length ? main.words.map((w) => w.text).join("") : main.loose).trim(),
+      ...(main.words.length && { words: main.words }),
+      ...(bgText && { bg: bgText, ...(bg.words.length && { bgWords: bg.words }) }),
+      ...(key && roman.has(key) && { roman: roman.get(key) }),
+    });
+  }
+  sides(singers, agents).forEach((side, i) => side && (lines[i].side = side));
+  const writers = [...doc.getElementsByTagName("songwriter")].map((w) => w.textContent?.trim()).filter(Boolean).join(", ");
+  return lines.length ? { lines: tidy(lines), synced: true, source: "Apple Music", ...(writers && { writers }) } : undefined;
+}
+
+// A line's (or its backing vocals') timed spans: syllables, with a space after one where a word ends.
+// Untimed text is kept as loose; the backing-vocal span is handed back to read the same way.
+function syllables(nodes: NodeListOf<ChildNode>) {
+  const words: Word[] = [];
+  let loose = "", bg: Element | undefined;
+  for (const node of nodes) {
+    if (!(node instanceof Element)) {
+      if (/\s/.test(node.textContent ?? "") && words.length) words[words.length - 1].text += " "; // a word ends
+      else loose += node.textContent ?? "";
+    } else if (attr(node, "ttm:role", NS.ttm) === "x-bg") bg = node;
+    else {
+      const time = clock(node.getAttribute("begin"));
+      if (time === undefined) loose += node.textContent ?? "";
+      else words.push({ time, end: clock(node.getAttribute("end")), text: node.textContent ?? "" });
+    }
+  }
+  if (words.length) words[words.length - 1].text = words[words.length - 1].text.trimEnd();
+  return { words, loose, bg };
+}
+
+// Duets, as am-lyrics lays them out: the first singer on the left, and each change of singer swaps
+// sides; a group (everyone) stays left. If nearly every line ended up right, all of them flip.
+function sides(singers: (string | undefined)[], types: Map<string, string>) {
+  let left = true, last: string | undefined;
+  const out = singers.map((id): "start" | "end" | undefined => {
+    if (!id) return;
+    const type = types.get(id) || (id === "v1000" ? "group" : id === "v2000" ? "other" : "person");
+    if (type === "group") return "start";
+    left = last === undefined ? type !== "other" : id !== last ? !left : left;
+    last = id;
+    return left ? "start" : "end";
+  });
+  const marked = out.filter(Boolean).length;
+  const right = out.filter((s) => s === "end").length;
+  const flip = marked > 0 && Math.round((right / marked) * 100) >= 85;
+  return out.map((s) => (s === "end" ? (flip ? undefined : "end") : s === "start" && flip ? "end" : undefined));
+}
+
+// Where lyrics come from, the first that has them: Apple's word-timed lyrics, LRCLIB, then NetEase Cloud
+// Music. Apple and LRCLIB are asked at once, so a song Apple lacks waits no longer than LRCLIB takes;
+// NetEase (slower, and far away) only when both come back empty. None: just no lyrics, with no error,
+// and a source that didn't answer is asked again the next time they're shown.
 async function find(t: Track): Promise<Lyrics | null> {
   let down = false;
-  const found = await lrclib(t).catch(() => void (down = true));
+  const miss = () => void (down = true);
+  const fromLrclib = lrclib(t).catch(miss);
+  const found = (await apple(t).catch(miss)) ?? (await fromLrclib) ?? (await netease(t).catch(miss));
   if (found) return found;
-  const yt = await ytLyrics(t.id).catch(() => undefined);
-  if (yt) return { lines: plain(yt.text), synced: false, source: "YouTube Music", credit: yt.credit };
-  if (down) throw new Error("LRCLIB didn't answer"); // try again later rather than say there are none
+  if (down) throw new Error("A lyrics source didn't answer");
   return null;
 }
+
+// Lyrics found are kept on disk, so a song heard before has them at once, even offline, with no request.
+// A miss is kept two days, then asked again, as sources keep adding songs. ponytail: never pruned (a
+// few KB a song); bump the version when a source is added, or what's read from one changes (v2: Apple's
+// backing-vocal timings and duet sides).
+async function stored(t: Track): Promise<Lyrics | null> {
+  const key = `lyrics:v2:${t.id}`;
+  const kept = await idbGet<{ at: number; lyrics: Lyrics | null }>(key).catch(() => undefined);
+  if (kept && (kept.lyrics || Date.now() - kept.at < 2 * 86_400_000)) return kept.lyrics;
+  const lyrics = await find(t);
+  idbPut(key, { at: Date.now(), lyrics }).catch(() => {});
+  return lyrics;
+}
+
+// Lyrics you wrote or fixed yourself. They beat every source, and are kept by song (its bare title and
+// main artist), so they stay when the song comes back under another id. text is LRC, or plain.
+export type Mine = { title: string; artist: string; text: string; at: number };
+export const useMine = create<{ songs: Record<string, Mine> }>()(persist(() => ({ songs: {} }), { name: "my-lyrics", storage: createJSONStorage(() => idb) }));
+export const songKey = (t: Track) => `${norm(title(t))}|${norm(t.artists[0]?.name ?? "")}`;
+export const titleOf = title;
+
+// Synced once every line has its time. Until then (partway through stamping them) they read as plain
+// text, so no line goes missing.
+const parsedMine = new WeakMap<Mine, Lyrics>();
+export function fromMine(mine: Mine): Lyrics {
+  let l = parsedMine.get(mine);
+  if (!l) {
+    const rows = mine.text.split(/\r?\n/).filter((r) => r.trim() && !/^\[[a-z]+:/i.test(r)); // not [ar:…] tags
+    const synced = rows.length > 0 && rows.every((r) => STAMP.test(r));
+    l = synced
+      ? { lines: tidy(parseLrc(mine.text)), synced, source: "you" }
+      : { lines: plain(mine.text.replace(/^\s*(\[\d+:\d+(?:[.:]\d+)?\]\s*)+/gm, "")), synced, source: "you" };
+    parsedMine.set(mine, l);
+  }
+  return l;
+}
+
+export function saveMine(key: string, about: { title: string; artist: string }, text: string) {
+  if (!text.trim()) return removeMine(key);
+  useMine.setState((s) => ({ songs: { ...s.songs, [key]: { ...about, text, at: Date.now() } } }));
+  notify({ text: "Lyrics Saved", detail: about.title });
+}
+export function removeMine(key: string) {
+  const was = useMine.getState().songs[key];
+  if (!was) return;
+  useMine.setState((s) => ({ songs: Object.fromEntries(Object.entries(s.songs).filter(([k]) => k !== key)) }));
+  notify({ text: "Your Lyrics Removed", detail: was.title, undo: () => (useMine.setState((s) => ({ songs: { ...s.songs, [key]: was } })), useStore.setState({ toast: undefined })) });
+}
+
+// Any lyrics as text to edit: LRC when synced, so the times survive.
+export const lrcTime = (t: number) => `${String(Math.floor(t / 60)).padStart(2, "0")}:${(t % 60).toFixed(2).padStart(5, "0")}`;
+export const asText = (l: Lyrics) => l.lines.map((x) => (l.synced ? `[${lrcTime(x.time)}] ${x.text}` : x.text)).join("\n");
 
 // Each song's lyrics, translation and romanisation, fetched once and shared by every view showing them.
 // A result with neither value nor failed is still loading.
@@ -192,12 +414,29 @@ function useResult<T>(key: string | undefined, fn: () => Promise<T>) {
   return { ...r, loading: !!key && !r?.failed && r?.value === undefined, retry: () => key && fetchOnce(key, fn) };
 }
 
-export const useLyrics = (t?: Track) => useResult(t && `lyrics:${t.id}`, () => find(t!));
+// A song's lyrics: your own if you wrote some, otherwise what the sources have.
+export function useLyrics(t?: Track) {
+  const mine = useMine((s) => (t ? s.songs[songKey(t)] : undefined));
+  const fetched = useResult(t && !mine ? `lyrics:${t.id}` : undefined, () => stored(t!));
+  return mine ? { value: fromMine(mine), loading: false, retry: () => {} } : fetched;
+}
+// Without a hook: what's known now, for the mini player and the editor.
+export const lyricsNow = (t: Track) => {
+  const mine = useMine.getState().songs[songKey(t)];
+  return mine ? fromMine(mine) : (results.get(`lyrics:${t.id}`)?.value as Lyrics | null | undefined);
+};
 
 // The next song's lyrics load while this one plays, so they're there the moment it starts.
 useStore.subscribe((s, was) => {
   const t = s.queue[s.index + 1];
-  if (t && (s.index !== was.index || s.queue !== was.queue)) fetchOnce(`lyrics:${t.id}`, () => find(t));
+  if (t && (s.index !== was.index || s.queue !== was.queue)) fetchOnce(`lyrics:${t.id}`, () => stored(t));
+});
+
+// The mini player shows the line being sung (store.ts sends it along), unless Settings turned that off.
+setLyricLine(() => {
+  const { queue, index } = useStore.getState();
+  const l = queue[index] && useSettings.getState().lyricsPeek ? lyricsNow(queue[index]) : undefined;
+  return l?.synced ? l.lines[lineAt(l.lines, audio.currentTime)]?.text || undefined : undefined;
 });
 
 const lineAt = (lines: Line[], now: number) => {
@@ -205,21 +444,30 @@ const lineAt = (lines: Line[], now: number) => {
   while (lines[i + 1] && lines[i + 1].time <= now) i++;
   return i;
 };
+export const lineNow = (l?: Lyrics | null) => (l?.synced ? lineAt(l.lines, audio.currentTime) : -1);
 
-// The line being sung (-1 before the first), read live from the player. Timeupdate only comes about
-// four times a second, so a timer lands each change on the beat.
-export function useLine(lyrics?: Lyrics | null) {
-  const { time, paused } = useAudio();
-  const [, bump] = useReducer((n: number) => n + 1, 0);
+// The line being sung (-1 before the first), read live from the player. It re-renders only when the line
+// changes, not on every timeupdate; those come about four times a second, so a timer lands each change
+// on the beat. lead looks that many seconds ahead (the scroll starts early, to land on time).
+export function useLine(lyrics?: Lyrics | null, lead = 0) {
   const lines = lyrics?.synced ? lyrics.lines : undefined;
-  const at = lines ? lineAt(lines, audio.currentTime) : -1;
+  const [seen, setSeen] = useState<{ lines?: Line[]; at: number }>({ at: -1 });
   useEffect(() => {
-    const next = lines?.[at + 1];
-    if (!next || paused) return;
-    const t = setTimeout(bump, (next.time - audio.currentTime) * 1000 + 5);
-    return () => clearTimeout(t);
-  }, [lines, at, time, paused]);
-  return at;
+    if (!lines) return;
+    let timer = 0;
+    const update = () => {
+      clearTimeout(timer);
+      const now = audio.currentTime + lead;
+      const at = lineAt(lines, now);
+      setSeen((s) => (s.lines === lines && s.at === at ? s : { lines, at }));
+      const next = lines[at + 1];
+      if (next && !audio.paused) timer = setTimeout(update, (next.time - now) * 1000 + 5);
+    };
+    update();
+    const off = subscribeAudio(update);
+    return () => (off(), clearTimeout(timer));
+  }, [lines, lead]);
+  return !lines ? -1 : seen.lines === lines ? seen.at : lineAt(lines, audio.currentTime + lead);
 }
 
 // How far through each of line i's words the song is, 0 to 1. A last word with no end of its own
@@ -232,22 +480,62 @@ export function wordProgress(words: Word[], lines: Line[], i: number, now: numbe
   });
 }
 
+// Syllables into words: a word ends where a syllable ends in a space. Its motion, as am-lyrics picks it
+// for word-timed lyrics: Chinese and Japanese characters rise in one by one; a word held a second or
+// more (seven letters at most) swells and glows; right-to-left scripts and the rest just lift.
+export type Group = { first: number; count: number; start: number; end: number; space: string; motion: "emphasis" | "rise" | "none" };
+const RTL = /[\u0590-\u08ff]/;
+const HAN = /[\u3400-\u4dbf\u4e00-\u9fff\u3040-\u30ff]/;
+export const isRtl = (s: string) => RTL.test(s);
+export function groups(words: Word[], real: boolean): Group[] {
+  const out: Group[] = [];
+  let first = 0;
+  words.forEach((w, i) => {
+    if (!/\s$/.test(w.text) && i < words.length - 1) return;
+    const syl = words.slice(first, i + 1);
+    const text = syl.map((x) => x.text).join("").trim();
+    const end = Math.max(...syl.map((x, j) => x.end ?? syl[j + 1]?.time ?? words[i + 1]?.time ?? x.time + 1));
+    const n = [...text].length;
+    const motion = !real || !n || RTL.test(text) ? "none" : HAN.test(text) ? (n > 1 ? "rise" : "none") : end - syl[0].time >= 1 && n <= 7 ? "emphasis" : "none";
+    out.push({ first, count: syl.length, start: syl[0].time, end, space: /\s*$/.exec(w.text)![0], motion });
+    first = i + 1;
+  });
+  return out;
+}
+
+// Springs, as am-lyrics moves things. springProgress: 0 to 1, critically damped, settling in about
+// response seconds. sampleSpring: where a spring that started at position with velocity is after time.
+export const springProgress = (t: number, response: number) => {
+  if (t <= 0) return 0;
+  const phase = (2 * Math.PI * t) / Math.max(0.001, response);
+  return 1 - (1 + phase) * Math.exp(-phase);
+};
+export function sampleSpring(position: number, velocity: number, t: number, frequency: number, damping = 0.9 * frequency) {
+  const omega = Math.sqrt(frequency * frequency - damping * damping);
+  const decay = Math.exp(-damping * t), cos = Math.cos(omega * t), sin = Math.sin(omega * t);
+  return {
+    position: decay * (position * cos + ((velocity + damping * position) / omega) * sin),
+    velocity: decay * (velocity * cos - ((damping * velocity + frequency * frequency * position) / omega) * sin),
+  };
+}
+
 // Chinese and Japanese go without spaces, so there each character is a word.
 const CJK = "\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}";
 const WORDS = new RegExp(`[${CJK}]\\s*|[^\\s${CJK}]+\\s*`, "gu");
-const BEATS = new RegExp(`[${CJK}\\p{Script=Hangul}]|[aeiouyаеиоуыэюяαεηιουω]+`, "giu");
-const syllables = (word: string) => word.normalize("NFD").match(BEATS)?.length || 1;
+// A word's length in letters; a Chinese, Japanese or Korean character is a syllable, so it counts three.
+const WIDE = new RegExp(`[${CJK}\\p{Script=Hangul}]`, "u");
+const size = (word: string) => [...word].reduce((n, c) => n + (WIDE.test(c) ? 3 : /[\p{L}\p{N}]/u.test(c) ? 1 : 0), 0) || 1;
 
-// Word timings for a line that only has its own: its time shared out by syllables, so the fill moves
-// at the pace of singing. At most about 0.4 s a syllable, so a line before a long instrumental doesn't
-// crawl across it. A guess (a held note or a pause mid-line throws it), so real timings win.
+// Word timings for a line that only has its own: its time shared out by the words' lengths. At most
+// about 0.13 s a letter, so a line before a long instrumental doesn't crawl across it. A guess (a held
+// note or a pause mid-line throws it), so real timings win.
 export function estimateWords(lines: Line[], i: number, text: string): Word[] {
   const line = lines[i];
   const parts = text.match(WORDS) ?? [];
-  const beats = parts.map(syllables);
+  const beats = parts.map(size);
   const total = beats.reduce((a, b) => a + b, 0);
   const room = (line.end ?? lines[i + 1]?.time ?? line.time + 10) - line.time;
-  const span = Math.min(room * 0.9, total * 0.4 + 0.5);
+  const span = Math.min(room * 0.9, total * 0.13 + 0.5);
   let at = line.time;
   return parts.map((text, j) => {
     const time = at;
@@ -341,6 +629,9 @@ export function useExtras(t: Track | undefined, lyrics: Lyrics | null | undefine
   const can = useMemo(() => (lyrics?.lines.length ? inspect(lyrics.lines, to) : { translate: false, romanise: false }), [lyrics, to]);
   const texts = () => lyrics!.lines.map((l) => l.text);
   const tr = useResult(t && can.translate && on.translate ? `translate:${t.id}:${to}` : undefined, () => translate(texts(), to));
-  const rm = useResult(t && can.romanise && on.romanise ? `romanise:${t.id}` : undefined, () => romanise(texts()));
-  return { can, on, to, translation: tr.value, romanised: rm.value, loading: tr.loading || rm.loading, failed: tr.failed || rm.failed, retry: () => (tr.retry(), rm.retry()) };
+  // Apple's lyrics sometimes bring their own romanisation: no request needed then.
+  const own = useMemo(() => (lyrics?.lines.some((l) => l.roman) ? lyrics.lines.map((l) => l.roman) : undefined), [lyrics]);
+  const rm = useResult(t && can.romanise && on.romanise && !own ? `romanise:${t.id}` : undefined, () => romanise(texts()));
+  const romanised = on.romanise && can.romanise ? (own ?? rm.value) : undefined;
+  return { can, on, to, translation: tr.value, romanised, loading: tr.loading || rm.loading, failed: tr.failed || rm.failed, retry: () => (tr.retry(), rm.retry()) };
 }

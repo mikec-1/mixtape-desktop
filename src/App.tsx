@@ -1,12 +1,13 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
-import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
+import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, CollectionPage, Home, Library, NowPlaying, PlaylistPage, popup, QueuePanel, Search, Settings, trackMenu } from "./views";
-import { art } from "./yt";
+import { art, type Track } from "./yt";
 
 export default function App() {
   const stack = useStore((s) => s.stack);
-  const nowPlaying = useStore((s) => s.nowPlaying);
+  const sheet = useStore((s) => !!s.sheet);
   const root = stack[0].name;
   const open = useSettings((s) => s.sidebar);
   const width = useSettings((s) => s.sidebarWidth);
@@ -33,11 +34,11 @@ export default function App() {
     // The sidebar and one big page card, the player under the page. The gaps drag the window.
     // --sidebar and --panel centre the toasts on the page card.
     <div data-tauri-drag-region className="flex h-full gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
-      <Sidebar root={root} open={open} width={width} inert={nowPlaying} />
+      <Sidebar root={root} open={open} width={width} inert={sheet} />
 
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex min-h-0 flex-1 gap-2">
-        <main inert={nowPlaying} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
+        <main inert={sheet} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
           <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-11" />
           {/* Every view in the stack stays mounted, so going back keeps its results and scroll position. */}
           {stack.map((view, i) => (
@@ -74,7 +75,7 @@ const seek = (by: number) => (audio.currentTime = Math.min(audio.duration || 0, 
 // ⌘ is Ctrl on Windows. Listed in Settings (views.tsx). ponytail: fixed bindings, remapping later.
 const shortcuts: Record<string, () => unknown> = {
   " ": toggle,
-  escape: () => useStore.setState({ nowPlaying: false }),
+  escape: () => useStore.setState({ sheet: undefined }),
   arrowright: () => seek(5),
   arrowleft: () => seek(-5),
   "mod+k": findSearch,
@@ -164,24 +165,28 @@ function PlayerBar() {
   const shuffle = useStore((s) => s.shuffle);
   const repeat = useStore((s) => s.repeat);
   const sleep = useStore((s) => s.sleep);
+  const sheet = useStore((s) => s.sheet);
   const queue = useSettings((s) => s.queue);
   const icon = "press grid size-8 shrink-0 place-items-center rounded-full text-ink/60 hover:text-ink";
+  const roomy = icon.replace("grid", "hidden @2xl:grid"); // only when the bar has room
   // On: the accent, with a dot under it, as in Spotify.
   const mode = (on: boolean) => `press relative grid size-8 place-items-center rounded-full ${on ? "text-accent after:absolute after:bottom-0 after:size-1 after:rounded-full after:bg-accent" : "text-ink/60 hover:text-ink"}`;
 
-  // Stays above the Now Playing sheet, so it keeps working while the sheet is up.
+  // Stays above the Now Playing sheet, so it keeps working while the sheet is up. Narrow, it lets go of
+  // the volume slider (mute and ⌘↑/↓ stay), then of Mini Player and Full Screen (the artwork opens it too).
   return (
-    <div className="relative isolate z-40 shrink-0 overflow-hidden rounded-2xl bg-paper">
+    <div className="@container relative isolate z-40 shrink-0 overflow-hidden rounded-2xl bg-paper">
       {/* The artwork's colour washes the bar, strongest behind the artwork. */}
       <div className="absolute inset-0 -z-10 bg-linear-to-r from-accent/30 via-accent/12 to-accent/5 transition-opacity duration-500" style={{ opacity: track ? 1 : 0 }} />
       <div className="grid grid-cols-[1fr_minmax(0,1.5fr)_1fr] items-center gap-6 py-2.5 pr-4 pl-2.5">
         <div onContextMenu={(e) => track && (e.preventDefault(), trackMenu(track))} className="flex min-w-0 items-center gap-3">
-          <button onClick={() => useStore.setState((s) => ({ nowPlaying: !s.nowPlaying }))} aria-label="Now Playing" disabled={!track} className="press size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] shadow-md shadow-black/15">
+          <button onClick={() => toggleSheet("playing")} aria-label="Now Playing" disabled={!track} className="press size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] shadow-md shadow-black/15">
             {track && <img src={art(track.thumb, 120)} alt="" className="size-full object-cover" />}
           </button>
           <div className="min-w-0">
             <div className="truncate font-semibold">{track?.title ?? "Not playing"}</div>
             <div aria-live="polite" className="truncate text-sm text-muted">{error ? <span title={error} className="text-ink">Couldn’t play this track. Try it again or pick another.</span> : track && <Artists list={track.artists} />}</div>
+            {track && !error && <Peek track={track} />}
           </div>
           {track && (
             <button onClick={() => toggleLike(track)} aria-label={liked ? "Unlike" : "Like"} aria-pressed={liked} className={icon}>
@@ -216,22 +221,41 @@ function PlayerBar() {
           <button onClick={sleepMenu} aria-label="Sleep Timer" title={sleep === "track" ? "Sleep Timer: end of track" : sleep ? `Sleep Timer: ${Math.ceil((sleep - Date.now()) / 60_000)} min left` : "Sleep Timer"} className={mode(!!sleep)}>
             <Moon size={17} />
           </button>
+          <button onClick={() => toggleSheet("lyrics")} aria-label="Lyrics" aria-pressed={sheet === "lyrics"} title="Lyrics" className={mode(sheet === "lyrics")}>
+            <MicVocal size={17} />
+          </button>
           <button onClick={() => useSettings.setState({ queue: !queue })} aria-label="Queue" aria-pressed={queue} title="Queue" className={mode(queue)}>
             <ListMusic size={18} />
           </button>
           <button onClick={() => setMuted(!muted)} aria-label={muted ? "Unmute" : "Mute"} className={icon}>
             {muted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
-          <input type="range" aria-label="Volume" min={0} max={1} step={0.01} value={muted ? 0 : volume} onChange={(e) => setVolume(+e.target.value)} style={fill(muted ? 0 : volume, 1)} className="w-24" />
-          <button onClick={toggleMini} aria-label="Mini Player" title="Mini Player" className={icon}>
+          <input type="range" aria-label="Volume" min={0} max={1} step={0.01} value={muted ? 0 : volume} onChange={(e) => setVolume(+e.target.value)} style={fill(muted ? 0 : volume, 1)} className="hidden w-24 @3xl:block" />
+          <button onClick={toggleMini} aria-label="Mini Player" title="Mini Player" className={roomy}>
             <PictureInPicture2 size={17} />
           </button>
-          <button onClick={() => useStore.setState((s) => ({ nowPlaying: !s.nowPlaying }))} aria-label="Full screen" title="Full screen" className={icon}>
+          <button onClick={() => toggleSheet("playing")} aria-label="Full screen" title="Full screen" className={roomy}>
             <Maximize2 size={17} />
           </button>
         </div>
       </div>
     </div>
+  );
+}
+
+// The line being sung, under the artist, for songs with synced lyrics; it opens the lyrics. Its height
+// is the artwork's and the controls', so it never makes the bar taller.
+function Peek({ track }: { track: Track }) {
+  const on = useSettings((s) => s.lyricsPeek);
+  const { value } = useLyrics(track);
+  const lyrics = on && value?.synced ? value : undefined;
+  const { romanised } = useExtras(track, lyrics);
+  const at = useLine(lyrics);
+  if (!lyrics) return null;
+  return (
+    <button onClick={() => toggleSheet("lyrics")} title="Lyrics" className="block w-full text-left text-[13px] leading-[15px] font-semibold text-accent">
+      <span key={at} className="block animate-enter truncate">{romanised?.[at] ?? lyrics.lines[at]?.text ?? "♪"}</span>
+    </button>
   );
 }
 

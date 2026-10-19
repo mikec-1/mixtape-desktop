@@ -3,8 +3,8 @@ use tauri::{webview::PageLoadEvent, Manager, WebviewUrl, WebviewWindowBuilder, W
 /// Lets the mini player float over other apps' full-screen spaces (a Chrome video, say). macOS only
 /// shows a regular app's windows there if they're non-activating panels, so the window is turned
 /// into one: an NSPanel subclass that can still take key (for its buttons), joins every space as a
-/// full-screen auxiliary, and stays put when Sleeve isn't frontmost. Its level (pinned or not) is
-/// still set from mini.tsx.
+/// full-screen auxiliary, and stays put when Sleeve isn't frontmost. It's always on top
+/// (store.ts toggleMini).
 #[tauri::command]
 fn float_mini(window: tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]

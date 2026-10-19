@@ -3,5 +3,5 @@
   "identifier": "mini",
   "description": "The always-on-top mini player: it only talks to the main window",
   "windows": ["mini"],
-  "permissions": ["core:event:default", "core:window:allow-start-dragging", "core:window:allow-close", "core:window:allow-set-always-on-top"]
+  "permissions": ["core:event:default", "core:window:allow-start-dragging", "core:window:allow-close"]
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { LoaderCircle, Music, Pause, Pin, PinOff, Play, SkipBack, SkipForward, X } from "lucide-react";
+import { LoaderCircle, Music, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import type { MiniState } from "./store";
 import { art } from "./yt";
 
@@ -13,21 +13,14 @@ const send = (command: "ready" | "toggle" | "next" | "prev") => void emit("mini"
 const root = document.documentElement;
 root.dataset.theme = JSON.parse(localStorage.settings ?? "{}").state?.theme ?? "system";
 root.style.background = document.body.style.background = "transparent";
-// Pinned (above every other window) unless turned off; remembered in this window's storage.
+// Always on top (store.ts toggleMini), and a panel (lib.rs float_mini) so that includes other
+// apps' full-screen spaces.
 const win = getCurrentWindow();
-const pinnedAtStart = localStorage.miniPinned !== "false";
-// A panel first (lib.rs float_mini), so pinned also means over other apps' full-screen spaces.
-void invoke("float_mini").finally(() => win.setAlwaysOnTop(pinnedAtStart));
+void invoke("float_mini");
 const fmt = (s = NaN) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "–:––");
 
 export default function Mini() {
   const [s, setS] = useState<MiniState>();
-  const [pinned, setPinned] = useState(pinnedAtStart);
-  const pin = () => {
-    setPinned(!pinned);
-    localStorage.miniPinned = String(!pinned);
-    void win.setAlwaysOnTop(!pinned);
-  };
   useEffect(() => {
     const off = listen<MiniState>("player", (e) => setS(e.payload));
     send("ready");
@@ -49,7 +42,7 @@ export default function Mini() {
         {t?.thumb ? <img src={art(t.thumb, 300)} alt="" className="size-full object-cover" /> : <Music size={28} />}
       </div>
       <div data-tauri-drag-region className="flex min-w-0 flex-1 flex-col justify-between py-3 pr-4 pl-4">
-        <div data-tauri-drag-region className="min-w-0 pr-12">
+        <div data-tauri-drag-region className="min-w-0 pr-5">
           <div data-tauri-drag-region className="truncate text-[15px] leading-tight font-bold">{t?.title ?? "Nothing playing"}</div>
           <div data-tauri-drag-region className="truncate text-[13px] text-muted">{t?.artists.map((a) => a.name).join(", ") || "Sleeve"}</div>
         </div>
@@ -68,14 +61,9 @@ export default function Mini() {
           <span className="w-7">{fmt(s?.duration)}</span>
         </div>
       </div>
-      <div className="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-        <button onClick={pin} aria-label={pinned ? "Unpin from top" : "Keep on top"} aria-pressed={pinned} title={pinned ? "Unpin from top" : "Keep on top"} className={`press grid size-6 place-items-center rounded-full hover:bg-ink/20 ${pinned ? "bg-accent text-paper hover:bg-accent" : "bg-ink/10 text-ink/70 hover:text-ink"}`}>
-          {pinned ? <Pin size={12} strokeWidth={2.5} /> : <PinOff size={12} strokeWidth={2.5} />}
-        </button>
-        <button onClick={() => void win.close()} aria-label="Close Mini Player" className="press grid size-6 place-items-center rounded-full bg-ink/10 text-ink/70 hover:bg-ink/20 hover:text-ink">
-          <X size={13} strokeWidth={2.5} />
-        </button>
-      </div>
+      <button onClick={() => void win.close()} aria-label="Close Mini Player" className="press absolute top-2 right-2 grid size-6 place-items-center rounded-full bg-ink/10 text-ink/70 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-ink/20 hover:text-ink focus-visible:opacity-100">
+        <X size={13} strokeWidth={2.5} />
+      </button>
     </div>
   );
 }

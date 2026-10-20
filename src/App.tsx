@@ -49,14 +49,12 @@ export default function App() {
   }, []);
 
   return (
-    // The sidebar and one big page card, the player under the page. The gaps drag the window.
+    // The sidebar, one big page card and the queue side by side, the player under all three. The gaps drag the window.
     // --sidebar and --panel centre the toasts on the page card. The welcome goes over all of it.
     <>
-    <div data-tauri-drag-region inert={!!welcome} className="flex h-full gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
-      <Sidebar root={root} open={open} width={width} inert={covered} />
-
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="flex min-h-0 flex-1 gap-2">
+    <div data-tauri-drag-region inert={!!welcome} className="flex h-full flex-col gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
+      <div className="flex min-h-0 flex-1 gap-2">
+        <Sidebar root={root} open={open} width={width} inert={covered} />
         <main inert={covered} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
           <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-11" />
           {/* Every view in the stack stays mounted, so going back keeps its results and scroll position. */}
@@ -74,9 +72,8 @@ export default function App() {
           )}
         </main>
         {queue && <QueuePanel />}
-        </div>
-        <PlayerBar />
       </div>
+      <PlayerBar />
 
       <NowPlaying />
       <Dialogs />

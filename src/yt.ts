@@ -20,7 +20,7 @@ export type Artist = { id?: string; name: string };
 // rec: added by Smart Shuffle. at: when it was added to the list it's in (a playlist, Liked Songs).
 // file: a song on this computer (local.ts), by its path; it plays from disk and isn't on YouTube.
 // albumId opens its album; album "" means it was looked for and there's none (store.ts fill).
-export type Track = { id: string; title: string; artists: Artist[]; album?: string; albumId?: string; thumb?: string; duration?: string; rec?: true; at?: number; file?: string };
+export type Track = { id: string; title: string; artists: Artist[]; album?: string; albumId?: string; thumb?: string; duration?: string; explicit?: true; rec?: true; at?: number; file?: string };
 export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string; at?: number }; // at: when you saved it
 
 // YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at. A
@@ -54,6 +54,9 @@ const STAT = /^([\d.,]+[KMB]?\s+\w+|\d{4}|\d+:\d\d(:\d\d)?)$/i;
 const KINDS = /^(song|video|single|ep|album|episode|podcast|playlist)$/i;
 const artistLine = (text = "") => text.split(" • ").find((p) => !KINDS.test(p.trim())) ?? "";
 
+// YT Music marks explicit songs with a small badge beside the title.
+const explicit = (badges?: Iterable<unknown> | null) =>
+  [...(badges ?? [])].some((b) => (b as YTNodes.MusicInlineBadge).icon_type === "MUSIC_EXPLICIT_BADGE") ? { explicit: true as const } : {};
 const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
   items.flatMap((s) =>
     s.id
@@ -66,6 +69,7 @@ const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
           albumId: s.album?.id,
           thumb: s.thumbnails?.[0]?.url,
           duration: s.duration?.text,
+          ...explicit(s.badges),
         }]
       : [],
   );
@@ -266,6 +270,7 @@ export async function radio(id: string): Promise<Track[]> {
             albumId: v.album?.id,
             thumb: v.thumbnail[0]?.url,
             duration: v.duration.text,
+            ...explicit(v.badges),
           }]
         : [],
     );

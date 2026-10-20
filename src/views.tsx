@@ -1063,6 +1063,7 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
             <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>{t.title}</div>
             <div className="truncate text-sm text-muted">
               {t.rec && <Sparkle size={14} aria-label="Recommended" className="mr-1.5 inline -translate-y-px fill-accent text-accent drop-shadow-[0_0_4px_var(--color-accent)]" />}
+              {t.explicit && <Explicit />}
               <Artists list={t.artists} />
             </div>
           </div>
@@ -2498,6 +2499,13 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
+// The "E" Spotify and Apple Music put on explicit songs, before the artists.
+export const Explicit = () => (
+  <span aria-label="Explicit" title="Explicit" className="mr-1.5 inline-grid size-[15px] -translate-y-px place-items-center rounded-[3px] bg-current/20 align-middle text-[10px] leading-none font-bold">
+    <span className="text-ink/75">E</span>
+  </span>
+);
+
 // Each artist their own link, with commas between. One YT Music didn't link finds its page by search.
 export function Artists({ list }: { list: Track["artists"] }) {
   return list.map((a, i) => (
@@ -2557,7 +2565,7 @@ export function QueuePanel() {
         <div className={`truncate text-sm font-semibold ${i === index ? "text-accent" : ""}`}>{t.title}</div>
         {/* Artists come first; "Recommended" gives way when the row is narrow. */}
         <div className="flex text-sm whitespace-nowrap text-muted">
-          <span className="min-w-0 truncate"><Artists list={t.artists} /></span>
+          <span className="min-w-0 truncate">{t.explicit && <Explicit />}<Artists list={t.artists} /></span>
           {t.rec && <span className="min-w-0 shrink-[999] truncate font-semibold text-accent">&nbsp;· Recommended</span>}
         </div>
       </div>
@@ -2676,6 +2684,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
                   </div>
                   <div className="truncate text-sm text-muted">
                     {saved[t.id] && <CircleArrowDown size={14} aria-label="Downloaded" className="mr-1 inline -translate-y-px fill-accent text-paper" />}
+                    {t.explicit && <Explicit />}
                     <Artists list={t.artists} />
                   </div>
                 </div>

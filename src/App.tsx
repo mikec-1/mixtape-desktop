@@ -2,7 +2,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
 import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { useExtras, useLine, useLyrics } from "./lyrics";
-import { Artist, Artists, CollectionPage, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, Search, Settings, SharedPage, trackMenu } from "./views";
+import { Artist, Artists, CollectionPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, Search, Settings, SharedPage, trackMenu } from "./views";
 import { useAccount } from "./account";
 import { Welcome } from "./welcome";
 import { art, type Track } from "./yt";
@@ -204,7 +204,7 @@ function PlayerBar() {
           </button>
           <div className="min-w-0">
             <div className="truncate font-semibold">{track?.title ?? "Not playing"}</div>
-            <div aria-live="polite" className="truncate text-sm text-muted">{error ? <span title={error} className="text-ink">Couldn’t play this track. Try it again or pick another.</span> : track && <Artists list={track.artists} />}</div>
+            <div aria-live="polite" className="truncate text-sm text-muted">{error ? <span title={error} className="text-ink">Couldn’t play this track. Try it again or pick another.</span> : track && <>{track.explicit && <Explicit />}<Artists list={track.artists} /></>}</div>
             {track && !error && <Peek track={track} />}
           </div>
           {track && (

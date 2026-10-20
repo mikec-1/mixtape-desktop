@@ -87,6 +87,8 @@ language sql security definer set search_path = '' as $$
   delete from auth.users where id = auth.uid()
 $$;
 
+-- Spelled out, so it works with "Automatically expose new tables" off.
+grant usage on schema public to anon, authenticated;
 revoke execute on function public.sync(jsonb, bigint), public.delete_me() from public, anon;
 grant execute on function public.sync(jsonb, bigint), public.delete_me() to authenticated;
 grant execute on function public.shared_playlist(uuid, text), public.public_profile(uuid) to anon, authenticated;

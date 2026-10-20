@@ -10,6 +10,8 @@ import { useMine, type Mine } from "./lyrics";
 // sets it up). It stays local-first: every change is made here at once and sent a moment later; changes
 // made offline go when you're back. The sign-in library loads only once you sign in.
 const BASE = import.meta.env.VITE_SUPABASE_URL;
+// The project's public key: the newer "publishable" kind (sb_publishable_…) or the older anon one. It
+// only ever goes in the apikey header; Authorization carries a signed-in user's token, or nothing.
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const canSignIn = !!(BASE && KEY);
 const inApp = "__TAURI_INTERNALS__" in window;
@@ -24,7 +26,7 @@ let client: Promise<GoTrueClient> | undefined;
 let who: User | undefined; // for a first profile: the name and picture Google or Apple gave
 function auth() {
   return (client ??= import("@supabase/auth-js").then(({ GoTrueClient }) => {
-    const c = new GoTrueClient({ url: `${BASE}/auth/v1`, headers: { apikey: KEY!, Authorization: `Bearer ${KEY}` }, storageKey: STORAGE, persistSession: true, autoRefreshToken: true, detectSessionInUrl: !inApp, flowType: "pkce" });
+    const c = new GoTrueClient({ url: `${BASE}/auth/v1`, headers: { apikey: KEY! }, storageKey: STORAGE, persistSession: true, autoRefreshToken: true, detectSessionInUrl: !inApp, flowType: "pkce" });
     // Its own calls can't be made from inside this callback, so the work waits a tick.
     c.onAuthStateChange((event, session) => {
       setTimeout(() => (session?.user ? signedIn(session.user) : (event === "SIGNED_OUT" || event === "INITIAL_SESSION") && signedOut()));
@@ -96,8 +98,8 @@ async function token() {
   if (error || !data.session) throw error ?? new Error("You’re signed out");
   return data.session.access_token;
 }
-async function rpc<T>(fn: string, args: object, bearer = KEY) {
-  const r = await fetch(`${BASE}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: KEY!, authorization: `Bearer ${bearer}`, "content-type": "application/json" }, body: JSON.stringify(args) });
+async function rpc<T>(fn: string, args: object, bearer?: string) {
+  const r = await fetch(`${BASE}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: KEY!, ...(bearer && { authorization: `Bearer ${bearer}` }), "content-type": "application/json" }, body: JSON.stringify(args) });
   const text = await r.text();
   if (!r.ok) {
     const { message, code } = (() => { try { return JSON.parse(text) as { message?: string; code?: string }; } catch { return {}; } })();

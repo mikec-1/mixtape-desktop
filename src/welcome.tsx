@@ -3,25 +3,24 @@ import { Check, FolderPlus, Upload, type LucideIcon } from "lucide-react";
 import { follow, useLibrary } from "./store";
 import { canSignIn, useAccount } from "./account";
 import { addFolder, canHaveFiles, useLocal } from "./local";
-import { quiet, restore, SignIn, solid } from "./views";
+import { quiet, restore, solid } from "./views";
+import { Hello } from "./hello";
 import { art, findArtist } from "./yt";
 
 // The first time Sleeve opens: sign in or carry on without, pick a few artists, bring your music. Each
 // can be skipped; none comes back (Settings has all of it).
-export function Welcome({ onDone }: { onDone: () => void }) {
+// preview: shown again from Settings → About, so it starts at sign-in even when you're signed in.
+export function Welcome({ onDone, preview }: { onDone: () => void; preview?: boolean }) {
   const signedIn = useAccount((s) => !!s.user);
-  const [step, setStep] = useState(canSignIn && !signedIn ? 0 : 1);
-  useEffect(() => void (signedIn && setStep((s) => Math.max(s, 1))), [signedIn]);
+  const [step, setStep] = useState(preview || (canSignIn && !signedIn) ? 0 : 1);
+  const was = useRef(signedIn);
+  useEffect(() => void (signedIn && !was.current && setStep((s) => Math.max(s, 1)), (was.current = signedIn)), [signedIn]);
   const finish = () => ((localStorage.onboarded = 1), onDone());
+  if (step === 0) return <Hello onSkip={() => setStep(1)} />;
   return (
     <div role="dialog" aria-modal aria-label="Welcome to Sleeve" data-tauri-drag-region className="fixed inset-0 z-50 flex flex-col items-center overflow-y-auto bg-paper px-8 pt-16 pb-10">
       <div key={step} className="flex w-full max-w-3xl animate-enter flex-col items-center text-center">
-        {step === 0 ? (
-          <Step title="Welcome to Sleeve" about="Sign in and your library, playlists and lyrics are the same on every computer you use.">
-            <SignIn />
-            <button onClick={() => setStep(1)} className="mt-6 font-semibold text-muted hover:text-ink">Continue Without an Account</button>
-          </Step>
-        ) : step === 1 ? (
+        {step === 1 ? (
           <PickArtists onNext={() => setStep(2)} />
         ) : (
           <BringMusic onDone={finish} />

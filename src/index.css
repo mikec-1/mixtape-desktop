@@ -460,3 +460,22 @@ input[type="range"].knob::-webkit-slider-thumb {
 .lyrics[data-still] .lc > .sung::after {
   display: none;
 }
+
+/* The welcome's sign-in page (hello.tsx). */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(70%);
+    filter: blur(10px);
+  }
+}
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+@keyframes eq {
+  from {
+    transform: scaleY(0.25);
+  }
+}

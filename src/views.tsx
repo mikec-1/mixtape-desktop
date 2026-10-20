@@ -11,7 +11,8 @@ import { asText, estimateWords, groups, isRtl, lineNow, lrcTime, lyricsNow, remo
 import { albumByName, art, artist, artistByName, collection, topSongs, home, lastHome, search, type Album, type Artist, type Track } from "./yt";
 import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
-import { canSignIn, deleteAccount, enterCode, exportAll, fromLink, playlistLink, profileLink, publicProfile, sendCode, setProfile, sharedLink, sharedPlaylist, signInWith, signOut, syncNow, useAccount, type Profile } from "./account";
+import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
+import { SignIn } from "./signin";
 import { version } from "../package.json";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
@@ -2005,69 +2006,6 @@ export function Settings() {
   );
 }
 
-// Signing in: Apple, Google, or a six-digit code by email (it goes in as soon as it's typed).
-export function SignIn() {
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState<string>();
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState<string>();
-  const [error, setError] = useState("");
-  const run = (what: string, fn: () => Promise<unknown>) => {
-    setBusy(what), setError("");
-    fn().catch((e) => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(undefined));
-  };
-  const verify = (c: string) => sent && run("code", () => enterCode(sent, c).catch((e) => (setCode(""), Promise.reject(e))));
-  const wide = "press flex h-11 w-full items-center justify-center gap-2.5 rounded-full font-semibold disabled:opacity-50";
-  const field = "h-11 rounded-full bg-ink/[0.07] px-5 outline-none placeholder:text-muted focus-visible:outline-2 focus-visible:outline-accent";
-  return (
-    <div className="flex w-full max-w-sm flex-col gap-2.5">
-      <button onClick={() => run("apple", () => signInWith("apple"))} disabled={!!busy} className={`${wide} bg-ink text-paper`}>
-        <svg viewBox="0 0 24 24" aria-hidden className="size-[18px] fill-current"><path d="M16.37 1.43c0 1.14-.5 2.27-1.18 3.08-.74.9-1.99 1.57-2.99 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.57-2.27 1.2-2.98.81-.94 2.15-1.64 3.25-1.68.03.13.06.28.06.43zm4.56 15.71c-.03.07-.46 1.58-1.52 3.12-.94 1.34-1.94 2.71-3.43 2.71-1.52 0-1.9-.88-3.63-.88-1.7 0-2.3.91-3.67.91-1.38 0-2.33-1.26-3.43-2.8C4 18.38 2.97 15.57 2.97 12.92c0-4.28 2.8-6.55 5.55-6.55 1.45 0 2.67.95 3.6.95.86 0 2.22-1.01 3.9-1.01.61 0 2.89.06 4.37 2.19-.13.09-2.38 1.37-2.38 4.19 0 3.26 2.85 4.42 2.95 4.45z" /></svg>
-        Continue with Apple
-      </button>
-      <button onClick={() => run("google", () => signInWith("google"))} disabled={!!busy} className={`${wide} bg-ink/[0.07] hover:bg-ink/[0.12]`}>
-        <svg viewBox="0 0 48 48" aria-hidden className="size-[18px]">
-          <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z" />
-          <path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
-          <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2A11.9 11.9 0 0 1 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z" />
-          <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3a12 12 0 0 1-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z" />
-        </svg>
-        Continue with Google
-      </button>
-      <div className="my-1.5 flex items-center gap-3 text-sm text-muted"><span className="h-px flex-1 bg-ink/10" />or<span className="h-px flex-1 bg-ink/10" /></div>
-      {!sent ? (
-        <form onSubmit={(e) => (e.preventDefault(), run("email", () => sendCode(email.trim()).then(() => setSent(email.trim()))))} className="flex gap-2">
-          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" aria-label="Email address" name="email" autoComplete="email" spellCheck={false} className={`${field} min-w-0 flex-1`} />
-          <button disabled={!!busy || !/\S@\S/.test(email)} className="press h-11 shrink-0 rounded-full bg-ink/[0.07] px-5 font-semibold hover:bg-ink/[0.12] disabled:opacity-50">{busy === "email" ? "Sending…" : "Send Code"}</button>
-        </form>
-      ) : (
-        <form onSubmit={(e) => (e.preventDefault(), verify(code))} className="flex flex-col gap-2">
-          <p className="text-sm text-muted">Enter the code we sent to <span className="font-semibold text-ink">{sent}</span>.</p>
-          <input
-            value={code}
-            onChange={(e) => {
-              const c = e.target.value.replace(/\D/g, "").slice(0, 6);
-              setCode(c);
-              if (c.length === 6) verify(c);
-            }}
-            disabled={busy === "code"}
-            autoFocus
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            placeholder="000000"
-            aria-label="Code"
-            name="code"
-            className={`${field} w-full text-center text-xl font-bold tracking-[0.4em] tabular-nums`}
-          />
-          <button type="button" onClick={() => (setSent(undefined), setCode(""), setError(""))} className="self-center text-sm text-muted hover:text-ink">Use a different email</button>
-        </form>
-      )}
-      {(busy === "apple" || busy === "google") && <p className="text-center text-sm text-muted">Finish signing in in your browser…</p>}
-      {error && <p role="alert" className="text-center text-sm font-medium text-[#ff375f]">{error}</p>}
-    </div>
-  );
-}
-
 // Your account: profile, sync, what's public, your data. Without one, signing in.
 function AccountPane() {
   const { user, profile, state, synced, error } = useAccount();
@@ -2085,7 +2023,7 @@ function AccountPane() {
   if (!user)
     return (
       <>
-        <h2 className="text-3xl font-extrabold tracking-[-0.03em]">Sign in to Sleeve</h2>
+        <h2 className="text-3xl font-extrabold tracking-[-0.03em]">Sign in</h2>
         <p className="mt-2 mb-8 max-w-md text-muted">Your library, playlists and lyrics, the same on every computer you use. Everything works without an account too.</p>
         <SignIn />
       </>
@@ -2533,6 +2471,7 @@ function About() {
     <div>
       <div className="text-5xl font-extrabold tracking-[-0.04em]">Sleeve</div>
       <div className="mt-2 text-muted">Version {version}</div>
+      <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={`${quiet} mt-6`}>Show the Welcome Again</button>
     </div>
   );
 }

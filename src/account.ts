@@ -44,7 +44,18 @@ export async function enterCode(email: string, token: string) {
   const { error } = await (await auth()).verifyOtp({ email, token, type: "email" });
   if (error) throw error;
 }
-// Google or Apple, in your browser. In the app it comes back to src-tauri/src/account.rs, listening on
+// Email and password. A new account may need its address confirmed first (if the project asks for that):
+// then it says so, and signing in works once the link in the email is opened.
+export async function signInWithPassword(email: string, password: string) {
+  const { error } = await (await auth()).signInWithPassword({ email, password });
+  if (error) throw error;
+}
+export async function signUp(email: string, password: string) {
+  const { data, error } = await (await auth()).signUp({ email, password });
+  if (error) throw error;
+  return { confirm: !data.session };
+}
+// Google (or Apple), in your browser. In the app it comes back to src-tauri/src/account.rs, listening on
 // this computer, with a code to swap for a session; the web build just goes there and back.
 export async function signInWith(provider: "google" | "apple") {
   const c = await auth();

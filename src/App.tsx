@@ -22,7 +22,8 @@ function firstLaunch() {
 }
 
 export default function App() {
-  const [welcome, setWelcome] = useState(firstLaunch);
+  // Settings → About can show it again ("preview"), after a reload.
+  const [welcome, setWelcome] = useState<boolean | "preview">(() => (sessionStorage.welcome ? (delete sessionStorage.welcome, "preview") : firstLaunch()));
   const stack = useStore((s) => s.stack);
   const covered = useStore((s) => !!s.sheet || !!s.dialog); // the sheet or a dialog is over the page
   const root = stack[0].name;
@@ -51,7 +52,7 @@ export default function App() {
     // The sidebar and one big page card, the player under the page. The gaps drag the window.
     // --sidebar and --panel centre the toasts on the page card. The welcome goes over all of it.
     <>
-    <div data-tauri-drag-region inert={welcome} className="flex h-full gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
+    <div data-tauri-drag-region inert={!!welcome} className="flex h-full gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
       <Sidebar root={root} open={open} width={width} inert={covered} />
 
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -82,7 +83,7 @@ export default function App() {
       <Toast />
       <Offline />
     </div>
-    {welcome && <Welcome onDone={() => setWelcome(false)} />}
+    {welcome && <Welcome preview={welcome === "preview"} onDone={() => setWelcome(false)} />}
     </>
   );
 }

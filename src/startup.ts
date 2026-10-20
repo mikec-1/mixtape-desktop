@@ -1,8 +1,12 @@
 import { defaultWindowIcon } from "@tauri-apps/api/app";
+import { Image } from "@tauri-apps/api/image";
 import { Menu } from "@tauri-apps/api/menu";
+import { resolveResource } from "@tauri-apps/api/path";
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { next, prev, toggle, useSettings } from "./store";
+
+const isMac = /Mac/.test(navigator.userAgent);
 
 // Settings → Startup, for the main window. Opened at login the window starts hidden (lib.rs), and shows
 // unless you'd rather it stayed in the background. Close to Tray hides the window on close, and keeps
@@ -24,7 +28,12 @@ async function makeTray() {
       { id: "quit", text: "Quit Sleeve", action: () => void win.destroy() }, // lib.rs exits once main is gone
     ],
   });
-  return TrayIcon.new({ icon: (await defaultWindowIcon()) ?? undefined, iconAsTemplate: false, tooltip: "Sleeve", menu });
+  // On macOS use a black-on-transparent template icon so the system colours it for
+  // light and dark menu bars. On Windows keep the full-colour app icon in the tray.
+  const icon = isMac
+    ? await Image.fromPath(await resolveResource("icons/tray.png"))
+    : (await defaultWindowIcon()) ?? undefined;
+  return TrayIcon.new({ icon, iconAsTemplate: isMac, tooltip: "Sleeve", menu });
 }
 const applyTray = (on: boolean) => {
   if (on && !tray) tray = makeTray();

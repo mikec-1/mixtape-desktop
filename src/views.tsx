@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ArrowDownToLine, ArrowUpDown, AudioLines, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, ArrowUpDown, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
@@ -1097,7 +1097,17 @@ export function Artist({ id }: { id: string }) {
           />
         )}
         <div className="relative min-w-0 flex-1">
+          {data.verified && (
+            <div className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
+              <BadgeCheck size={20} aria-hidden className="fill-[#3d91ff] text-paper" /> Verified Artist
+            </div>
+          )}
           <h1 className="text-display">{data.name}</h1>
+          {(data.listeners || data.subscribers) && (
+            <p className="mt-3 font-semibold text-ink/80">
+              {[data.listeners && `${data.listeners} monthly listeners`, data.subscribers && `${data.subscribers} subscribers`].filter(Boolean).join(" · ")}
+            </p>
+          )}
           <div className="mt-6 flex gap-2.5">
             <button onClick={() => play(data.songs, firstPlayable(data.songs), from)} disabled={!data.songs.length} className={`${pill} bg-accent text-paper disabled:opacity-50`}>
               <Play size={16} className="fill-current" /> Play

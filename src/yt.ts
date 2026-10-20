@@ -1,4 +1,4 @@
-import { Innertube, Misc, Platform, YTNodes } from "youtubei.js/web";
+import { Innertube, Misc, Platform, YTMusic, YTNodes } from "youtubei.js/web";
 import { fetch } from "@tauri-apps/plugin-http";
 import { emitTo, listen } from "@tauri-apps/api/event";
 
@@ -117,8 +117,19 @@ async function loadHome(): Promise<Shelf[]> {
   });
 }
 
+// The counts YouTube Music shows under an artist's name, from its reply as sent (youtubei.js drops
+// them): monthly audience ("75.1M monthly audience") and subscribers ("36.1M"). An artist with their own
+// official channel has a header with a subscribe button; that's what verified means here.
+type Raw = { runs?: { text?: string }[] };
+const runs = (t?: Raw) => t?.runs?.map((r) => r.text).join("") || undefined;
 export async function artist(id: string) {
-  const a = await (await yt).music.getArtist(id);
+  const client = await yt;
+  const reply = await client.actions.execute("/browse", { browseId: id, client: "YTMUSIC" });
+  const a = new YTMusic.Artist(reply, client.actions);
+  const raw = (reply.data as { header?: { musicImmersiveHeaderRenderer?: { monthlyListenerCount?: Raw; subscriptionButton?: { subscribeButtonRenderer?: { subscriberCountText?: Raw; longSubscriberCountText?: Raw } } } } }).header?.musicImmersiveHeaderRenderer;
+  const subs = raw?.subscriptionButton?.subscribeButtonRenderer;
+  const listeners = runs(raw?.monthlyListenerCount)?.replace(/\s*monthly (audience|listeners?)$/i, "");
+  const subscribers = runs(subs?.subscriberCountText)?.replace(/\s*subscribers?$/i, "");
   const header = a.header?.as(YTNodes.MusicImmersiveHeader, YTNodes.MusicVisualHeader);
   const section = (title: string) => a.sections.find((s) => (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) === title);
   const shelf = (title: string) => section(title)?.contents;
@@ -126,6 +137,9 @@ export async function artist(id: string) {
   const more = top?.is(YTNodes.MusicShelf) ? (top.endpoint ?? top.bottom_button?.endpoint)?.payload?.browseId : undefined;
   return {
     name: header?.title.text ?? "",
+    listeners,
+    subscribers,
+    verified: !!subs,
     about: header?.is(YTNodes.MusicImmersiveHeader) ? header.description?.text : undefined,
     banner: (Array.isArray(header?.thumbnail) ? header.thumbnail : header?.thumbnail?.contents)?.[0]?.url,
     // The page lists five, without their lengths; more is the whole list's playlist (topSongs).

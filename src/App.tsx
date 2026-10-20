@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
-import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { audio, back, cycleRepeat, go, next, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { actionFor, comboFrom, findSearch, recording } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, CollectionPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, Search, Settings, SharedPage, trackMenu } from "./views";
 import { useAccount } from "./account";
@@ -33,16 +34,17 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const key = (e.metaKey || e.ctrlKey ? "mod+" : "") + e.key.toLowerCase();
+      const key = comboFrom(e);
+      if (!key || recording) return; // Settings → Shortcuts is taking this press
       const target = e.target as Element;
       // Fields keep their own keys (arrows, space, ⌘← …); ⌘ shortcuts without arrows still work in them.
       if (target.closest?.("input, textarea") && key !== "escape" && !(key.startsWith("mod+") && !key.includes("arrow"))) return;
       // Space on a focused button presses it.
       if (key === " " && (e.repeat || target.closest?.("button"))) return;
-      const run = shortcuts[key];
-      if (!run || e.shiftKey || e.altKey) return;
+      const action = actionFor(key);
+      if (!action) return;
       e.preventDefault();
-      run();
+      action.run();
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
@@ -84,40 +86,6 @@ export default function App() {
     </>
   );
 }
-
-const findSearch = () => {
-  go("search");
-  requestAnimationFrame(() => document.querySelector<HTMLInputElement>("input[name=q]")?.select());
-};
-const seek = (by: number) => (audio.currentTime = Math.min(audio.duration || 0, Math.max(0, audio.currentTime + by)));
-
-// ⌘ is Ctrl on Windows. Listed in Settings (views.tsx). ponytail: fixed bindings, remapping later.
-const shortcuts: Record<string, () => unknown> = {
-  " ": toggle,
-  escape: () => useStore.setState({ sheet: undefined }),
-  arrowright: () => seek(5),
-  arrowleft: () => seek(-5),
-  "mod+k": findSearch,
-  "mod+f": findSearch,
-  "mod+1": () => go("home"),
-  "mod+2": findSearch,
-  "mod+3": () => go("library"),
-  "mod+,": () => go("settings"),
-  "mod+b": () => toggleSidebar(),
-  "mod+s": toggleShuffle,
-  "mod+r": cycleRepeat,
-  "mod+[": back,
-  "mod+]": forward,
-  "mod+n": () => open({ name: "playlist", id: newPlaylist() }),
-  "mod+l": () => {
-    const { queue, index } = useStore.getState();
-    if (queue[index]) toggleLike(queue[index]);
-  },
-  "mod+arrowright": next,
-  "mod+arrowleft": prev,
-  "mod+arrowup": () => nudgeVolume(0.1),
-  "mod+arrowdown": () => nudgeVolume(-0.1),
-};
 
 // Wide enough to hold the traffic lights (lib.rs) inside the card; px-4 centres the icons in it.
 const RAIL = 76;

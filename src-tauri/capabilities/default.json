@@ -13,6 +13,15 @@
     "dialog:allow-open",
     "opener:default",
     "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-is-visible",
+    "core:window:allow-destroy",
+    "core:webview:allow-set-webview-zoom",
+    "core:tray:default",
+    "core:app:allow-default-window-icon",
+    "core:menu:default",
+    "autostart:default",
     {
       "identifier": "http:default",
       "allow": [

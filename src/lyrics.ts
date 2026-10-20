@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { audio, idb, idbGet, idbPut, notify, setLyricLine, subscribeAudio, useOnline, useSettings, useStore } from "./store";
+import { audio, idb, idbDelete, idbGet, idbKeys, idbPut, notify, setLyricLine, subscribeAudio, useOnline, useSettings, useStore } from "./store";
 import type { Track } from "./yt";
 import { version } from "../package.json";
 
@@ -327,12 +327,16 @@ function sides(singers: (string | undefined)[], types: Map<string, string>) {
 // Where lyrics come from, the first that has them: Apple's word-timed lyrics, LRCLIB, then NetEase Cloud
 // Music. Apple and LRCLIB are asked at once, so a song Apple lacks waits no longer than LRCLIB takes;
 // NetEase (slower, and far away) only when both come back empty. None: just no lyrics, with no error,
-// and a source that didn't answer is asked again the next time they're shown.
+// and a source that didn't answer is asked again the next time they're shown. Settings → Lyrics can
+// switch any of them off.
+const SOURCES = { apple: "Apple Music", lrclib: "LRCLIB", netease: "NetEase Cloud Music" } as const;
+const off = (name: string) => useSettings.getState().lyricsOff.some((k) => SOURCES[k] === name);
 async function find(t: Track): Promise<Lyrics | null> {
   let down = false;
   const miss = () => void (down = true);
-  const fromLrclib = lrclib(t).catch(miss);
-  const found = (await apple(t).catch(miss)) ?? (await fromLrclib) ?? (await netease(t).catch(miss));
+  const use = (name: string, from: (t: Track) => Promise<Lyrics | undefined>) => (off(name) ? undefined : from(t).catch(miss));
+  const fromLrclib = use(SOURCES.lrclib, lrclib);
+  const found = (await use(SOURCES.apple, apple)) ?? (await fromLrclib) ?? (await use(SOURCES.netease, netease));
   if (found) return found;
   if (down) throw new Error("A lyrics source didn't answer");
   return null;
@@ -350,6 +354,11 @@ async function fromFile(path: string): Promise<Lyrics | undefined> {
 }
 
 // A downloaded song's lyrics, fetched now (if they aren't kept already) so they're there offline.
+// How many songs' lyrics are kept, and forgetting them (Settings → Library). Yours stay; a downloaded
+// song's are fetched again the next time it plays online.
+export const keptLyrics = () => idbKeys("lyrics:").then((k) => k.length);
+export const forgetLyrics = () => idbDelete("lyrics:");
+
 export const keepLyrics = (t: Track) => stored(t).then(() => {}, () => {});
 
 // Lyrics found are kept on disk, so a song heard before has them at once, even offline, with no request.
@@ -361,7 +370,7 @@ async function stored(t: Track): Promise<Lyrics | null> {
   if (own) return own;
   const key = `lyrics:v2:${t.id}`;
   const kept = await idbGet<{ at: number; lyrics: Lyrics | null }>(key).catch(() => undefined);
-  if (kept && (kept.lyrics || Date.now() - kept.at < 2 * 86_400_000)) return kept.lyrics;
+  if (kept && (kept.lyrics ? !off(kept.lyrics.source) : Date.now() - kept.at < 2 * 86_400_000)) return kept.lyrics;
   const lyrics = await find(t);
   idbPut(key, { at: Date.now(), lyrics }).catch(() => {});
   return lyrics;

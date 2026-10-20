@@ -83,6 +83,9 @@ const kv = <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<
 // Lyrics found online are kept here too (lyrics.ts), one entry a song.
 export const idbGet = <T,>(key: string) => kv<T | undefined>("readonly", (s) => s.get(key));
 export const idbPut = (key: string, value: unknown) => kv("readwrite", (s) => s.put(value, key));
+const range = (prefix: string) => IDBKeyRange.bound(prefix, prefix + "\uffff");
+export const idbKeys = (prefix: string) => kv<IDBValidKey[]>("readonly", (s) => s.getAllKeys(range(prefix)));
+export const idbDelete = (prefix: string) => kv("readwrite", (s) => s.delete(range(prefix)));
 export const idb: StateStorage = {
   // Libraries saved before the move are still in localStorage until their first write here.
   getItem: async (k) => (await kv<string | undefined>("readonly", (s) => s.get(k))) ?? localStorage.getItem(k),
@@ -267,7 +270,10 @@ void (async () => {
   await plays((p) => (seen.length < RECENT && !seen.some((x) => x.id === p.t.id) && seen.push(p.t), seen.length < RECENT)).catch(() => {});
   useHistory.setState((s) => ({ recent: [...s.recent, ...seen.filter((t) => !s.recent.some((x) => x.id === t.id))].slice(0, RECENT) }));
 })();
+// A private session (Settings → Privacy, until Sleeve quits) or history switched off: plays aren't kept.
+export const usePrivate = create<{ on: boolean }>()(() => ({ on: false }));
 function logPlay(t: Track) {
+  if (usePrivate.getState().on || !useSettings.getState().history) return;
   const { rec: _, at: __, ...track } = t;
   void kv("readwrite", (s) => s.add({ t: track, at: Date.now() } satisfies Play), "plays").catch(() => {});
   useHistory.setState((s) => ({ recent: remember(track, s.recent) }));
@@ -448,7 +454,7 @@ async function load(index: number, start = 0, fade = 0) {
   setAccent(art(track.thumb, 64));
   listened(start);
   fill([track]);
-  if (nextIndex(index, false) === get().queue.length && get().repeat === "off") extend(track); // autoplay
+  if (nextIndex(index, false) === get().queue.length && get().repeat === "off" && useSettings.getState().autoplay) extend(track); // autoplay
   try {
     if (buffered) await audio.play();
     else if (track.file) loudness.set(audio, 0), level(audio), await playFile(audio, track.file, start);
@@ -679,7 +685,10 @@ type Settings = {
   quality: Quality; normalize: boolean; crossfade: number; eq: number[];
   lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean;
   libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort; trackCols: [number, number, number];
+  autoplay: boolean; reduceMotion: boolean; zoom: number; lyricsOff: LyricsSource[]; history: boolean;
+  keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean;
 };
+export type LyricsSource = "apple" | "lrclib" | "netease";
 export const useSettings = create<Settings>()(
   persist(
     (): Settings => ({
@@ -687,12 +696,15 @@ export const useSettings = create<Settings>()(
       quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
       lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
       libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom", trackCols: TRACK_COLS,
+      autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false,
     }),
     { name: "settings" },
   ),
 );
 const applySettings = (s: Settings, was?: Settings) => {
   document.documentElement.dataset.theme = s.theme; // index.css: color-scheme picks every token's light or dark value
+  document.documentElement.dataset.motion = s.reduceMotion ? "reduce" : ""; // index.css, like the system's Reduce Motion
+  if (s.zoom !== was?.zoom && "__TAURI_INTERNALS__" in window) void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().setZoom(s.zoom));
   if (s.artworkAccent !== was?.artworkAccent) setAccent(accentSrc);
   if (s.normalize !== was?.normalize) players.forEach(level);
   if (s.eq !== was?.eq) equalize(s.eq);

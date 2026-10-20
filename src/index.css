@@ -448,6 +448,20 @@ input[type="range"].knob::-webkit-slider-thumb {
     }
   }
 }
+/* Settings → Appearance → Reduce Motion: the same, whatever the system says. */
+:root[data-motion="reduce"] :not(.lyrics, .lyrics *),
+:root[data-motion="reduce"] :not(.lyrics *)::before,
+:root[data-motion="reduce"] :not(.lyrics *)::after {
+  transition-property: opacity, color, background-color, --accent-raw !important;
+}
+:root[data-motion="reduce"] .animate-enter {
+  animation-name: fade;
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
 /* Settings → Lyrics → Reduce Lyric Motion (views.tsx LyricLines): the same for the lyrics. Lines jump,
    words and letters stay put and nothing glows; colours still fade. */
 .lyrics[data-still],

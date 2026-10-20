@@ -4,15 +4,16 @@ import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
-  shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, useRecents, useSettings, useStore,
+  shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
-import { asText, estimateWords, groups, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
+import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { albumByName, art, artist, artistByName, collection, topSongs, home, lastHome, search, type Album, type Artist, type Track } from "./yt";
 import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
 import { SignIn } from "./signin";
+import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
@@ -1944,23 +1945,6 @@ function wrap(ctx: CanvasRenderingContext2D, s: string, w: number) {
 
 const isMac = /Mac/.test(navigator.userAgent);
 const mod = isMac ? "⌘" : "Ctrl+";
-// ponytail: mirrors the bindings in App.tsx by hand; generate both from one table when remapping lands.
-const keys: [string, string[]][] = [
-  ["Play or pause", ["Space"]],
-  ["Back or forward 5 seconds", ["←", "→"]],
-  ["Previous or next song", [`${mod}←`, `${mod}→`]],
-  ["Volume down or up", [`${mod}↓`, `${mod}↑`]],
-  ["Shuffle, then Smart Shuffle", [`${mod}S`]],
-  ["Repeat all, one or off", [`${mod}R`]],
-  ["Like the playing song", [`${mod}L`]],
-  ["Search", [`${mod}K`]],
-  ["Go back or forward", [`${mod}[`, `${mod}]`]],
-  ["Home, Search, Library", [`${mod}1`, `${mod}2`, `${mod}3`]],
-  ["New playlist", [`${mod}N`]],
-  ["Settings", [`${mod},`]],
-  ["Show or hide the sidebar", [`${mod}B`]],
-  ["Close full screen", ["Esc"]],
-];
 
 // The file comes from anywhere, so check its shape before it replaces the library. Exports from before
 // follows, folders, pins and hiding have none of them.
@@ -1986,9 +1970,11 @@ const panes = [
   { id: "playback", label: "Playback" },
   { id: "lyrics", label: "Lyrics" },
   { id: "library", label: "Library" },
+  { id: "privacy", label: "Privacy" },
   { id: "shortcuts", label: "Shortcuts" },
+  ...(canHaveFiles ? [{ id: "startup", label: "Startup" }] : []),
   { id: "about", label: "About" },
-] as const;
+];
 
 const btn = "press flex h-9 items-center gap-2 rounded-full px-4 text-sm font-semibold disabled:opacity-50";
 export const solid = `${btn} bg-ink text-paper`;
@@ -2010,7 +1996,7 @@ export function Settings() {
           ))}
         </nav>
         <div key={pane} className="max-w-3xl min-w-0 flex-1 animate-enter">
-          {pane === "account" ? <AccountPane /> : pane === "appearance" ? <Appearance /> : pane === "playback" ? <Playback /> : pane === "lyrics" ? <LyricsPane /> : pane === "library" ? <LibraryPane /> : pane === "shortcuts" ? <Shortcuts /> : <About />}
+          {pane === "account" ? <AccountPane /> : pane === "appearance" ? <Appearance /> : pane === "playback" ? <Playback /> : pane === "lyrics" ? <LyricsPane /> : pane === "library" ? <LibraryPane /> : pane === "privacy" ? <Privacy /> : pane === "shortcuts" ? <Shortcuts /> : pane === "startup" ? <Startup /> : <About />}
         </div>
       </div>
     </div>
@@ -2113,7 +2099,7 @@ function AccountPane() {
 }
 
 function Appearance() {
-  const { theme, artworkAccent } = useSettings();
+  const { theme, artworkAccent, reduceMotion, zoom } = useSettings();
   const set = useSettings.setState;
   return (
     <>
@@ -2129,6 +2115,16 @@ function Appearance() {
         <Choice label="From Artwork" on={artworkAccent} onPick={() => set({ artworkAccent: true })}><Preview tint="#ff8a3d" /></Choice>
         <Choice label="Sleeve Pink" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Preview /></Choice>
       </Group>
+      <div className="divide-y divide-ink/10">
+        <Row label="Reduce Motion" detail={reduceMotion ? "Things fade in place instead of sliding" : "Follows the system’s Reduce Motion"}>
+          <Switch label="Reduce Motion" on={reduceMotion} onChange={(reduceMotion) => set({ reduceMotion })} />
+        </Row>
+        {canHaveFiles && (
+          <Row label="Size" detail="Makes everything in the window bigger or smaller">
+            <Segments label="Size" value={zoom} onPick={(zoom) => set({ zoom })} options={ZOOMS.map((z) => [z, `${Math.round(z * 100)}%`])} />
+          </Row>
+        )}
+      </div>
     </>
   );
 }
@@ -2148,20 +2144,14 @@ function Row({ label, detail, children }: { label: string; detail: string; child
 }
 
 function Playback() {
-  const { quality, normalize, crossfade, eq } = useSettings();
+  const { quality, normalize, crossfade, eq, autoplay } = useSettings();
   const set = useSettings.setState;
   const preset = Object.entries(EQ_PRESETS).find(([, g]) => g.every((v, i) => v === eq[i]))?.[0];
   return (
     <>
       <div className="mb-10 divide-y divide-ink/10">
         <Row label="Audio Quality" detail={quality === "high" ? "The best stream there is for each song" : "Smaller streams, for slow or metered connections"}>
-          <div role="radiogroup" aria-label="Audio Quality" className="flex rounded-full bg-ink/[0.07] p-1">
-            {(["high", "low"] as const).map((q) => (
-              <button key={q} role="radio" aria-checked={quality === q} onClick={() => set({ quality: q })} className={`h-7 rounded-full px-3 text-sm font-semibold transition-colors ${quality === q ? "bg-paper shadow-sm" : "text-muted hover:text-ink"}`}>
-                {q === "high" ? "High" : "Data Saver"}
-              </button>
-            ))}
-          </div>
+          <Segments label="Audio Quality" value={quality} onPick={(quality) => set({ quality })} options={[["high", "High"], ["low", "Data Saver"]]} />
         </Row>
         <Row label="Normalise Volume" detail="Turns loud songs down to the level of the rest">
           <Switch label="Normalise Volume" on={normalize} onChange={(normalize) => set({ normalize })} />
@@ -2171,6 +2161,9 @@ function Playback() {
             <input type="range" aria-label="Crossfade" min={0} max={12} step={1} value={crossfade} onChange={(e) => set({ crossfade: +e.target.value })} style={fill(crossfade, 0, 12)} className="w-40" />
             <span className="w-10 text-right text-sm tabular-nums">{crossfade ? `${crossfade} s` : "Off"}</span>
           </div>
+        </Row>
+        <Row label="Autoplay" detail={autoplay ? "When the queue runs out, similar songs keep playing" : "Music stops when the queue runs out"}>
+          <Switch label="Autoplay" on={autoplay} onChange={(autoplay) => set({ autoplay })} />
         </Row>
       </div>
       <section>
@@ -2209,6 +2202,19 @@ function Playback() {
   );
 }
 
+// A small row of choices, one picked, like the system's segmented controls.
+function Segments<T extends string | number>({ label, value, options, onPick }: { label: string; value: T; options: [T, string][]; onPick: (v: T) => void }) {
+  return (
+    <div role="radiogroup" aria-label={label} className="flex rounded-full bg-ink/[0.07] p-1">
+      {options.map(([v, text]) => (
+        <button key={v} role="radio" aria-checked={value === v} onClick={() => onPick(v)} className={`h-7 rounded-full px-3 text-sm font-semibold transition-colors ${value === v ? "bg-paper shadow-sm" : "text-muted hover:text-ink"}`}>
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Switch({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
   return (
     <button role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)} className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${on ? "bg-accent" : "bg-ink/20"}`}>
@@ -2222,8 +2228,14 @@ const LANGUAGES = ["en", "es", "fr", "de", "it", "pt", "nl", "sv", "pl", "tr", "
 const names = new Intl.DisplayNames([navigator.language], { type: "language" });
 const languageName = (code: string) => names.of({ "zh-CN": "zh-Hans", "zh-TW": "zh-Hant" }[code] ?? code) ?? code;
 
+const LYRIC_SOURCES: [LyricsSource, string, string][] = [
+  ["apple", "Apple Music", "Timed word by word"],
+  ["lrclib", "LRCLIB", "A free library anyone can add to"],
+  ["netease", "NetEase Cloud Music", "Strong on Chinese, Japanese and Korean songs"],
+];
+
 function LyricsPane() {
-  const { lyricsPeek, lyricsWords, lyricsStill, translateTo } = useSettings();
+  const { lyricsPeek, lyricsWords, lyricsStill, translateTo, lyricsOff } = useSettings();
   const set = useSettings.setState;
   const mine = Object.entries(useMine((s) => s.songs)).sort((a, b) => b[1].at - a[1].at);
   return (
@@ -2253,9 +2265,17 @@ function LyricsPane() {
           </div>
         </Row>
       </div>
-      <p className="max-w-xl text-sm leading-relaxed text-muted">
-        Lyrics are your own first, then Apple Music’s word by word, then LRCLIB, a free library anyone can add to, then NetEase Cloud Music. Translation and romanisation are by Google, and only happen when you switch them on.
-      </p>
+      <section className="mb-6">
+        <h2 className="mb-1 text-xl font-bold tracking-tight">Sources</h2>
+        <p className="max-w-xl text-sm leading-relaxed text-muted">Your own lyrics come first, then the first of these that has the song, in this order. Translation and romanisation are by Google, and only happen when you switch them on.</p>
+        <div className="divide-y divide-ink/10">
+          {LYRIC_SOURCES.map(([id, label, detail]) => (
+            <Row key={id} label={label} detail={detail}>
+              <Switch label={label} on={!lyricsOff.includes(id)} onChange={(on) => set({ lyricsOff: on ? lyricsOff.filter((k) => k !== id) : [...lyricsOff, id] })} />
+            </Row>
+          ))}
+        </div>
+      </section>
       <section className="mt-10">
         <h2 className="mb-3 text-xl font-bold tracking-tight">Your Lyrics</h2>
         {mine.length ? (
@@ -2358,6 +2378,7 @@ function LibraryPane() {
       </div>
       {canHaveFiles && <LocalFolders />}
       {canDownload && <Downloads />}
+      <Cache />
       <section className="mt-10">
         <h2 className="mb-1 text-xl font-bold tracking-tight">Hidden Songs</h2>
         <p className="mb-3 text-sm text-muted">Skipped when a playlist or radio plays on by itself. They still play when you pick them.</p>
@@ -2409,7 +2430,7 @@ function Downloads() {
     <section className="mt-10">
       <h2 className="mb-1 text-xl font-bold tracking-tight">Downloads</h2>
       <p className="mb-3 text-sm text-muted">
-        {entries.length ? `${count(n)}${size !== undefined ? `, ${size < 1e9 ? `${size < 1e7 ? (size / 1e6).toFixed(1) : Math.round(size / 1e6)} MB` : `${(size / 1e9).toFixed(1)} GB`}` : ""}${waiting.length ? `, ${waiting.length} still to come` : ""}. They play without a connection, and only in Sleeve.` : "Download a playlist or album with its arrow button and it plays without a connection."}
+        {entries.length ? `${count(n)}${size !== undefined ? `, ${bytes(size)}` : ""}${waiting.length ? `, ${waiting.length} still to come` : ""}. They play without a connection, and only in Sleeve.` : "Download a playlist or album with its arrow button and it plays without a connection."}
       </p>
       {entries.length > 0 && (
         <>
@@ -2462,20 +2483,123 @@ function LocalFolders() {
   );
 }
 
+// Click a shortcut, then press the new one: Esc keeps what it was, Delete takes it off. One already
+// in use moves here.
 function Shortcuts() {
+  const keymap = useSettings((s) => s.keymap);
+  const [editing, setEditing] = useState<string>();
+  useEffect(() => {
+    if (!editing) return;
+    setRecording(true);
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      const combo = comboFrom(e);
+      if (!combo || ["meta", "control", "mod+meta", "mod+control"].includes(combo)) return; // a modifier on its own: wait for the key
+      if (combo === "backspace" || combo === "delete") bind(editing, "");
+      else if (combo !== "escape") {
+        const took = bind(editing, combo);
+        if (took) notify({ text: `${showCombo(combo)} Moved Here`, detail: `${took} has no shortcut now` });
+      }
+      setEditing(undefined);
+    };
+    addEventListener("keydown", onKey, true);
+    return () => (setRecording(false), removeEventListener("keydown", onKey, true));
+  }, [editing]);
+  return (
+    <>
+      <div className="divide-y divide-ink/10">
+        {KEYS.map(({ id, label }) => {
+          const combo = comboOf(id);
+          return (
+            <div key={id} className="flex h-12 items-center justify-between gap-6">
+              <span>{label}</span>
+              <button onClick={() => setEditing(editing === id ? undefined : id)} aria-label={`Change shortcut for ${label}`} className={`press min-w-12 rounded-md px-2 py-0.5 text-center font-mono text-xs transition-colors ${editing === id ? "bg-accent text-white" : "bg-ink/[0.07] hover:bg-ink/[0.12]"} ${combo || editing === id ? "" : "text-muted"}`}>
+                {editing === id ? "Press keys…" : combo ? showCombo(combo) : "None"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-4 text-sm text-muted">Click a shortcut, then press the keys you want. Esc keeps it, Delete removes it.</p>
+      {Object.keys(keymap).length > 0 && <button onClick={resetKeys} className={`${quiet} mt-4`}>Restore Defaults</button>}
+    </>
+  );
+}
+
+// What's kept to make things quick, and room it takes on this computer.
+function Cache() {
+  const [lyrics, setLyrics] = useState<number>();
+  const [used, setUsed] = useState<number>();
+  const read = () => (keptLyrics().then(setLyrics, () => {}), navigator.storage?.estimate().then((e) => setUsed(e.usage), () => {}));
+  useEffect(() => void read(), []);
+  return (
+    <section className="mt-10">
+      <h2 className="mb-1 text-xl font-bold tracking-tight">Cache</h2>
+      <p className="mb-3 text-sm text-muted">
+        {lyrics === undefined ? "Looking…" : `Lyrics kept for ${count(lyrics)}`}{used !== undefined ? `. Sleeve’s data on this computer, your library included: ${bytes(used)}` : ""}. Clearing fetches the lyrics again when songs play.
+      </p>
+      <button onClick={() => void forgetLyrics().then(() => (read(), notify({ text: "Lyrics Cache Cleared" })), report)} disabled={!lyrics} className={quiet}>Clear Lyrics Cache</button>
+    </section>
+  );
+}
+const bytes = (n: number) => (n < 1e9 ? `${n < 1e7 ? (n / 1e6).toFixed(1) : Math.round(n / 1e6)} MB` : `${(n / 1e9).toFixed(1)} GB`);
+
+function Privacy() {
+  const history = useSettings((s) => s.history);
+  const priv = usePrivate((s) => s.on);
+  return (
+    <>
+      <div className="divide-y divide-ink/10">
+        <Row label="Private Session" detail={priv ? "What you play now isn’t kept, until Sleeve quits" : "Plays nothing into your history until Sleeve quits"}>
+          <Switch label="Private Session" on={priv} onChange={(on) => usePrivate.setState({ on })} />
+        </Row>
+        <Row label="Listening History" detail={history ? "Songs you play for 30 s are kept, on this computer only" : "Nothing you play is kept"}>
+          <Switch label="Listening History" on={history} onChange={(history) => useSettings.setState({ history })} />
+        </Row>
+        <Row label="Clear Listening History" detail="Removes every play, and Recently Played on Home">
+          <button onClick={() => popup([{ text: "Clear History", action: clearHistory }])} className={quiet}>Clear…</button>
+        </Row>
+      </div>
+      <p className="mt-6 max-w-xl text-sm leading-relaxed text-muted">Sleeve sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
+    </>
+  );
+}
+
+function Startup() {
+  const { loginHidden, closeToTray } = useSettings();
+  const set = useSettings.setState;
+  const [login, setLogin] = useState<boolean>();
+  useEffect(() => void import("@tauri-apps/plugin-autostart").then((a) => a.isEnabled()).then(setLogin, () => setLogin(false)), []);
+  const toggleLogin = (on: boolean) =>
+    void import("@tauri-apps/plugin-autostart").then((a) => (on ? a.enable() : a.disable())).then(() => setLogin(on), report);
+  const isMac = /Mac/.test(navigator.userAgent);
   return (
     <div className="divide-y divide-ink/10">
-      {keys.map(([label, combo]) => (
-        <div key={label} className="flex h-12 items-center justify-between gap-6">
-          <span>{label}</span>
-          <span className="flex gap-1.5">
-            {combo.map((k) => <kbd key={k} className="min-w-7 rounded-md bg-ink/[0.07] px-2 py-0.5 text-center font-mono text-xs">{k}</kbd>)}
-          </span>
-        </div>
-      ))}
+      <Row label="Open at Login" detail="Sleeve starts when you log in">
+        <Switch label="Open at Login" on={!!login} onChange={toggleLogin} />
+      </Row>
+      <Row label="Open in the Background" detail={login ? "Opened at login, the window stays out of the way until you click Sleeve" : "Once Open at Login is on"}>
+        <Switch label="Open in the Background" on={loginHidden} onChange={(loginHidden) => set({ loginHidden })} />
+      </Row>
+      <Row label={isMac ? "Keep in the Menu Bar" : "Close to Tray"} detail={closeToTray ? `Closing the window keeps Sleeve playing, with its icon in the ${isMac ? "menu bar" : "tray"}` : "Closing the window quits Sleeve"}>
+        <Switch label={isMac ? "Keep in the Menu Bar" : "Close to Tray"} on={closeToTray} onChange={(closeToTray) => set({ closeToTray })} />
+      </Row>
     </div>
   );
 }
+
+// The open-source parts Sleeve is built on, and their licences.
+const LICENCES: [string, string][] = [
+  ["Tauri and its plugins", "MIT or Apache-2.0"],
+  ["React", "MIT"],
+  ["YouTube.js (youtubei.js)", "MIT"],
+  ["Supabase Auth", "MIT"],
+  ["Zustand", "MIT"],
+  ["Lucide icons", "ISC"],
+  ["yaml", "ISC"],
+  ["Lofty (song tags)", "MIT or Apache-2.0"],
+  ["Tailwind CSS", "MIT"],
+];
 
 function About() {
   return (
@@ -2483,6 +2607,18 @@ function About() {
       <div className="text-5xl font-extrabold tracking-[-0.04em]">Sleeve</div>
       <div className="mt-2 text-muted">Version {version}</div>
       <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={`${quiet} mt-6`}>Show the Welcome Again</button>
+      <section className="mt-10">
+        <h2 className="mb-1 text-xl font-bold tracking-tight">Licences</h2>
+        <p className="mb-3 text-sm text-muted">Sleeve is built on these open-source projects. Thank you.</p>
+        <div className="divide-y divide-ink/10">
+          {LICENCES.map(([name, licence]) => (
+            <div key={name} className="flex h-11 items-center justify-between gap-6">
+              <span>{name}</span>
+              <span className="text-sm text-muted">{licence}</span>
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-use tauri::{webview::PageLoadEvent, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{webview::PageLoadEvent, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 mod account;
 mod local;
@@ -41,11 +41,15 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Settings → Startup. Opened at login it starts hidden; main.tsx shows it unless you chose otherwise.
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--login"])))
         .invoke_handler(tauri::generate_handler![float_mini, local::scan_music, local::allow_music, local::local_lyrics, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.
-            let main = WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?.on_download(|_, _| true);
+            let main = WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
+                .on_download(|_, _| true)
+                .visible(!std::env::args().any(|a| a == "--login"));
             // Apple's own buttons, centred in the 76px rail card that sits 8px in (App.tsx RAIL): the
             // three span ~62pt on macOS 26. Set on the webview, not the window (trafficLightPosition in
             // the config): only the webview's view redraws, so only its inset survives resizes.
@@ -70,6 +74,18 @@ pub fn run() {
                 window.app_handle().exit(0);
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Clicking the Dock icon brings back a window that's hidden (in the tray, or opened at login).
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = event {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

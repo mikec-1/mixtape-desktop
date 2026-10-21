@@ -10,7 +10,7 @@ type Root = "home" | "search" | "library" | "settings";
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
 // "shared" is someone's public playlist (id "<owner>/<playlist>"), "profile" someone's profile (account.ts).
 export type View =
-  | { name: Root | "history" | "local" }
+  | { name: Root | "history" | "local" | "charts" | "releases" }
   | { name: "artist" | "collection" | "playlist" | "folder" | "shared" | "profile"; id: string }
   | { name: "discography"; id: string; params?: string; artist?: string };
 
@@ -721,9 +721,18 @@ type Settings = {
   lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean;
   libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort; trackCols: [number, number, number];
   autoplay: boolean; reduceMotion: boolean; zoom: number; lyricsOff: LyricsSource[]; history: boolean;
-  keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean;
+  keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean; country: string;
 };
 export type LyricsSource = "apple" | "lrclib" | "netease";
+const defaultCountry = () => {
+  try {
+    const code = typeof navigator !== "undefined" ? navigator.language?.split("-")?.[1] : undefined;
+    return (code && code.length === 2 ? code : "US").toUpperCase();
+  } catch {
+    return "US";
+  }
+};
+
 export const useSettings = create<Settings>()(
   persist(
     (): Settings => ({
@@ -732,6 +741,7 @@ export const useSettings = create<Settings>()(
       lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
       libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom", trackCols: TRACK_COLS,
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false,
+      country: defaultCountry(),
     }),
     { name: "settings" },
   ),

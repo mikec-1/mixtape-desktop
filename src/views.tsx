@@ -10,7 +10,7 @@ import {
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
-import { albumByName, art, artist, artistByName, collection, discography, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
+import { albumByName, art, artist, artistByName, charts, collection, discography, newReleases, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
 import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
@@ -351,6 +351,18 @@ export function Search() {
 
           <h2 className={`${recents.length > 0 ? "mt-10" : "mt-8"} text-xl font-bold tracking-tight`}>Browse All</h2>
           <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+            <button
+              onClick={() => open({ name: "charts" })}
+              className="press relative aspect-[16/10] overflow-hidden rounded-2xl p-4 text-left text-xl font-extrabold tracking-tight text-white bg-linear-to-br from-[#0a84ff] to-[#5e5ce6] hover:brightness-110 shadow-sm"
+            >
+              Charts
+            </button>
+            <button
+              onClick={() => open({ name: "releases" })}
+              className="press relative aspect-[16/10] overflow-hidden rounded-2xl p-4 text-left text-xl font-extrabold tracking-tight text-white bg-linear-to-br from-[#ff375f] to-[#ff9f0a] hover:brightness-110 shadow-sm"
+            >
+              New Releases
+            </button>
             {genres.map(([name, colour]) => (
               <button
                 key={name}
@@ -620,10 +632,10 @@ function SearchAlbumsRow({ items }: { items: Album[] }) {
   );
 }
 
-function ArtistsRow({ items }: { items: { id: string; name: string; thumb?: string }[] }) {
+function ArtistsRow({ items, numbered }: { items: { id: string; name: string; thumb?: string }[]; numbered?: boolean }) {
   return (
     <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
-      {items.map((a) => (
+      {items.map((a, i) => (
         <button
           key={a.id}
           onClick={() => {
@@ -632,11 +644,16 @@ function ArtistsRow({ items }: { items: { id: string; name: string; thumb?: stri
           }}
           className="press group w-36 shrink-0 text-left"
         >
-          <div className="aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">
+          <div className="relative aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">
             {a.thumb ? (
               <img src={art(a.thumb, 300)} alt="" loading="lazy" className="size-full object-cover group-hover:scale-105 transition-transform duration-300" />
             ) : (
               <div className="size-full bg-ink/[0.08]" />
+            )}
+            {numbered && (
+              <span className="absolute bottom-1 left-1 flex size-6 items-center justify-center rounded-full bg-black/75 text-xs font-extrabold text-white shadow-sm tabular-nums backdrop-blur-xs">
+                {i + 1}
+              </span>
             )}
           </div>
           <div className="mt-2.5 truncate font-semibold text-center">{a.name}</div>
@@ -1883,6 +1900,174 @@ export function DiscographyPage({ id, params: initialParams, artist }: { id: str
   );
 }
 
+const COUNTRIES = [
+  { code: "ZZ", name: "Global" },
+  { code: "US", name: "United States" },
+  { code: "GB", name: "United Kingdom" },
+  { code: "AU", name: "Australia" },
+  { code: "BR", name: "Brazil" },
+  { code: "CA", name: "Canada" },
+  { code: "DE", name: "Germany" },
+  { code: "ES", name: "Spain" },
+  { code: "FR", name: "France" },
+  { code: "IN", name: "India" },
+  { code: "IT", name: "Italy" },
+  { code: "JP", name: "Japan" },
+  { code: "KR", name: "South Korea" },
+  { code: "MX", name: "Mexico" },
+  { code: "NL", name: "Netherlands" },
+  { code: "NZ", name: "New Zealand" },
+  { code: "NO", name: "Norway" },
+  { code: "PL", name: "Poland" },
+  { code: "SE", name: "Sweden" },
+];
+
+export function ChartsPage() {
+  const country = useSettings((s) => s.country);
+  const { data: shelfList, error, loading } = useAsync(() => charts(country), [country]);
+
+  const countryList = COUNTRIES.some((c) => c.code === country)
+    ? COUNTRIES
+    : [{ code: country, name: country }, ...COUNTRIES];
+
+  return (
+    <div className="animate-enter px-8 pt-14">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-display">Charts</h1>
+          <p className="mt-1 font-semibold text-muted">The most played music right now</p>
+        </div>
+        <div className="relative">
+          <select
+            value={country}
+            onChange={(e) => useSettings.setState({ country: e.target.value })}
+            aria-label="Country"
+            className="press h-9 appearance-none rounded-full bg-ink/[0.07] pr-9 pl-4 text-sm font-semibold outline-none hover:bg-ink/[0.12] focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            {countryList.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <ChevronDown size={15} aria-hidden className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-muted" />
+        </div>
+      </div>
+
+      {error && <p className="mt-8 text-muted">Couldn’t load charts for {country}. Check your connection and try again.</p>}
+
+      {loading && !shelfList && (
+        <div className="mt-8 space-y-8 animate-pulse">
+          <div className="h-6 w-48 rounded bg-ink/[0.06]" />
+          <div className="h-44 rounded-2xl bg-ink/[0.04]" />
+          <div className="h-6 w-48 rounded bg-ink/[0.06]" />
+          <div className="h-44 rounded-2xl bg-ink/[0.04]" />
+        </div>
+      )}
+
+      {shelfList && (
+        <div className="mt-4">
+          {shelfList.map((shelf, i) => (
+            <Section key={i} title={shelf.title}>
+              {shelf.tracks.length > 0 && <TrackGrid tracks={shelf.tracks} numbered={/trend|chart|top/i.test(shelf.title)} />}
+              {shelf.albums.length > 0 && <Albums items={shelf.albums} />}
+              {shelf.artists && shelf.artists.length > 0 && (
+                <ArtistsRow items={shelf.artists} numbered={/trend|chart|top/i.test(shelf.title)} />
+              )}
+            </Section>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// New releases grid: fresh albums and singles from YouTube Music.
+export function ReleasesPage() {
+  const { data: items, error, loading } = useAsync(newReleases, []);
+  const [filter, setFilter] = useState<"all" | "albums" | "singles">("all");
+
+  const chips: { id: "all" | "albums" | "singles"; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "albums", label: "Albums" },
+    { id: "singles", label: "Singles & EPs" },
+  ];
+
+  const filtered = useMemo(() => {
+    if (!items) return [];
+    if (filter === "albums") return items.filter((a) => /album/i.test(a.kind ?? ""));
+    if (filter === "singles") return items.filter((a) => /single|ep/i.test(a.kind ?? ""));
+    return items;
+  }, [items, filter]);
+
+  return (
+    <div className="animate-enter px-8 pt-14">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-display">New Releases</h1>
+        <p className="mt-1 font-semibold text-muted">Fresh albums and singles</p>
+      </div>
+
+      <div className="mt-6 flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
+        {chips.map((c) => {
+          const active = filter === c.id;
+          return (
+            <button
+              key={c.id}
+              onClick={() => setFilter(c.id)}
+              className={`${pill} ${active ? "bg-ink text-paper" : "bg-ink/[0.07] text-ink hover:bg-ink/[0.12]"}`}
+            >
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {error && <p className="mt-8 text-muted">Couldn’t load new releases. Check your connection and try again.</p>}
+
+      {loading && !items && (
+        <div className="mt-8 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="space-y-2.5">
+              <Skeleton className="aspect-square w-full rounded-xl" />
+              <Skeleton className="h-4 w-3/4 rounded-sm" />
+              <Skeleton className="h-3 w-1/2 rounded-sm" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {items && filtered.length === 0 && !loading && (
+        <p className="mt-8 text-muted">No releases found in this category.</p>
+      )}
+
+      {filtered.length > 0 && (
+        <div className="mt-8 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6">
+          {filtered.map((a) => (
+            <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative">
+              <button onClick={() => open({ name: "collection", id: a.id })} className="press block w-full rounded-xl text-left">
+                <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
+                  <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                </div>
+                <div className="mt-2.5 truncate font-semibold">{a.title}</div>
+                <div className="truncate text-sm text-muted">
+                  {[a.kind, a.by].filter(Boolean).join(" · ") || a.year}
+                </div>
+              </button>
+              <button
+                onClick={() => playCollection(a.id)}
+                aria-label={`Play ${a.title}`}
+                className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-accent text-paper opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+              >
+                <Play size={18} className="ml-0.5 fill-current" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // A sheet that rises from the player bar: Now Playing (the artwork, with lyrics or Up Next beside it), or
 // just the lyrics, big, on the artwork's colour. Always mounted so it can slide both ways; transitions,
 // not keyframes, so a quick open-close reverses from wherever it is. Its contents go once it's down,
@@ -2078,7 +2263,7 @@ function LyricTools({ track, lyrics }: { track?: Track; lyrics?: Lyrics | null }
 }
 
 // The editor opens on your own lyrics, or else the song's current ones (as LRC when synced) to fix.
-export function editLyrics(t: Track) {
+function editLyrics(t: Track) {
   const key = songKey(t);
   const now = lyricsNow(t);
   const text = useMine.getState().songs[key]?.text ?? (now ? asText(now) : "");

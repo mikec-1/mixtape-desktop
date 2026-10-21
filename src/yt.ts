@@ -21,7 +21,7 @@ export type Artist = { id?: string; name: string };
 // file: a song on this computer (local.ts), by its path; it plays from disk and isn't on YouTube.
 // albumId opens its album; album "" means it was looked for and there's none (store.ts fill).
 export type Track = { id: string; title: string; artists: Artist[]; album?: string; albumId?: string; thumb?: string; duration?: string; explicit?: true; rec?: true; at?: number; file?: string };
-export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string; at?: number }; // at: when you saved it
+export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string; kind?: string; at?: number }; // at: when you saved it
 
 // YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at. A
 // downloaded song's artwork (offline.ts sets covers.local) comes from disk instead, at any size.
@@ -59,15 +59,15 @@ const explicit = (badges?: Iterable<unknown> | null) =>
   [...(badges ?? [])].some((b) => (b as YTNodes.MusicInlineBadge).icon_type === "MUSIC_EXPLICIT_BADGE") ? { explicit: true as const } : {};
 const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
   items.flatMap((s) =>
-    s.id
+    s.id && !s.id.startsWith("UC") && (s as any).item_type !== "artist"
       ? [{
           id: s.id,
-          title: s.title ?? "",
+          title: s.title ?? (s as any).name ?? "",
           // Videos have authors.
           artists: withUnlinked((s.artists ?? s.authors)?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [], artistLine(s.flex_columns?.[1]?.title?.text)),
           album: s.album?.name,
           albumId: s.album?.id,
-          thumb: s.thumbnails?.[0]?.url,
+          thumb: s.thumbnails?.[0]?.url ?? (s as any).thumbnail?.contents?.[0]?.url ?? (s as any).thumbnail?.[0]?.url,
           duration: s.duration?.text,
           ...explicit(s.badges),
         }]
@@ -82,15 +82,31 @@ const toAlbums = (items: (YTNodes.MusicTwoRowItem | YTNodes.MusicResponsiveListI
     if (!id) return [];
     const title = typeof a.title === "string" ? a.title : a.title?.text ?? (a as any).name ?? "";
     const thumb = (a as any).thumbnail?.[0]?.url ?? (a as any).thumbnails?.[0]?.url;
-    const by = a.artists?.map((x: any) => x.name).join(", ") || (a as any).author?.name || (a as any).authors?.map((x: any) => x.name).join(", ");
-    return [{ id, title, year: a.year, by, thumb }];
+    const subText = (typeof (a as any).subtitle === "string" ? (a as any).subtitle : (a as any).subtitle?.text) ?? "";
+    const kindMatch = subText.match(/^(Single|EP|Album|Playlist)\b/i);
+    const kind = kindMatch ? kindMatch[1] : (a as any).item_type === "album" ? "Album" : (a as any).item_type === "playlist" ? "Playlist" : undefined;
+    const by =
+      a.artists?.map((x: any) => x.name).join(", ") ||
+      (a as any).author?.name ||
+      (a as any).authors?.map((x: any) => x.name).join(", ") ||
+      (kindMatch ? subText.replace(/^(Single|EP|Album|Playlist)\s*•?\s*/i, "").trim() : subText) ||
+      undefined;
+    return [{ id, title, year: a.year, by, thumb, kind }];
   });
 
 const toArtists = (items: (YTNodes.MusicTwoRowItem | YTNodes.MusicResponsiveListItem)[] = []): SearchArtist[] =>
   items.flatMap((a) => {
     const id = a.id ?? (a as any).endpoint?.payload?.browseId;
-    const name = (a as any).name ?? (typeof a.title === "string" ? a.title : a.title?.text) ?? "";
-    const thumb = (a as any).thumbnail?.[0]?.url ?? (a as any).thumbnails?.[0]?.url ?? (a as any).thumbnail?.contents?.[0]?.url;
+    const name =
+      (a as any).name ??
+      (a as any).flex_columns?.[0]?.title?.toString() ??
+      (typeof a.title === "string" ? a.title : a.title?.text) ??
+      "";
+    const thumb =
+      (a as any).thumbnails?.[0]?.url ??
+      (a as any).thumbnail?.[0]?.url ??
+      (a as any).thumbnail?.contents?.[0]?.url ??
+      (Array.isArray((a as any).thumbnail) ? (a as any).thumbnail[0]?.url : undefined);
     return id && name ? [{ id, name, thumb }] : [];
   });
 
@@ -172,7 +188,7 @@ export async function suggestions(query: string): Promise<string[]> {
   return [...new Set(list)];
 }
 
-export type Shelf = { title: string; tracks: Track[]; albums: Album[] };
+export type Shelf = { title: string; tracks: Track[]; albums: Album[]; artists?: SearchArtist[] };
 
 // The YT Music start page: its home shelves (two pages of them) followed by Explore's.
 let homeFeed: ReturnType<typeof loadHome> | undefined;
@@ -202,6 +218,127 @@ async function loadHome(): Promise<Shelf[]> {
     };
     return shelf.tracks.length || shelf.albums.length ? [shelf] : [];
   });
+}
+
+// YouTube Music charts for a country (e.g. "US", "GB", "ZZ" for global): top songs, videos and trending.
+export async function charts(country = "US"): Promise<Shelf[]> {
+  const client = await yt;
+  const music = client.music;
+  const chartsReply = await client.actions.execute("/browse", {
+    browseId: "FEmusic_charts",
+    formData: { selectedValues: [country] },
+    client: "YTMUSIC",
+  }).catch(() => undefined);
+
+  if (!chartsReply) return [];
+
+  const page = Parser.parseResponse(chartsReply.data);
+  const carouselShelves = page.contents_memo?.getType(YTNodes.MusicCarouselShelf) ?? [];
+  const musicShelves = page.contents_memo?.getType(YTNodes.MusicShelf) ?? [];
+  const allSections = [...carouselShelves, ...musicShelves];
+
+  // Country-specific playlists from Video charts (Trending 20, Daily Top Music Videos, etc.)
+  const videoChartsSection = allSections.find((s) => {
+    const t = (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) ?? "";
+    return /video chart/i.test(t);
+  });
+  const videoChartItems = (videoChartsSection?.contents?.filterType(YTNodes.MusicTwoRowItem) ?? []) as YTNodes.MusicTwoRowItem[];
+
+  const trendingPlItem = videoChartItems.find((i) => /trend/i.test(i.title?.toString() ?? ""));
+  const topVideosPlItem = videoChartItems.find((i) => /daily top|top 100 music video/i.test(i.title?.toString() ?? ""));
+
+  const [trendingPl, topVideosPl] = await Promise.all([
+    trendingPlItem?.id ? music.getPlaylist(trendingPlItem.id).catch(() => undefined) : undefined,
+    topVideosPlItem?.id ? music.getPlaylist(topVideosPlItem.id).catch(() => undefined) : undefined,
+  ]);
+
+  const result: Shelf[] = [];
+
+  // 1. Trending tracks (country-specific)
+  const trendingTracks = trendingPl ? toTracks(trendingPl.items?.filterType(YTNodes.MusicResponsiveListItem)) : [];
+  if (trendingTracks.length) {
+    result.push({ title: "Trending", tracks: trendingTracks, albums: [] });
+  }
+
+  // 2. Top artists (country-specific)
+  const artistsSection = allSections.find((s) => {
+    const t = (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) ?? "";
+    return /artist/i.test(t);
+  });
+  if (artistsSection) {
+    const listItems = artistsSection.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? [];
+    const twoRowItems = artistsSection.contents?.filterType(YTNodes.MusicTwoRowItem) ?? [];
+    const artists = toArtists(listItems.length ? listItems : twoRowItems);
+    if (artists.length) {
+      result.push({ title: "Top artists", tracks: [], albums: [], artists });
+    }
+  }
+
+  // 3. Top music videos
+  const topVideoTracks = topVideosPl ? toTracks(topVideosPl.items?.filterType(YTNodes.MusicResponsiveListItem)) : [];
+  if (topVideoTracks.length) {
+    result.push({ title: "Top music videos", tracks: topVideoTracks.slice(0, 50), albums: [] });
+  }
+
+  // 4. Video charts playlists (excluding already expanded playlists)
+  const remainingPlaylists = videoChartItems.filter(
+    (i) => i.id !== trendingPlItem?.id && i.id !== topVideosPlItem?.id
+  );
+  if (remainingPlaylists.length) {
+    result.push({
+      title: "Video charts",
+      tracks: [],
+      albums: toAlbums(remainingPlaylists),
+    });
+  }
+
+  // 5. Genres (if present)
+  const genreSection = allSections.find((s) => {
+    const t = (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) ?? "";
+    return /genre/i.test(t);
+  });
+  if (genreSection) {
+    const genreItems = genreSection.contents?.filterType(YTNodes.MusicTwoRowItem) ?? [];
+    const albums = toAlbums(genreItems);
+    if (albums.length) {
+      result.push({ title: "Genres", tracks: [], albums });
+    }
+  }
+
+  // Fallback for global ("ZZ") or regions without a dedicated Trending playlist
+  if (!result.some((s) => /trend/i.test(s.title))) {
+    const explore = await music.getExplore().catch(() => undefined);
+    const exploreTrending = explore?.sections?.find((s: any) =>
+      s.is?.(YTNodes.MusicCarouselShelf) &&
+      /trend/i.test(s.header?.title?.text ?? "") &&
+      !/podcast|episode|show/i.test(s.header?.title?.text ?? "")
+    );
+    if (exploreTrending) {
+      const listItems = exploreTrending.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? [];
+      const tracks = toTracks(listItems);
+      if (tracks.length) {
+        result.unshift({ title: "Trending", tracks, albums: [] });
+      }
+    }
+  }
+
+  return result;
+}
+
+// New album and single releases from YouTube Music.
+export async function newReleases(): Promise<Album[]> {
+  const client = await yt;
+  const reply = await client.actions.execute("/browse", {
+    browseId: "FEmusic_new_releases",
+    client: "YTMUSIC",
+  });
+  const page = Parser.parseResponse(reply.data);
+  const items = [
+    ...(page.contents_memo?.getType(YTNodes.MusicTwoRowItem) ?? []),
+    ...(page.contents_memo?.getType(YTNodes.MusicResponsiveListItem) ?? []),
+  ];
+  const seen = new Set<string>();
+  return toAlbums(items).filter((a) => (seen.has(a.id) ? false : (seen.add(a.id), true)));
 }
 
 // The counts YouTube Music shows under an artist's name, from its reply as sent (youtubei.js drops

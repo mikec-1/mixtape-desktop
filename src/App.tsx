@@ -3,7 +3,7 @@ import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCir
 import { audio, back, cycleRepeat, go, next, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { actionFor, comboFrom, findSearch, recording } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
-import { Artist, Artists, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, Search, Settings, SharedPage, trackMenu } from "./views";
+import { Artist, Artists, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu } from "./views";
 import { useAccount } from "./account";
 import { Welcome } from "./welcome";
 import { art, type Track } from "./yt";
@@ -64,7 +64,7 @@ export default function App() {
             <div key={i + view.name + ("id" in view ? view.id : "")} hidden={i !== stack.length - 1} className="absolute inset-0 overflow-x-hidden overflow-y-auto pb-10">
               {"id" in view ? (
                 view.name === "artist" ? <Artist id={view.id} /> : view.name === "discography" ? <DiscographyPage id={view.id} params={view.params} artist={view.artist} /> : view.name === "playlist" ? <PlaylistPage id={view.id} /> : view.name === "folder" ? <FolderPage id={view.id} /> : view.name === "shared" ? <SharedPage id={view.id} /> : view.name === "profile" ? <ProfilePage id={view.id} /> : <CollectionPage id={view.id} />
-              ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : view.name === "settings" ? <Settings /> : view.name === "history" ? <HistoryPage /> : view.name === "local" ? <LocalPage /> : <Library />}
+              ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : view.name === "settings" ? <Settings /> : view.name === "history" ? <HistoryPage /> : view.name === "local" ? <LocalPage /> : view.name === "charts" ? <ChartsPage /> : view.name === "releases" ? <ReleasesPage /> : <Library />}
             </div>
           ))}
           {stack.length > 1 && (

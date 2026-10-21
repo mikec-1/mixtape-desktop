@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ArrowDownToLine, ArrowUpDown, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
@@ -9,7 +10,7 @@ import {
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
-import { albumByName, art, artist, artistByName, collection, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
+import { albumByName, art, artist, artistByName, collection, discography, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
 import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
@@ -619,7 +620,7 @@ function SearchAlbumsRow({ items }: { items: Album[] }) {
   );
 }
 
-function SearchArtistsRow({ items }: { items: SearchArtist[] }) {
+function ArtistsRow({ items }: { items: { id: string; name: string; thumb?: string }[] }) {
   return (
     <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
       {items.map((a) => (
@@ -632,7 +633,11 @@ function SearchArtistsRow({ items }: { items: SearchArtist[] }) {
           className="press group w-36 shrink-0 text-left"
         >
           <div className="aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">
-            <img src={art(a.thumb, 300)} alt="" loading="lazy" className="size-full object-cover group-hover:scale-105 transition-transform duration-300" />
+            {a.thumb ? (
+              <img src={art(a.thumb, 300)} alt="" loading="lazy" className="size-full object-cover group-hover:scale-105 transition-transform duration-300" />
+            ) : (
+              <div className="size-full bg-ink/[0.08]" />
+            )}
           </div>
           <div className="mt-2.5 truncate font-semibold text-center">{a.name}</div>
           <div className="truncate text-xs text-muted text-center">Artist</div>
@@ -641,6 +646,7 @@ function SearchArtistsRow({ items }: { items: SearchArtist[] }) {
     </div>
   );
 }
+const SearchArtistsRow = ArtistsRow;
 
 function AlbumsGrid({ items }: { items: Album[] }) {
   return (
@@ -1609,6 +1615,7 @@ export function Artist({ id }: { id: string }) {
   const { data: top } = useAsync(() => (page?.more ? topSongs(page.more) : undefined), [page?.more]);
   const data = page && { ...page, songs: top?.length ? top : page.songs };
   const [all, setAll] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const following = useLibrary((s) => s.followed.some((a) => a.id === id));
   const blocked = useLibrary((s) => !!data && s.blocked.some((b) => b.id === id || b.name.toLowerCase() === data.name.toLowerCase()));
   if (error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t load this artist. Go back and try again.</p>;
@@ -1663,16 +1670,9 @@ export function Artist({ id }: { id: string }) {
           </div>
           {blocked && <p className="mt-3 text-sm font-semibold text-muted">You won’t hear {data.name}: their songs are skipped and left out of radio.</p>}
         </div>
-        {data.about && (
-          <aside className="glass relative mb-1 hidden w-72 shrink-0 rounded-2xl p-5 @3xl:block">
-            <h2 className="font-bold">About</h2>
-            <p className="mt-1.5 line-clamp-5 text-sm leading-relaxed text-ink/75">{data.about}</p>
-          </aside>
-        )}
       </header>
 
       <div className="px-8">
-        {data.about && <p className="mt-8 line-clamp-3 max-w-2xl text-[15px] leading-relaxed text-ink/65 @3xl:hidden">{data.about}</p>}
         {data.songs.length > 0 && (
           <Section
             title="Popular Songs"
@@ -1682,16 +1682,203 @@ export function Artist({ id }: { id: string }) {
           </Section>
         )}
         {data.albums.length > 0 && (
-          <Section title="Albums">
+          <Section
+            title="Albums"
+            action={data.albumsMore && (
+              <button
+                onClick={() => open({ name: "discography", id: data.albumsMore!.browseId, params: data.albumsMore!.params, artist: data.name })}
+                className="press text-sm font-semibold text-muted hover:text-ink"
+              >
+                Show All
+              </button>
+            )}
+          >
             <Albums items={data.albums} />
           </Section>
         )}
         {data.singles.length > 0 && (
-          <Section title="Singles & EPs">
+          <Section
+            title="Singles & EPs"
+            action={data.singlesMore && (
+              <button
+                onClick={() => open({ name: "discography", id: data.singlesMore!.browseId, params: data.singlesMore!.params, artist: data.name })}
+                className="press text-sm font-semibold text-muted hover:text-ink"
+              >
+                Show All
+              </button>
+            )}
+          >
             <Albums items={data.singles} />
           </Section>
         )}
+        {data.videos && data.videos.length > 0 && (
+          <Section title="Videos">
+            <TrackGrid tracks={data.videos} />
+          </Section>
+        )}
+        {data.featured && data.featured.length > 0 && (
+          <Section title="Featured On">
+            <Albums items={data.featured} />
+          </Section>
+        )}
+        {data.appearsOn && data.appearsOn.length > 0 && (
+          <Section title="Appears On">
+            <Albums items={data.appearsOn} />
+          </Section>
+        )}
+        {data.fans && data.fans.length > 0 && (
+          <Section title="Fans Also Like">
+            <ArtistsRow items={data.fans} />
+          </Section>
+        )}
+        {data.about && (
+          <Section title="About">
+            <button
+              onClick={() => setAboutOpen(true)}
+              className="press group relative block w-full max-w-2xl overflow-hidden rounded-2xl p-6 text-left"
+            >
+              {data.banner && (
+                <img
+                  src={art(data.banner, 1200, 600)}
+                  alt=""
+                  className="absolute inset-0 size-full object-cover object-[50%_25%] transition-transform duration-500 group-hover:scale-105"
+                />
+              )}
+              <div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/60 to-black/30" />
+              <div className="relative z-10 flex min-h-[140px] flex-col justify-end text-white">
+                {data.listeners && (
+                  <div className="text-base font-bold text-white/95">
+                    {data.listeners} monthly listeners
+                  </div>
+                )}
+                <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-white/80">
+                  {data.about}
+                </p>
+              </div>
+            </button>
+          </Section>
+        )}
       </div>
+
+      {aboutOpen && data.about && (
+        <Modal label={`About ${data.name}`} onClose={() => setAboutOpen(false)} className="w-[min(640px,90vw)] max-h-[85vh]">
+          <div className="relative flex flex-col overflow-y-auto">
+            <button
+              onClick={() => setAboutOpen(false)}
+              aria-label="Close"
+              className="press absolute top-3 right-3 z-20 grid size-9 place-items-center rounded-full bg-black/50 text-white hover:bg-black/70"
+            >
+              <X size={18} />
+            </button>
+            {data.banner && (
+              <div className="relative h-64 w-full shrink-0 overflow-hidden bg-ink/[0.06]">
+                <img
+                  src={art(data.banner, 1200, 600)}
+                  alt=""
+                  className="size-full object-cover object-[50%_25%]"
+                />
+                <div className="absolute inset-0 bg-linear-to-t from-paper via-paper/20 to-transparent" />
+              </div>
+            )}
+            <div className="p-6">
+              <h2 className="text-2xl font-bold">{data.name}</h2>
+              {data.listeners && (
+                <p className="mt-1 font-semibold text-muted">
+                  {data.listeners} monthly listeners
+                </p>
+              )}
+              <div className="mt-4 whitespace-pre-line text-sm leading-relaxed text-ink/80">
+                {data.about}
+              </div>
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={() => setAboutOpen(false)}
+                  className="press rounded-full bg-ink/[0.08] px-5 py-2 text-sm font-semibold hover:bg-ink/[0.14]"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// Full discography grid with Albums, Singles & EPs, and Compilations filters.
+export function DiscographyPage({ id, params: initialParams, artist }: { id: string; params?: string; artist?: string }) {
+  const [params, setParams] = useState(initialParams ?? "ggMIegYIARoCAQI%3D");
+  const { data: items, error, loading } = useAsync(() => discography(id, params), [id, params]);
+
+  const chips = [
+    { label: "Albums", params: "ggMIegYIARoCAQI%3D" },
+    { label: "Singles & EPs", params: "ggMIegYIAhoCAQI%3D" },
+    { label: "Compilations", params: "ggMIegYIAxoCAQI%3D" },
+  ];
+
+  const isCurrent = (p: string) =>
+    decodeURIComponent(params ?? "") === decodeURIComponent(p) ||
+    (params ?? "").includes(p.replace(/%3D/g, "")) ||
+    params === p;
+
+  return (
+    <div className="animate-enter px-8 pt-14">
+      <div className="flex flex-col gap-1">
+        {artist && <p className="text-sm font-semibold text-muted">{artist}</p>}
+        <h1 className="text-display">Discography</h1>
+      </div>
+      <div className="mt-6 flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
+        {chips.map((c) => {
+          const active = isCurrent(c.params);
+          return (
+            <button
+              key={c.label}
+              onClick={() => setParams(c.params)}
+              className={`${pill} ${active ? "bg-ink text-paper" : "bg-ink/[0.07] text-ink hover:bg-ink/[0.12]"}`}
+            >
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+      {error && <p className="mt-8 text-muted">Couldn’t load discography. Go back and try again.</p>}
+      {loading && !items && (
+        <div className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="space-y-2.5">
+              <Skeleton className="aspect-square w-full rounded-xl" />
+              <Skeleton className="h-4 w-3/4 rounded-sm" />
+              <Skeleton className="h-3 w-1/2 rounded-sm" />
+            </div>
+          ))}
+        </div>
+      )}
+      {items && items.length === 0 && !loading && (
+        <p className="mt-8 text-muted">No releases found.</p>
+      )}
+      {items && items.length > 0 && (
+        <div className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6">
+          {items.map((a) => (
+            <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative">
+              <button onClick={() => open({ name: "collection", id: a.id })} className="press block w-full rounded-xl text-left">
+                <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
+                  <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                </div>
+                <div className="mt-2.5 truncate font-semibold">{a.title}</div>
+                <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>
+              </button>
+              <button
+                onClick={() => playCollection(a.id)}
+                aria-label={`Play ${a.title}`}
+                className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-accent text-paper opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+              >
+                <Play size={18} className="ml-0.5 fill-current" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2240,8 +2427,8 @@ function cascade(root: HTMLElement, el: HTMLElement | null, ref: number, m: Moti
 // One style for every modal: a card over a dimmed window. A click outside or Esc closes it, and it keeps
 // the keyboard to itself, so app shortcuts (⌘S is Shuffle) don't fire while you type in it.
 function Modal({ label, onClose, className, children }: { label: string; onClose: () => void; className: string; children: ReactNode }) {
-  return (
-    <div onPointerDown={(e) => e.target === e.currentTarget && onClose()} className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-6">
+  return createPortal(
+    <div onPointerDown={(e) => e.target === e.currentTarget && onClose()} className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-6 backdrop-blur-[2px]">
       <div
         role="dialog"
         aria-modal="true"
@@ -2251,7 +2438,8 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -1,4 +1,4 @@
-import { Innertube, Misc, Platform, YTMusic, YTNodes } from "youtubei.js/web";
+import { Innertube, Misc, Parser, Platform, YTMusic, YTNodes } from "youtubei.js/web";
 import { fetch } from "@tauri-apps/plugin-http";
 import { emitTo, listen } from "@tauri-apps/api/event";
 
@@ -90,8 +90,18 @@ const toArtists = (items: (YTNodes.MusicTwoRowItem | YTNodes.MusicResponsiveList
   items.flatMap((a) => {
     const id = a.id ?? (a as any).endpoint?.payload?.browseId;
     const name = (a as any).name ?? (typeof a.title === "string" ? a.title : a.title?.text) ?? "";
-    const thumb = (a as any).thumbnail?.[0]?.url ?? (a as any).thumbnails?.[0]?.url;
+    const thumb = (a as any).thumbnail?.[0]?.url ?? (a as any).thumbnails?.[0]?.url ?? (a as any).thumbnail?.contents?.[0]?.url;
     return id && name ? [{ id, name, thumb }] : [];
+  });
+
+const toVideos = (items: (YTNodes.MusicTwoRowItem | YTNodes.MusicResponsiveListItem)[] = []): Track[] =>
+  items.flatMap((v) => {
+    const id = v.id ?? (v as any).endpoint?.payload?.videoId;
+    if (!id) return [];
+    const title = typeof v.title === "string" ? v.title : v.title?.text ?? v.title?.toString() ?? "";
+    const artists = v.artists?.map((a) => ({ name: a.name, id: a.channel_id })) ?? (v.author ? [{ name: v.author.name, id: v.author.channel_id }] : []);
+    const thumb = (v as any).thumbnail?.[0]?.url ?? (v as any).thumbnails?.[0]?.url ?? (v as any).thumbnail?.contents?.[0]?.url;
+    return [{ id, title, artists, thumb }];
   });
 
 const searchItems = (s: any): YTNodes.MusicResponsiveListItem[] =>
@@ -199,6 +209,12 @@ async function loadHome(): Promise<Shelf[]> {
 // official channel has a header with a subscribe button; that's what verified means here.
 type Raw = { runs?: { text?: string }[] };
 const runs = (t?: Raw) => t?.runs?.map((r) => r.text).join("") || undefined;
+const moreEndpoint = (s?: any) => {
+  const ep = (s?.header?.more_content ?? s?.bottom_button)?.endpoint?.payload;
+  if (!ep?.browseId) return undefined;
+  return { browseId: ep.browseId as string, params: ep.params as string | undefined };
+};
+
 export async function artist(id: string) {
   const client = await yt;
   const reply = await client.actions.execute("/browse", { browseId: id, client: "YTMUSIC" });
@@ -208,10 +224,25 @@ export async function artist(id: string) {
   const listeners = runs(raw?.monthlyListenerCount)?.replace(/\s*monthly (audience|listeners?)$/i, "");
   const subscribers = runs(subs?.subscriberCountText)?.replace(/\s*subscribers?$/i, "");
   const header = a.header?.as(YTNodes.MusicImmersiveHeader, YTNodes.MusicVisualHeader);
-  const section = (title: string) => a.sections.find((s) => (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) === title);
-  const shelf = (title: string) => section(title)?.contents;
-  const top = section("Top songs");
+  const section = (pattern: string | RegExp) =>
+    a.sections.find((s) => {
+      const t = s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text;
+      if (!t) return false;
+      return typeof pattern === "string" ? new RegExp(`^${pattern}`, "i").test(t) : pattern.test(t);
+    });
+  const shelf = (pattern: string | RegExp) => section(pattern)?.contents;
+
+  const top = section(/^top songs/i);
   const more = top?.is(YTNodes.MusicShelf) ? (top.endpoint ?? top.bottom_button?.endpoint)?.payload?.browseId : undefined;
+
+  const albumsSec = section(/^albums/i);
+  const albums = toAlbums(shelf(/^albums/i)?.filterType(YTNodes.MusicTwoRowItem));
+  const albumsMore = moreEndpoint(albumsSec) ?? (albums.length > 0 ? { browseId: "MPAD" + id, params: "ggMIegYIARoCAQI%3D" } : undefined);
+
+  const singlesSec = section(/singles/i);
+  const singles = toAlbums(shelf(/singles/i)?.filterType(YTNodes.MusicTwoRowItem));
+  const singlesMore = moreEndpoint(singlesSec) ?? (singles.length > 0 ? { browseId: "MPAD" + id, params: "ggMIegYIAhoCAQI%3D" } : undefined);
+
   return {
     name: header?.title.text ?? "",
     listeners,
@@ -220,11 +251,37 @@ export async function artist(id: string) {
     about: header?.is(YTNodes.MusicImmersiveHeader) ? header.description?.text : undefined,
     banner: (Array.isArray(header?.thumbnail) ? header.thumbnail : header?.thumbnail?.contents)?.[0]?.url,
     // The page lists five, without their lengths; more is the whole list's playlist (topSongs).
-    songs: toTracks(shelf("Top songs")?.filterType(YTNodes.MusicResponsiveListItem)),
+    songs: toTracks(shelf(/^top songs/i)?.filterType(YTNodes.MusicResponsiveListItem)),
     more: more as string | undefined,
-    albums: toAlbums(shelf("Albums")?.filterType(YTNodes.MusicTwoRowItem)),
-    singles: toAlbums(shelf("Singles & EPs")?.filterType(YTNodes.MusicTwoRowItem)),
+    albums,
+    albumsMore,
+    singles,
+    singlesMore,
+    videos: toVideos(shelf(/videos/i)?.filterType(YTNodes.MusicTwoRowItem)),
+    featured: toAlbums(shelf(/featured on/i)?.filterType(YTNodes.MusicTwoRowItem)),
+    appearsOn: toAlbums(shelf(/appears on/i)?.filterType(YTNodes.MusicTwoRowItem)),
+    fans: toArtists(
+      shelf(/fans (might )?also like/i)
+        ?.filterType(YTNodes.MusicTwoRowItem)
+        .filter((x: any) => (x.id ?? x.endpoint?.payload?.browseId ?? "").startsWith("UC")),
+    ),
   };
+}
+
+// Full artist discography grid by category (Albums, Singles & EPs, Compilations).
+export async function discography(browseId: string, params?: string): Promise<Album[]> {
+  const client = await yt;
+  const targetId = browseId.startsWith("MPAD") ? browseId : "MPAD" + browseId;
+  const reply = await client.actions.execute("/browse", {
+    browseId: targetId,
+    ...(params && { params: decodeURIComponent(params) }),
+    client: "YTMUSIC",
+  });
+  const page = Parser.parseResponse(reply.data);
+  const grid = page.contents_memo?.getType(YTNodes.Grid)?.[0];
+  const items = grid?.items?.filterType(YTNodes.MusicTwoRowItem) ?? page.contents_memo?.getType(YTNodes.MusicTwoRowItem) ?? [];
+  const seen = new Set<string>();
+  return toAlbums(items).filter((a) => (seen.has(a.id) ? false : (seen.add(a.id), true)));
 }
 
 // An artist's ten most played songs, with their lengths and albums: the first page of their top songs list.

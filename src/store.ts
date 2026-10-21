@@ -9,7 +9,10 @@ import { art, details, fetchAudio, playAudio, radio, SEP, type Album, type Artis
 type Root = "home" | "search" | "library" | "settings";
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
 // "shared" is someone's public playlist (id "<owner>/<playlist>"), "profile" someone's profile (account.ts).
-export type View = { name: Root | "history" | "local" } | { name: "artist" | "collection" | "playlist" | "folder" | "shared" | "profile"; id: string };
+export type View =
+  | { name: Root | "history" | "local" }
+  | { name: "artist" | "collection" | "playlist" | "folder" | "shared" | "profile"; id: string }
+  | { name: "discography"; id: string; params?: string; artist?: string };
 
 type State = {
   stack: View[];
@@ -52,7 +55,7 @@ export const open = (view: View) => {
 // The library key of a page's subject (libraryKey), if it can be in your library.
 export const viewKey = (v: View) =>
   !("id" in v) ? (v.name === "local" ? libraryKey("local") : undefined)
-  : v.name === "shared" || v.name === "profile" ? undefined
+  : v.name === "shared" || v.name === "profile" || v.name === "discography" ? undefined
   : v.name === "collection" ? libraryKey("album", v.id) : v.id === "liked" ? libraryKey("liked") : libraryKey(v.name, v.id);
 export const back = () => set((s) => (s.stack.length > 1 ? { stack: s.stack.slice(0, -1), ahead: [s.stack.at(-1)!, ...s.ahead] } : s));
 export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, s.ahead[0]], ahead: s.ahead.slice(1) } : s));

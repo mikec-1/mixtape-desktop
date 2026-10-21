@@ -1,6 +1,6 @@
 import { Innertube, Misc, Parser, Platform, YTMusic, YTNodes } from "youtubei.js/web";
 import { fetch } from "@tauri-apps/plugin-http";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { emit, emitTo, listen } from "@tauri-apps/api/event";
 
 // youtubei.js needs a JS evaluator to decipher stream URLs; the webview is one.
 Platform.shim.eval = (data) => new Function(data.output)();
@@ -477,13 +477,17 @@ async function poToken(videoId: string): Promise<string> {
   const unlisten = await listen<{ token?: string; error?: string }>(reply, (e) => done(e.payload));
   try {
     // The hidden window may still be loading right after launch; resend until it answers.
-    for (let i = 0; i < 15; i++) {
-      await emitTo("potoken", "po-mint", { videoId, reply });
-      const r = await Promise.race([result, new Promise<undefined>((ok) => setTimeout(ok, 2000))]);
+    for (let i = 0; i < 6; i++) {
+      await Promise.all([
+        emitTo("potoken", "po-mint", { videoId, reply }).catch(() => {}),
+        emit("po-mint", { videoId, reply }).catch(() => {}),
+      ]);
+      const r = await Promise.race([result, new Promise<undefined>((ok) => setTimeout(ok, 1000))]);
       if (r?.token) return r.token;
       if (r) throw new Error(`PO token: ${r.error}`);
     }
-    throw new Error("PO token window not responding");
+    console.warn("PO token window not responding; proceeding without PO token");
+    return "";
   } finally {
     unlisten();
   }
@@ -498,7 +502,7 @@ async function stream(id: string, quality: Quality) {
   const format = best && MediaSource.isTypeSupported(best.mime_type) ? best : info.chooseFormat({ type: "audio", quality: quality === "high" ? "best" : "bestefficiency", format: "mp4" });
   if (!format.content_length) throw new Error("Unknown stream size");
   const url = new URL(await format.decipher(y.session.player));
-  url.searchParams.set("pot", pot);
+  if (pot) url.searchParams.set("pot", pot);
   // How much louder than YouTube's reference level this track is, in dB, for normalisation.
   const loudness = format.loudness_db ?? info.player_config?.audio_config.loudness_db ?? 0;
   return { url: url.toString(), mime: format.mime_type, size: format.content_length, duration: info.basic_info.duration, loudness };
@@ -601,7 +605,16 @@ export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duratio
     const data = await chunk;
     if (ms.readyState !== "open") return; // another track took over the player
     sb.appendBuffer(data);
-    await new Promise((r) => sb.addEventListener("updateend", r, { once: true }));
+    await new Promise<void>((resolve, reject) => {
+      const onEnd = () => { cleanup(); resolve(); };
+      const onErr = () => { cleanup(); reject(new Error("SourceBuffer decode error")); };
+      const cleanup = () => {
+        sb.removeEventListener("updateend", onEnd);
+        sb.removeEventListener("error", onErr);
+      };
+      sb.addEventListener("updateend", onEnd, { once: true });
+      sb.addEventListener("error", onErr, { once: true });
+    });
     if (i === 0 && !autoplay) continue;
     if (i === 0 && !start) await audio.play();
     // Seeking past the first chunk makes play() wait for data that this loop hasn't appended yet.

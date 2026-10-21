@@ -5,6 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { art, details, fetchAudio, playAudio, radio, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
+import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
 
 type Root = "home" | "search" | "library" | "settings";
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
@@ -62,7 +63,12 @@ export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, 
 export const go = (name: Root) => set({ stack: [{ name }], ahead: [], sheet: undefined });
 // Opens that sheet, or closes it if it's the one showing.
 export const toggleSheet = (sheet: State["sheet"]) => set((s) => ({ sheet: s.sheet === sheet ? undefined : sheet }));
-export const report = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e), loading: false });
+export const report = (e: unknown) => {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error("Playback error:", e);
+  notify({ text: "Playback Error", detail: msg });
+  set({ error: msg, loading: false });
+};
 
 // Your library, in IndexedDB: no 5 MB cap like localStorage, and the same code runs in the web build.
 // ponytail: the whole library is rewritten on every change; per-row SQLite if imports reach ~100k tracks.
@@ -394,7 +400,8 @@ const playable = (t: Track) => !skipped(t) && !unavailable(t);
 // ponytail: last 4 tracks in memory (~20 MB).
 const cache = new Map<string, ReturnType<typeof fetchAudio>>();
 function fetchCached(id: string) {
-  const p = cache.get(id) ?? downloads.read?.(id) ?? fetchAudio(id, useSettings.getState().quality);
+  const dl = downloads.read?.(id);
+  const p = cache.get(id) ?? (dl ? dl.catch(() => fetchAudio(id, useSettings.getState().quality)) : fetchAudio(id, useSettings.getState().quality));
   cache.delete(id);
   cache.set(id, p);
   if (cache.size > 4) cache.delete(cache.keys().next().value!);
@@ -579,22 +586,45 @@ on("ended", () => {
 
 // The listening history counts a play once it's been listened to for 30 s, or all of a shorter song
 // (playing time, so seeking past doesn't count). listened restarts the count for a song starting at.
-let heard = 0, was = 0, logged = false;
-const listened = (at: number) => ((heard = 0), (was = at), (logged = false));
+let heard = 0, was = 0, logged = false, scrobbled = false, startedAt = Date.now();
+const listened = (at: number) => {
+  heard = 0;
+  was = at;
+  logged = false;
+  scrobbled = false;
+  startedAt = Date.now();
+};
 on("timeupdate", () => {
   const step = audio.currentTime - was;
   was = audio.currentTime;
-  if (logged || step <= 0 || step > 2) return;
+  if (step <= 0 || step > 2) return;
   heard += step;
   const t = get().queue[get().index];
-  if (t && heard >= Math.min(30, (audio.duration || 31) - 1)) (logged = true), logPlay(t);
+  if (!t) return;
+  if (!logged && heard >= Math.min(30, (audio.duration || 31) - 1)) {
+    logged = true;
+    logPlay(t);
+  }
+  const dur = audio.duration || 0;
+  if (!scrobbled && dur > 30 && heard >= Math.min(dur / 2, 240)) {
+    scrobbled = true;
+    sendScrobble(t, startedAt, dur);
+  }
 });
+
+on("play", () => {
+  const t = get().queue[get().index];
+  if (t) sendNowPlaying(t, audio.duration || undefined);
+});
+on("pause", () => clearDiscordRpc());
+usePrivate.subscribe((s) => s.on && clearDiscordRpc());
 
 // Pausing mid-crossfade stops both tracks and leaves the new one at full level.
 export function pause() {
   clearInterval(ramp);
   players.forEach((p) => p.pause());
   fades.set(audio, 1), level(audio);
+  clearDiscordRpc();
 }
 export const toggle = () => (!audio.src && !get().loading ? load(get().index, resume.time) : audio.paused ? audio.play().catch(() => {}) : pause());
 let saved = 0;
@@ -722,6 +752,7 @@ type Settings = {
   libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort; trackCols: [number, number, number];
   autoplay: boolean; reduceMotion: boolean; zoom: number; lyricsOff: LyricsSource[]; history: boolean;
   keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean; country: string;
+  listenBrainzToken: string; lastfmSessionKey: string; lastfmUsername: string; discordRpc: boolean;
 };
 export type LyricsSource = "apple" | "lrclib" | "netease";
 const defaultCountry = () => {
@@ -742,10 +773,14 @@ export const useSettings = create<Settings>()(
       libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom", trackCols: TRACK_COLS,
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false,
       country: defaultCountry(),
+      listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "", discordRpc: false,
     }),
     { name: "settings" },
   ),
 );
+useSettings.subscribe((s, was) => {
+  if (was?.discordRpc && !s.discordRpc) clearDiscordRpc();
+});
 const applySettings = (s: Settings, was?: Settings) => {
   document.documentElement.dataset.theme = s.theme; // index.css: color-scheme picks every token's light or dark value
   document.documentElement.dataset.motion = s.reduceMotion ? "reduce" : ""; // index.css, like the system's Reduce Motion

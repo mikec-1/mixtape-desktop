@@ -3,6 +3,15 @@ use tauri::{webview::PageLoadEvent, Manager, WebviewUrl, WebviewWindowBuilder, W
 use tauri::RunEvent;
 
 mod account;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod discord;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod discord {
+    #[tauri::command]
+    pub fn discord_set(_title: String, _artist: String, _art: Option<String>, _start: Option<i64>, _end: Option<i64>) {}
+    #[tauri::command]
+    pub fn discord_clear() {}
+}
 mod local;
 mod offline;
 
@@ -52,7 +61,7 @@ pub fn run() {
     }
 
     builder
-        .invoke_handler(tauri::generate_handler![float_mini, local::scan_music, local::allow_music, local::local_lyrics, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait])
+        .invoke_handler(tauri::generate_handler![float_mini, local::scan_music, local::allow_music, local::local_lyrics, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.

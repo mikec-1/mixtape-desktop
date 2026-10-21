@@ -50,6 +50,12 @@
         },
         {
           "url": "https://lrc.red/*"
+        },
+        {
+          "url": "https://api.listenbrainz.org/*"
+        },
+        {
+          "url": "https://ws.audioscrobbler.com/*"
         }
       ]
     }

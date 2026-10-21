@@ -17,6 +17,7 @@ import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLin
 import { SignIn } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
+import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
 function useAsync<T>(fn: () => Promise<T> | undefined, deps: unknown[]) {
@@ -2867,6 +2868,7 @@ export async function restore(file: File) {
 
 const panes = [
   { id: "account", label: "Account" },
+  { id: "linked", label: "Linked Accounts" },
   { id: "appearance", label: "Appearance" },
   { id: "playback", label: "Playback" },
   { id: "lyrics", label: "Lyrics" },
@@ -2897,7 +2899,7 @@ export function Settings() {
           ))}
         </nav>
         <div key={pane} className="max-w-3xl min-w-0 flex-1 animate-enter">
-          {pane === "account" ? <AccountPane /> : pane === "appearance" ? <Appearance /> : pane === "playback" ? <Playback /> : pane === "lyrics" ? <LyricsPane /> : pane === "library" ? <LibraryPane /> : pane === "privacy" ? <Privacy /> : pane === "shortcuts" ? <Shortcuts /> : pane === "startup" ? <Startup /> : <About />}
+          {pane === "account" ? <AccountPane /> : pane === "linked" ? <LinkedAccountsPane /> : pane === "appearance" ? <Appearance /> : pane === "playback" ? <Playback /> : pane === "lyrics" ? <LyricsPane /> : pane === "library" ? <LibraryPane /> : pane === "privacy" ? <Privacy /> : pane === "shortcuts" ? <Shortcuts /> : pane === "startup" ? <Startup /> : <About />}
         </div>
       </div>
     </div>
@@ -2999,6 +3001,144 @@ function AccountPane() {
   );
 }
 
+// External accounts and services: scrobbling (Last.fm, ListenBrainz) and Discord.
+function LinkedAccountsPane() {
+  const { listenBrainzToken, lastfmSessionKey, lastfmUsername, discordRpc } = useSettings();
+  const set = useSettings.setState;
+  const [tokenInput, setTokenInput] = useState("");
+  const [lastfmAuthToken, setLastfmAuthToken] = useState<string>();
+  const [connectingLastfm, setConnectingLastfm] = useState(false);
+  const [lastfmError, setLastfmError] = useState<string>();
+
+  const startLastfm = async () => {
+    try {
+      setLastfmError(undefined);
+      setConnectingLastfm(true);
+      const token = await lastfmAuthStart();
+      setLastfmAuthToken(token);
+    } catch (e: any) {
+      setLastfmError(e?.message || "Failed to start Last.fm authorization");
+    } finally {
+      setConnectingLastfm(false);
+    }
+  };
+
+  const finishLastfm = async () => {
+    if (!lastfmAuthToken) return;
+    try {
+      setLastfmError(undefined);
+      setConnectingLastfm(true);
+      await lastfmAuthFinish(lastfmAuthToken);
+      setLastfmAuthToken(undefined);
+    } catch (e: any) {
+      setLastfmError(e?.message || "Failed to complete Last.fm authorization. Did you authorize in the browser?");
+    } finally {
+      setConnectingLastfm(false);
+    }
+  };
+
+  return (
+    <div>
+      <h2 className="text-3xl font-extrabold tracking-[-0.03em]">Linked Accounts</h2>
+      <p className="mt-2 mb-8 max-w-md text-muted">Connect external services to scrobble tracks and share listening activity.</p>
+
+      <div className="divide-y divide-ink/10">
+        <Row
+          label="Last.fm"
+          detail={
+            lastfmSessionKey ? (
+              <span>Connected as <strong className="text-ink">{lastfmUsername}</strong></span>
+            ) : lastfmAuthToken ? (
+              <span className="text-accent">Authorize Sleeve in your browser, then click Complete</span>
+            ) : (
+              lastfmError ? <span className="text-[#ff375f]">{lastfmError}</span> : "Scrobble your listening history to Last.fm"
+            )
+          }
+        >
+          {lastfmSessionKey ? (
+            <button onClick={lastfmSignOut} className={quiet}>Disconnect</button>
+          ) : lastfmAuthToken ? (
+            <div className="flex gap-2">
+              <button onClick={finishLastfm} disabled={connectingLastfm} className={solid}>
+                {connectingLastfm ? "Connecting…" : "Complete"}
+              </button>
+              <button onClick={() => setLastfmAuthToken(undefined)} className={quiet}>Cancel</button>
+            </div>
+          ) : (
+            <button onClick={startLastfm} disabled={connectingLastfm} className={quiet}>
+              {connectingLastfm ? "Opening…" : "Connect Last.fm"}
+            </button>
+          )}
+        </Row>
+
+        <Row
+          label="ListenBrainz"
+          detail={
+            listenBrainzToken ? (
+              <span className="text-emerald-500 font-medium">Scrobbling active</span>
+            ) : (
+              "User token from listenbrainz.org/settings"
+            )
+          }
+        >
+          {listenBrainzToken ? (
+            <button
+              onClick={() => {
+                setTokenInput("");
+                set({ listenBrainzToken: "" });
+                notify({ text: "ListenBrainz disconnected" });
+              }}
+              className={quiet}
+            >
+              Disconnect
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <input
+                type="password"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value.trim())}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && tokenInput) {
+                    set({ listenBrainzToken: tokenInput });
+                    notify({ text: "Connected to ListenBrainz" });
+                  }
+                }}
+                placeholder="Paste token"
+                className="room w-56 rounded-xl bg-ink/[0.05] px-3 py-1.5 text-sm outline-none placeholder:text-muted focus:bg-ink/[0.08]"
+              />
+              <button
+                onClick={() => {
+                  if (!tokenInput) return;
+                  set({ listenBrainzToken: tokenInput });
+                  notify({ text: "Connected to ListenBrainz" });
+                }}
+                disabled={!tokenInput}
+                className={solid}
+              >
+                Connect
+              </button>
+            </div>
+          )}
+        </Row>
+
+        {canHaveFiles && (
+          <Row label="Discord Rich Presence" detail="Show what you’re listening to as your Discord status">
+            <Switch
+              label="Discord Rich Presence"
+              on={discordRpc}
+              onChange={(on) => {
+                set({ discordRpc: on });
+                if (!on) clearDiscordRpc();
+              }}
+            />
+          </Row>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Appearance() {
   const { theme, artworkAccent, reduceMotion, zoom } = useSettings();
   const set = useSettings.setState;
@@ -3032,7 +3172,7 @@ function Appearance() {
 
 const fill = (v: number, min: number, max: number) => ({ "--p": `${((v - min) / (max - min)) * 100}%` }) as CSSProperties;
 
-function Row({ label, detail, children }: { label: string; detail: string; children: ReactNode }) {
+function Row({ label, detail, children }: { label: string; detail: ReactNode; children: ReactNode }) {
   return (
     <div className="flex min-h-16 items-center justify-between gap-6 py-3">
       <div>
@@ -3554,7 +3694,7 @@ export function Artists({ list }: { list: Track["artists"] }) {
     </Fragment>
   ));
 }
-export function goToArtist(a: Artist) {
+function goToArtist(a: Artist) {
   if (a.id) return open({ name: "artist", id: a.id });
   artistByName(a.name).then(
     (id) => (id ? open({ name: "artist", id }) : notify({ text: "No Page for This Artist", detail: a.name })),

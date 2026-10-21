@@ -142,14 +142,15 @@ async function nextExtras() {
   fetching--;
 }
 
-// The key: made once, kept in IndexedDB as a CryptoKey that can't be read out. Each file starts with
-// its own 16-byte counter block.
+// The key: made once, kept in IndexedDB as raw bytes and imported into a non-extractable CryptoKey in memory,
+// avoiding macOS Keychain prompts on each build. Each file starts with its own 16-byte counter block.
 const key = (async () => {
-  const kept = await idbGet<CryptoKey>("offline-key");
-  if (kept) return kept;
-  const made = await crypto.subtle.generateKey({ name: "AES-CTR", length: 256 }, false, ["encrypt", "decrypt"]);
-  await idbPut("offline-key", made);
-  return made;
+  let raw = await idbGet<Uint8Array>("offline-key-raw").catch(() => undefined);
+  if (!raw || !(raw instanceof Uint8Array) || raw.byteLength !== 32) {
+    raw = crypto.getRandomValues(new Uint8Array(32));
+    await idbPut("offline-key-raw", raw).catch(() => {});
+  }
+  return crypto.subtle.importKey("raw", raw as Uint8Array<ArrayBuffer>, { name: "AES-CTR" }, false, ["encrypt", "decrypt"]);
 })();
 async function seal(plain: Uint8Array<ArrayBuffer>) {
   const counter = crypto.getRandomValues(new Uint8Array(16));
@@ -162,15 +163,27 @@ async function open(data: ArrayBuffer) {
   return crypto.subtle.decrypt({ name: "AES-CTR", counter: new Uint8Array(data, 0, 16), length: 64 }, await key, new Uint8Array(data, 16));
 }
 
+const timeout = <T>(p: Promise<T>, ms: number, err: string): Promise<T> =>
+  Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(err)), ms))]);
+
 const folder = canDownload ? invoke<string>("downloads_dir") : Promise.reject(new Error("Downloads need the app"));
 export const ready = folder.then((d) => void (dir = d), () => {});
 const CHUNK = 1 << 20;
+function isValidAudio(buf: ArrayBuffer): boolean {
+  if (buf.byteLength < 8) return false;
+  const u8 = new Uint8Array(buf, 0, 8);
+  const tag = String.fromCharCode(u8[4], u8[5], u8[6], u8[7]);
+  const isEbml = u8[0] === 0x1a && u8[1] === 0x45 && u8[2] === 0xdf && u8[3] === 0xa3;
+  return tag === "ftyp" || tag === "moof" || tag === "styp" || tag === "moov" || isEbml;
+}
+
 // A downloaded song, read back in the shape store.ts plays (fetchAudio's): its bytes in 1 MB pieces.
 async function read(id: string, saved: Saved) {
   const dir = await folder;
   const r = await fetch(convertFileSrc(`${dir}/${id}`));
   if (!r.ok) throw new Error(`Download missing: ${r.status}`);
-  const plain = await open(await r.arrayBuffer());
+  const plain = await timeout(open(await r.arrayBuffer()), 1500, "Decryption timed out");
+  if (!isValidAudio(plain)) throw new Error("Corrupted offline download (key mismatch)");
   const chunks: Promise<ArrayBuffer>[] = [];
   for (let at = 0; at < plain.byteLength; at += CHUNK) chunks.push(Promise.resolve(plain.slice(at, at + CHUNK)));
   return { chunks, mime: saved.mime, duration: saved.duration, loudness: saved.loudness };
@@ -178,7 +191,18 @@ async function read(id: string, saved: Saved) {
 downloads.has = (id) => !!get().songs[id];
 downloads.read = (id) => {
   const saved = get().songs[id];
-  return saved && read(id, saved);
+  if (!saved) return undefined;
+  return read(id, saved).catch(async (e) => {
+    console.warn(`Failed to read offline download ${id}, streaming online instead:`, e);
+    // Remove the incompatible/corrupt download and trigger a fresh re-download
+    set((s) => {
+      const songs = { ...s.songs };
+      delete songs[id];
+      return { songs };
+    });
+    void invoke("delete_downloads", { names: [id] }).catch(() => {});
+    return fetchAudio(id, useSettings.getState().quality);
+  });
 };
 
 // How far along a list is: songs saved of its songs. done when all of them are.

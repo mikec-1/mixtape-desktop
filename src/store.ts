@@ -259,6 +259,38 @@ export function patch(id: string, p: Partial<Track>) {
 export const useRecents = create<Record<string, number>>()(persist(() => ({}), { name: "recents", storage: createJSONStorage(() => idb) }));
 export const touch = (key: string) => useRecents.setState({ [key]: Date.now() });
 
+// Recent searches: queries and opened items, kept up to 10. Persisted the same way as useRecents.
+export type RecentSearch = {
+  id: string;
+  kind: "query" | "artist" | "album" | "track";
+  title: string;
+  subtitle?: string;
+  thumb?: string;
+  track?: Track;
+};
+export const useRecentSearches = create<{ items: RecentSearch[] }>()(
+  persist((): { items: RecentSearch[] } => ({ items: [] }), { name: "recent_searches", storage: createJSONStorage(() => idb) }),
+);
+export function addRecentSearch(item: RecentSearch) {
+  if (usePrivate.getState().on || !useSettings.getState().history) return;
+  useRecentSearches.setState((s) => ({
+    items: [item, ...s.items.filter((x) => x.id !== item.id)].slice(0, 10),
+  }));
+}
+export function recordRecentQuery(query: string) {
+  const q = query.trim();
+  if (!q) return;
+  addRecentSearch({ id: q.toLowerCase(), kind: "query", title: q });
+}
+export function removeRecentSearch(id: string) {
+  useRecentSearches.setState((s) => ({
+    items: s.items.filter((x) => x.id !== id),
+  }));
+}
+export function clearRecentSearches() {
+  useRecentSearches.setState({ items: [] });
+}
+
 // Listening history. A play counts after 30 s of listening (all of a shorter song), as on Spotify. recent
 // is the last 50 songs, newest first, one entry each, read once at launch and kept up to date here.
 export type Play = { t: Track; at: number };

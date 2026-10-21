@@ -74,19 +74,92 @@ const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
       : [],
   );
 
-const toAlbums = (items: YTNodes.MusicTwoRowItem[] = []): Album[] =>
-  items.map((a) => ({ id: a.id!, title: a.title.text ?? "", year: a.year, by: a.artists?.map((x) => x.name).join(", "), thumb: a.thumbnail?.[0]?.url }));
+export type SearchArtist = { id: string; name: string; thumb?: string };
+
+const toAlbums = (items: (YTNodes.MusicTwoRowItem | YTNodes.MusicResponsiveListItem)[] = []): Album[] =>
+  items.flatMap((a) => {
+    const id = a.id ?? (a as any).endpoint?.payload?.browseId;
+    if (!id) return [];
+    const title = typeof a.title === "string" ? a.title : a.title?.text ?? (a as any).name ?? "";
+    const thumb = (a as any).thumbnail?.[0]?.url ?? (a as any).thumbnails?.[0]?.url;
+    const by = a.artists?.map((x: any) => x.name).join(", ") || (a as any).author?.name || (a as any).authors?.map((x: any) => x.name).join(", ");
+    return [{ id, title, year: a.year, by, thumb }];
+  });
+
+const toArtists = (items: (YTNodes.MusicTwoRowItem | YTNodes.MusicResponsiveListItem)[] = []): SearchArtist[] =>
+  items.flatMap((a) => {
+    const id = a.id ?? (a as any).endpoint?.payload?.browseId;
+    const name = (a as any).name ?? (typeof a.title === "string" ? a.title : a.title?.text) ?? "";
+    const thumb = (a as any).thumbnail?.[0]?.url ?? (a as any).thumbnails?.[0]?.url;
+    return id && name ? [{ id, name, thumb }] : [];
+  });
+
+const searchItems = (s: any): YTNodes.MusicResponsiveListItem[] =>
+  s.contents?.firstOfType(YTNodes.MusicShelf)?.contents?.filterType(YTNodes.MusicResponsiveListItem) ??
+  s.contents?.filterType(YTNodes.MusicShelf).flatMap((x: any) => x.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? []) ??
+  [];
+
+const shelfItems = (s: any, name: string) => {
+  const shelf = s.contents?.filterType(YTNodes.MusicShelf).find((x: any) => new RegExp(`^${name}`, "i").test(x.title?.text ?? x.title?.toString() ?? ""));
+  return shelf?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? [];
+};
 
 export async function search(query: string) {
   const music = (await yt).music;
-  const [songs, all] = await Promise.all([music.search(query, { type: "song" }), music.search(query)]);
+  const [songsRes, allRes, albumsRes, artistsRes] = await Promise.all([
+    music.search(query, { type: "song" }),
+    music.search(query),
+    music.search(query, { type: "album" }).catch(() => undefined),
+    music.search(query, { type: "artist" }).catch(() => undefined),
+  ]);
   // The "top result" card; only artists get the big treatment for now.
-  const card = all.contents?.firstOfType(YTNodes.MusicCardShelf);
+  const card = allRes.contents?.firstOfType(YTNodes.MusicCardShelf);
   const id: string | undefined = card?.on_tap?.payload?.browseId;
   const top = card && id?.startsWith("UC")
-    ? { id, name: card.title.text ?? "", about: card.subtitle.text?.split(" • ").pop(), thumb: card.thumbnail?.contents?.[0]?.url }
+    ? {
+        id,
+        name: card.title.text ?? card.title.toString() ?? "",
+        about: card.subtitle.text?.split(" • ").pop() ?? card.subtitle?.toString()?.split(" • ").pop(),
+        thumb: card.thumbnail?.contents?.[0]?.url,
+      }
     : undefined;
-  return { top, songs: toTracks(songs.songs?.contents?.filterType(YTNodes.MusicResponsiveListItem)) };
+  const songItems = songsRes.songs?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? searchItems(songsRes);
+  const albumItems = albumsRes ? searchItems(albumsRes) : (allRes.albums?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? shelfItems(allRes, "album"));
+  const artistItems = artistsRes ? searchItems(artistsRes) : (allRes.artists?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? shelfItems(allRes, "artist"));
+  return {
+    top,
+    songs: toTracks(songItems),
+    albums: toAlbums(albumItems).slice(0, 10),
+    artists: toArtists(artistItems).slice(0, 10),
+  };
+}
+
+export async function searchKind(query: string, type: "album" | "playlist"): Promise<Album[]>;
+export async function searchKind(query: string, type: "video"): Promise<Track[]>;
+export async function searchKind(query: string, type: "artist"): Promise<SearchArtist[]>;
+export async function searchKind(query: string, type: "album" | "artist" | "playlist" | "video"): Promise<Album[] | Track[] | SearchArtist[]> {
+  const music = (await yt).music;
+  const res = await music.search(query, { type });
+  const items = searchItems(res);
+  if (type === "video") return toTracks(items);
+  if (type === "artist") return toArtists(items);
+  return toAlbums(items);
+}
+
+export async function suggestions(query: string): Promise<string[]> {
+  if (!query.trim()) return [];
+  const music = (await yt).music;
+  const sections = await music.getSearchSuggestions(query).catch(() => []);
+  const list: string[] = [];
+  for (const s of sections ?? []) {
+    for (const c of s.contents ?? []) {
+      if (c.is?.(YTNodes.SearchSuggestion)) {
+        const text = c.suggestion?.text ?? c.suggestion?.toString();
+        if (text) list.push(text);
+      }
+    }
+  }
+  return [...new Set(list)];
 }
 
 export type Shelf = { title: string; tracks: Track[]; albums: Album[] };

@@ -5,10 +5,11 @@ import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
   shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
+  useRecentSearches, addRecentSearch, recordRecentQuery, removeRecentSearch, clearRecentSearches,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
-import { albumByName, art, artist, artistByName, collection, topSongs, home, lastHome, search, type Album, type Artist, type Track } from "./yt";
+import { albumByName, art, artist, artistByName, collection, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
 import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
@@ -49,44 +50,310 @@ const genres = [
   ["Latin", "#1e3264"],
 ] as const;
 
+type SearchTab = "all" | "songs" | "albums" | "artists" | "playlists" | "videos";
+const SEARCH_TABS: { id: SearchTab; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "songs", label: "Songs" },
+  { id: "albums", label: "Albums" },
+  { id: "artists", label: "Artists" },
+  { id: "playlists", label: "Playlists" },
+  { id: "videos", label: "Videos" },
+];
+
 export function Search() {
   const query = useStore((s) => s.query);
   const [term, setTerm] = useState("");
+  const [tab, setTab] = useState<SearchTab>("all");
+  const [sugs, setSugs] = useState<string[]>([]);
+  const [sugOpen, setSugOpen] = useState(false);
+  const [sugIndex, setSugIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const recents = useRecentSearches((s) => s.items);
+
+  // Debounce search term by 250 ms.
   useEffect(() => {
     const t = setTimeout(() => setTerm(query.trim()), 250);
     return () => clearTimeout(t);
   }, [query]);
+
+  // Suggestions debounced by 150 ms.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setSugs([]);
+      setSugOpen(false);
+      return;
+    }
+    let active = true;
+    const t = setTimeout(async () => {
+      try {
+        const list = await suggestions(q);
+        if (active) {
+          setSugs(list);
+          setSugIndex(-1);
+          setSugOpen(list.length > 0);
+        }
+      } catch {
+        if (active) setSugs([]);
+      }
+    }, 150);
+    return () => {
+      active = false;
+      clearTimeout(t);
+    };
+  }, [query]);
+
+  // Close suggestions when clicking outside or scrolling anywhere in the app.
+  useEffect(() => {
+    if (!sugOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setSugOpen(false);
+      }
+    };
+    const onScroll = () => {
+      setSugOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [sugOpen]);
+
   const online = useOnline(); // a search that failed offline runs again on reconnect
   const { data, error, loading } = useAsync(() => (term && !fromLink(term) ? search(term) : undefined), [term, online]);
+
+  // Cache per-tab results for the current search term: only fetched when opened.
+  const [tabData, setTabData] = useState<Partial<{ songs: Track[]; albums: Album[]; artists: SearchArtist[]; playlists: Album[]; videos: Track[] }>>({});
+  const [tabLoading, setTabLoading] = useState(false);
+  const [tabError, setTabError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTabData({});
+  }, [term]);
+
+  useEffect(() => {
+    if (!term || tab === "all") return;
+    if (tab === "songs" && data?.songs) return;
+    if (tabData[tab]) return;
+
+    let active = true;
+    setTabLoading(true);
+    setTabError(null);
+
+    const kind = tab === "songs" ? "song" : tab === "albums" ? "album" : tab === "artists" ? "artist" : tab === "playlists" ? "playlist" : "video";
+    const promise = kind === "song" ? Promise.resolve(data?.songs ?? []) : searchKind(term, kind as any);
+
+    promise
+      .then((res) => {
+        if (active) {
+          setTabData((prev) => ({ ...prev, [tab]: res }));
+          setTabLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          setTabError(String(err));
+          setTabLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [term, tab, data]);
+
   // A Sleeve link pasted in opens what it's for.
   useEffect(() => {
     const view = fromLink(query);
     if (view) useStore.setState({ query: "" }), open(view);
   }, [query]);
+
+  const commitQuery = (q: string) => {
+    const clean = q.trim();
+    if (!clean) return;
+    useStore.setState({ query: clean });
+    setTerm(clean);
+    recordRecentQuery(clean);
+    setSugOpen(false);
+  };
+
   const top = data?.top;
 
   return (
     <div className="animate-enter px-8 pt-14">
-      {/* The placeholder doubles as the page title. */}
-      <input
-        autoFocus
-        value={query}
-        onChange={(e) => useStore.setState({ query: e.target.value })}
-        placeholder="Search"
-        aria-label="Search"
-        name="q"
-        autoComplete="off"
-        spellCheck={false}
-        className="room w-full bg-transparent text-display outline-none placeholder:text-ink"
-      />
+      <div ref={containerRef} className="relative">
+        {/* The placeholder doubles as the page title. */}
+        <input
+          ref={inputRef}
+          autoFocus
+          value={query}
+          onChange={(e) => {
+            useStore.setState({ query: e.target.value });
+            setSugOpen(true);
+          }}
+          onFocus={() => {
+            if (query.trim() && sugs.length > 0) setSugOpen(true);
+          }}
+          onKeyDown={(e) => {
+            if (sugOpen && sugs.length > 0) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSugIndex((i) => (i < sugs.length - 1 ? i + 1 : 0));
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSugIndex((i) => (i > 0 ? i - 1 : sugs.length - 1));
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setSugOpen(false);
+                return;
+              }
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (sugIndex >= 0 && sugIndex < sugs.length) {
+                  commitQuery(sugs[sugIndex]);
+                } else if (query.trim()) {
+                  commitQuery(query);
+                }
+                return;
+              }
+            }
+            if (e.key === "Enter" && query.trim()) {
+              commitQuery(query);
+            }
+          }}
+          placeholder="Search"
+          aria-label="Search"
+          name="q"
+          autoComplete="off"
+          spellCheck={false}
+          className="room w-full bg-transparent text-display outline-none placeholder:text-ink"
+        />
+
+        {/* Suggestions dropdown: solid opaque elevated card with fast dismissal */}
+        {sugOpen && sugs.length > 0 && (
+          <div className="absolute top-full left-0 z-50 mt-2 w-full max-w-xl overflow-hidden rounded-2xl border border-ink/[0.12] bg-paper shadow-2xl [scrollbar-width:none]">
+            <div className="max-h-72 overflow-y-auto py-1.5 [scrollbar-width:none]">
+              {sugs.map((s, i) => (
+                <button
+                  key={s}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    commitQuery(s);
+                  }}
+                  onMouseEnter={() => setSugIndex(i)}
+                  className={`flex w-full items-center gap-3.5 px-4 py-2.5 text-left text-sm font-medium transition-colors ${
+                    i === sugIndex ? "bg-ink/[0.08] text-ink font-semibold" : "text-muted hover:bg-ink/[0.05] hover:text-ink"
+                  }`}
+                >
+                  <SearchIcon size={15} className="shrink-0 text-muted" />
+                  <span className="truncate">{s}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Tabs */}
+      {(query.trim() || term) && (
+        <div className="mt-4 flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
+          {SEARCH_TABS.map((t) => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => {
+                  setTab(t.id);
+                  setSugOpen(false);
+                }}
+                className={`press h-8 shrink-0 rounded-full px-4 text-sm font-semibold transition-colors ${
+                  active ? "bg-ink text-paper" : "bg-ink/[0.07] text-ink hover:bg-ink/[0.12]"
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* When box is empty: Recent searches + Browse All */}
       {!query && (
         <>
-          <p className="mt-3 text-lg text-muted">Songs and artists from everywhere.</p>
-          <div className="mt-10 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+          {recents.length > 0 && (
+            <div className="mt-8">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold tracking-tight">Recent Searches</h2>
+                <button
+                  onClick={clearRecentSearches}
+                  className="press text-sm font-semibold text-muted hover:text-ink transition-colors"
+                >
+                  Clear All
+                </button>
+              </div>
+              <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-4">
+                {recents.map((item) => (
+                  <div key={item.id} className="group relative rounded-2xl bg-ink/[0.03] p-3 hover:bg-ink/[0.06] transition-colors">
+                    <button
+                      onClick={() => {
+                        if (item.kind === "query") {
+                          commitQuery(item.title);
+                        } else if (item.kind === "artist") {
+                          open({ name: "artist", id: item.id });
+                        } else if (item.kind === "album") {
+                          open({ name: "collection", id: item.id });
+                        } else if (item.kind === "track" && item.track) {
+                          play([item.track], 0);
+                        }
+                      }}
+                      className="press block w-full text-left"
+                    >
+                      <div className={`aspect-square w-full overflow-hidden bg-ink/[0.06] ${item.kind === "artist" ? "rounded-full" : "rounded-xl"}`}>
+                        {item.thumb ? (
+                          <img src={art(item.thumb, 300)} alt="" className="size-full object-cover" />
+                        ) : (
+                          <div className="grid size-full place-items-center text-muted">
+                            <SearchIcon size={28} />
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-3 truncate font-semibold leading-tight">{item.title}</div>
+                      <div className="mt-1 truncate text-xs text-muted capitalize">{item.subtitle ?? (item.kind === "query" ? "Search" : item.kind)}</div>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeRecentSearch(item.id);
+                      }}
+                      title="Remove"
+                      aria-label={`Remove ${item.title}`}
+                      className="press absolute top-2 right-2 grid size-7 place-items-center rounded-full bg-surface/90 text-muted shadow-sm backdrop-blur-sm opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-ink transition-opacity"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <h2 className={`${recents.length > 0 ? "mt-10" : "mt-8"} text-xl font-bold tracking-tight`}>Browse All</h2>
+          <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
             {genres.map(([name, colour]) => (
               <button
                 key={name}
-                onClick={() => useStore.setState({ query: `${name} hits` })}
+                onClick={() => commitQuery(`${name} hits`)}
                 style={{ background: colour }}
                 className="press relative aspect-[16/10] overflow-hidden rounded-2xl p-4 text-left text-xl font-extrabold tracking-tight text-white hover:brightness-110"
               >
@@ -96,24 +363,171 @@ export function Search() {
           </div>
         </>
       )}
-      {error && <p title={error} className="mt-6 text-muted">Search didn’t go through. Check your connection and try again.</p>}
 
-      {data && term && (
-        <div aria-busy={loading} className={`transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>
-          {top && (
-            <button onClick={() => open({ name: "artist", id: top.id })} className="group mt-10 flex items-center gap-6 text-left">
-              <div className="size-32 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
-                <img src={art(top.thumb, 400)} alt="" className="size-full object-cover" />
-              </div>
-              <div>
-                <div className="text-5xl font-extrabold tracking-[-0.04em]">{top.name}</div>
-                <div className="mt-2 text-muted">{top.about}</div>
-              </div>
-            </button>
+      {error && tab === "all" && <p title={error} className="mt-6 text-muted">Search didn’t go through. Check your connection and try again.</p>}
+      {tabError && <p title={tabError} className="mt-6 text-muted">Couldn’t load {tab}. Check your connection and try again.</p>}
+
+      {term && (
+        <div aria-busy={loading || tabLoading} className={`transition-opacity duration-200 ${(loading && tab === "all") || tabLoading ? "opacity-40" : ""}`}>
+          {/* Tab: All */}
+          {tab === "all" && (
+            <>
+              {loading && !data && (
+                <div className="mt-8 space-y-6 animate-pulse">
+                  <div className="flex items-center gap-6">
+                    <div className="size-28 rounded-full bg-ink/[0.06]" />
+                    <div className="space-y-3">
+                      <div className="h-8 w-48 rounded-lg bg-ink/[0.06]" />
+                      <div className="h-4 w-32 rounded-lg bg-ink/[0.04]" />
+                    </div>
+                  </div>
+                  <div className="space-y-3 pt-4">
+                    <div className="h-5 w-24 rounded bg-ink/[0.06]" />
+                    {[...Array(4)].map((_, i) => (
+                      <div key={i} className="h-12 rounded-xl bg-ink/[0.04]" />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {data && (
+                <>
+                  {top && (
+                    <button
+                      onClick={() => {
+                        addRecentSearch({ id: top.id, kind: "artist", title: top.name, thumb: top.thumb });
+                        open({ name: "artist", id: top.id });
+                      }}
+                      className="group mt-8 flex items-center gap-6 text-left"
+                    >
+                      <div className="size-32 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
+                        <img src={art(top.thumb, 400)} alt="" className="size-full object-cover" />
+                      </div>
+                      <div>
+                        <div className="text-5xl font-extrabold tracking-[-0.04em]">{top.name}</div>
+                        <div className="mt-2 text-muted">{top.about}</div>
+                      </div>
+                    </button>
+                  )}
+                  {data.songs.length > 0 && (
+                    <Section title="Songs">
+                      <TrackList
+                        tracks={data.songs}
+                        onPlay={(i) => {
+                          const t = data.songs[i];
+                          if (t) addRecentSearch({ id: t.id, kind: "track", title: t.title, subtitle: t.artists?.map((a) => a.name).join(", "), thumb: t.thumb, track: t });
+                          play(data.songs, i);
+                        }}
+                      />
+                    </Section>
+                  )}
+                  {data.albums && data.albums.length > 0 && (
+                    <Section title="Albums">
+                      <SearchAlbumsRow items={data.albums} />
+                    </Section>
+                  )}
+                  {data.artists && data.artists.length > 0 && (
+                    <Section title="Artists">
+                      <SearchArtistsRow items={data.artists} />
+                    </Section>
+                  )}
+                </>
+              )}
+            </>
           )}
-          <Section title="Songs">
-            <TrackList tracks={data.songs} />
-          </Section>
+
+          {/* Tab: Songs */}
+          {tab === "songs" && (
+            <div className="mt-6">
+              {(tabData.songs ?? data?.songs)?.length ? (
+                <TrackList
+                  tracks={tabData.songs ?? data!.songs}
+                  onPlay={(i) => {
+                    const list = tabData.songs ?? data!.songs;
+                    const t = list[i];
+                    if (t) addRecentSearch({ id: t.id, kind: "track", title: t.title, subtitle: t.artists?.map((a) => a.name).join(", "), thumb: t.thumb, track: t });
+                    play(list, i);
+                  }}
+                />
+              ) : !loading && !tabLoading ? (
+                <p className="mt-8 text-muted">No songs found for “{term}”.</p>
+              ) : null}
+            </div>
+          )}
+
+          {/* Tab: Albums */}
+          {tab === "albums" && (
+            <div className="mt-6">
+              {tabLoading ? (
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-5 animate-pulse">
+                  {[...Array(6)].map((_, i) => (
+                    <div key={i} className="aspect-square rounded-xl bg-ink/[0.05]" />
+                  ))}
+                </div>
+              ) : tabData.albums?.length ? (
+                <AlbumsGrid items={tabData.albums} />
+              ) : (
+                <p className="mt-8 text-muted">No albums found for “{term}”.</p>
+              )}
+            </div>
+          )}
+
+          {/* Tab: Artists */}
+          {tab === "artists" && (
+            <div className="mt-6">
+              {tabLoading ? (
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-6 animate-pulse">
+                  {[...Array(6)].map((_, i) => (
+                    <div key={i} className="aspect-square rounded-full bg-ink/[0.05]" />
+                  ))}
+                </div>
+              ) : tabData.artists?.length ? (
+                <ArtistsGrid items={tabData.artists} />
+              ) : (
+                <p className="mt-8 text-muted">No artists found for “{term}”.</p>
+              )}
+            </div>
+          )}
+
+          {/* Tab: Playlists */}
+          {tab === "playlists" && (
+            <div className="mt-6">
+              {tabLoading ? (
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-5 animate-pulse">
+                  {[...Array(6)].map((_, i) => (
+                    <div key={i} className="aspect-square rounded-xl bg-ink/[0.05]" />
+                  ))}
+                </div>
+              ) : tabData.playlists?.length ? (
+                <AlbumsGrid items={tabData.playlists} />
+              ) : (
+                <p className="mt-8 text-muted">No playlists found for “{term}”.</p>
+              )}
+            </div>
+          )}
+
+          {/* Tab: Videos */}
+          {tab === "videos" && (
+            <div className="mt-6">
+              {tabLoading ? (
+                <div className="space-y-3 animate-pulse">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="h-12 rounded-xl bg-ink/[0.05]" />
+                  ))}
+                </div>
+              ) : tabData.videos?.length ? (
+                <TrackList
+                  tracks={tabData.videos}
+                  onPlay={(i) => {
+                    const t = tabData.videos![i];
+                    if (t) addRecentSearch({ id: t.id, kind: "track", title: t.title, subtitle: t.artists?.map((a) => a.name).join(", "), thumb: t.thumb, track: t });
+                    play(tabData.videos!, i);
+                  }}
+                />
+              ) : (
+                <p className="mt-8 text-muted">No videos found for “{term}”.</p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -170,6 +584,120 @@ const albumMenu = (a: Album) =>
     { text: "Add to Queue", action: () => collection(a.id).then((c) => enqueue(c.tracks, false), report) },
     { text: useLibrary.getState().saved.some((x) => x.id === a.id) ? "Remove from Library" : "Add to Library", action: () => toggleSave(a) },
   ]);
+
+function SearchAlbumsRow({ items }: { items: Album[] }) {
+  return (
+    <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
+      {items.map((a) => (
+        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative w-44 shrink-0">
+          <button
+            onClick={() => {
+              addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
+              open({ name: "collection", id: a.id });
+            }}
+            className="press block w-full rounded-xl text-left"
+          >
+            <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
+              <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
+            </div>
+            <div className="mt-2.5 truncate font-semibold">{a.title}</div>
+            <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>
+          </button>
+          <button
+            onClick={() => {
+              addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
+              playCollection(a.id);
+            }}
+            aria-label={`Play ${a.title}`}
+            className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+          >
+            <Play size={18} className="ml-0.5 fill-current" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SearchArtistsRow({ items }: { items: SearchArtist[] }) {
+  return (
+    <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
+      {items.map((a) => (
+        <button
+          key={a.id}
+          onClick={() => {
+            addRecentSearch({ id: a.id, kind: "artist", title: a.name, thumb: a.thumb });
+            open({ name: "artist", id: a.id });
+          }}
+          className="press group w-36 shrink-0 text-left"
+        >
+          <div className="aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">
+            <img src={art(a.thumb, 300)} alt="" loading="lazy" className="size-full object-cover group-hover:scale-105 transition-transform duration-300" />
+          </div>
+          <div className="mt-2.5 truncate font-semibold text-center">{a.name}</div>
+          <div className="truncate text-xs text-muted text-center">Artist</div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AlbumsGrid({ items }: { items: Album[] }) {
+  return (
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-5">
+      {items.map((a) => (
+        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative">
+          <button
+            onClick={() => {
+              addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
+              open({ name: "collection", id: a.id });
+            }}
+            className="press block w-full rounded-xl text-left"
+          >
+            <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
+              <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
+            </div>
+            <div className="mt-2.5 truncate font-semibold">{a.title}</div>
+            <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>
+          </button>
+          <button
+            onClick={() => {
+              addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
+              playCollection(a.id);
+            }}
+            aria-label={`Play ${a.title}`}
+            className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+          >
+            <Play size={18} className="ml-0.5 fill-current" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ArtistsGrid({ items }: { items: SearchArtist[] }) {
+  return (
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-6">
+      {items.map((a) => (
+        <button
+          key={a.id}
+          onClick={() => {
+            addRecentSearch({ id: a.id, kind: "artist", title: a.name, thumb: a.thumb });
+            open({ name: "artist", id: a.id });
+          }}
+          className="press group text-center"
+        >
+          <div className="aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">
+            <img src={art(a.thumb, 300)} alt="" loading="lazy" className="size-full object-cover group-hover:scale-105 transition-transform duration-300" />
+          </div>
+          <div className="mt-3 truncate font-semibold">{a.name}</div>
+          <div className="truncate text-xs text-muted">Artist</div>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const LIKED = "bg-linear-to-br from-[#ff375f] to-[#b80f3c]";
 // A playlist with no artwork yet still gets its own colour, picked from its id.

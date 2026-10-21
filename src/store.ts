@@ -11,7 +11,7 @@ type Root = "home" | "search" | "library" | "settings";
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
 // "shared" is someone's public playlist (id "<owner>/<playlist>"), "profile" someone's profile (account.ts).
 export type View =
-  | { name: Root | "history" | "local" | "charts" | "releases" }
+  | { name: Root | "history" | "local" | "charts" | "releases" | "wrapped" }
   | { name: "artist" | "collection" | "playlist" | "folder" | "shared" | "profile"; id: string }
   | { name: "discography"; id: string; params?: string; artist?: string };
 

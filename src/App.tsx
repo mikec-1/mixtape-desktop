@@ -270,8 +270,12 @@ function Toast() {
   const [hold, setHold] = useState(false);
   if (toast && toast !== last) setLast(toast);
   useEffect(() => {
-    if (!toast || hold) return;
-    const t = setTimeout(() => useStore.setState({ toast: undefined }), 5000);
+    if (!toast || hold || toast.sticky) return;
+    const t = setTimeout(() => {
+      if (!useStore.getState().toast?.sticky) {
+        useStore.setState({ toast: undefined });
+      }
+    }, 5000);
     return () => clearTimeout(t);
   }, [toast, hold]);
   const t = toast ?? last;
@@ -301,11 +305,15 @@ function Toast() {
               {t.detail && <div className="truncate text-sm text-white/60">{t.detail}</div>}
             </div>
           </div>
-          {t.undo && (
+          {t.action ? (
+            <button onClick={t.action.run} className="press h-10 shrink-0 rounded-full bg-white px-5 font-semibold text-black hover:bg-white/85">
+              {t.action.label}
+            </button>
+          ) : t.undo ? (
             <button onClick={t.undo} className="press h-10 shrink-0 rounded-full bg-white px-5 font-semibold text-black hover:bg-white/85">
               Undo
             </button>
-          )}
+          ) : null}
         </div>
       )}
     </div>

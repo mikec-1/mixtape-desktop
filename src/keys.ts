@@ -3,6 +3,19 @@ import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, 
 // Every shortcut, in one table: App.tsx runs them, Settings → Shortcuts lists them and remaps them
 // (useSettings keymap, by id; "" is none). Combos are "mod+" (⌘, Ctrl on Windows) and the key, lowercase.
 export const findSearch = () => {
+  const pageInput = document.querySelector<HTMLInputElement>(
+    "input[name='playlist-q'], input[name='shared-q'], input[name='collection-q'], input[name='local-q'], input[name='library-q']"
+  );
+  if (pageInput) {
+    pageInput.focus();
+    pageInput.select();
+    return;
+  }
+  const searchBtn = document.querySelector<HTMLButtonElement>("button[data-playlist-search]");
+  if (searchBtn) {
+    searchBtn.click();
+    return;
+  }
   go("search");
   requestAnimationFrame(() => document.querySelector<HTMLInputElement>("input[name=q]")?.select());
 };

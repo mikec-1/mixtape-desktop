@@ -35,9 +35,12 @@ type State = {
 };
 // A modal over everything: the lyrics editor (for a song, by its key in lyrics.ts useMine; track when it's
 // one Sleeve knows, to stamp times with while it plays), or a lyric card of the playing song.
-export type Dialog = { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track } | { kind: "card"; track: Track; pick: number[] };
+export type Dialog =
+  | { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track }
+  | { kind: "card"; track: Track; pick: number[] }
+  | { kind: "unmatched"; title: string; items: { title: string; artist: string }[] };
 // Feedback for a library change: what happened, to what, and a way back.
-export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void };
+export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean };
 
 // The queue and modes survive a relaunch; where you were in the track is in localStorage.resume.
 export const useStore = create<State>()(
@@ -115,7 +118,11 @@ const empty = (): Library => ({ liked: [], saved: [], playlists: [], followed: [
 export const useLibrary = create<Library>()(persist(empty, { name: "library", storage: createJSONStorage(() => idb) }));
 const lib = useLibrary.setState;
 let toasts = 0;
-export const notify = (t: Omit<Toast, "id">) => set({ toast: { ...t, id: ++toasts } });
+export const notify = (t: Omit<Toast, "id">) => {
+  const current = get().toast;
+  const id = current?.sticky && t.sticky && current.text === t.text ? current.id : ++toasts;
+  set({ toast: { ...t, id } });
+};
 
 // Every library change goes through here: apply it, say so, offer Undo. Undo puts back only the
 // lists this change touched. ponytail: an edit to the same list in between (a rename) is undone with it.
@@ -173,8 +180,8 @@ export function duplicatePlaylist(id: string) {
   return copy.id;
 }
 // An empty one opens straight onto its page, which says enough; one made from a song gets a toast.
-export function newPlaylist(tracks: Track[] = [], folder?: string) {
-  const p: Playlist = { id: crypto.randomUUID(), name: `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks: tracks.map(entry), at: Date.now(), ...(folder && { folder }) };
+export function newPlaylist(tracks: Track[] = [], folder?: string, name?: string) {
+  const p: Playlist = { id: crypto.randomUUID(), name: name || `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks: tracks.map(entry), at: Date.now(), ...(folder && { folder }) };
   if (tracks.length) change(`Added to ${p.name}`, tracks[0], (s) => ({ playlists: [...s.playlists, p] }), false);
   else lib((s) => ({ playlists: [...s.playlists, p] }));
   return p.id;

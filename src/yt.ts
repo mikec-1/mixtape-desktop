@@ -20,7 +20,7 @@ export type Artist = { id?: string; name: string };
 // rec: added by Smart Shuffle. at: when it was added to the list it's in (a playlist, Liked Songs).
 // file: a song on this computer (local.ts), by its path; it plays from disk and isn't on YouTube.
 // albumId opens its album; album "" means it was looked for and there's none (store.ts fill).
-export type Track = { id: string; title: string; artists: Artist[]; album?: string; albumId?: string; thumb?: string; duration?: string; explicit?: true; rec?: true; at?: number; file?: string };
+export type Track = { id: string; title: string; artists: Artist[]; album?: string; albumId?: string; thumb?: string; duration?: string; explicit?: true; rec?: true; at?: number; file?: string; isrc?: string; secs?: number };
 export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string; kind?: string; at?: number }; // at: when you saved it
 
 // YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at. A
@@ -54,6 +54,16 @@ const STAT = /^([\d.,]+[KMB]?\s+\w+|\d{4}|\d+:\d\d(:\d\d)?)$/i;
 const KINDS = /^(song|video|single|ep|album|episode|podcast|playlist)$/i;
 const artistLine = (text = "") => text.split(" • ").find((p) => !KINDS.test(p.trim())) ?? "";
 
+// Parses a length string ("3:45" or "1:02:15") into seconds.
+export function parseSecs(d?: string): number | undefined {
+  if (!d) return undefined;
+  const parts = d.trim().split(":").map(Number);
+  if (parts.some(isNaN)) return undefined;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return undefined;
+}
+
 // YT Music marks explicit songs with a small badge beside the title.
 const explicit = (badges?: Iterable<unknown> | null) =>
   [...(badges ?? [])].some((b) => (b as YTNodes.MusicInlineBadge).icon_type === "MUSIC_EXPLICIT_BADGE") ? { explicit: true as const } : {};
@@ -64,11 +74,15 @@ const toTracks = (items: YTNodes.MusicResponsiveListItem[] = []): Track[] =>
           id: s.id,
           title: s.title ?? (s as any).name ?? "",
           // Videos have authors.
-          artists: withUnlinked((s.artists ?? s.authors)?.map((a) => ({ name: a.name, id: a.channel_id })) ?? [], artistLine(s.flex_columns?.[1]?.title?.text)),
+          artists: withUnlinked(
+            (s.artists ?? s.authors ?? (s.author ? [s.author] : undefined))?.map((a: any) => ({ name: a.name, id: a.channel_id })) ?? [],
+            artistLine(s.flex_columns?.[1]?.title?.text),
+          ),
           album: s.album?.name,
           albumId: s.album?.id,
           thumb: s.thumbnails?.[0]?.url ?? (s as any).thumbnail?.contents?.[0]?.url ?? (s as any).thumbnail?.[0]?.url,
           duration: s.duration?.text,
+          secs: (s.duration as any)?.seconds ?? parseSecs(s.duration?.text),
           ...explicit(s.badges),
         }]
       : [],
@@ -170,6 +184,89 @@ export async function searchKind(query: string, type: "album" | "artist" | "play
   if (type === "video") return toTracks(items);
   if (type === "artist") return toArtists(items);
   return toAlbums(items);
+}
+
+// Searches for songs on YouTube Music with a 4s timeout.
+export async function searchSongs(query: string, timeoutMs = 4000): Promise<Track[]> {
+  const music = (await yt).music;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Search timeout")), timeoutMs);
+  });
+  const searchPromise = (async () => {
+    try {
+      const res = await music.search(query, { type: "song" });
+      const items = res.songs?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? searchItems(res);
+      return toTracks(items);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  })().catch(() => [] as Track[]);
+  try {
+    return await Promise.race([searchPromise, timeoutPromise]);
+  } catch {
+    return [];
+  }
+}
+
+// Searches for music videos with a 4s timeout.
+export async function searchVideos(query: string, timeoutMs = 4000): Promise<Track[]> {
+  const music = (await yt).music;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Search timeout")), timeoutMs);
+  });
+  const searchPromise = (async () => {
+    try {
+      const res = await music.search(query, { type: "video" });
+      const items = res.videos?.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? searchItems(res);
+      return toTracks(items);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  })().catch(() => [] as Track[]);
+  try {
+    return await Promise.race([searchPromise, timeoutPromise]);
+  } catch {
+    return [];
+  }
+}
+
+// Searches main YouTube for user uploads, viral sounds, and niche remixes that aren't on YouTube Music.
+export async function searchYouTube(query: string, timeoutMs = 4000): Promise<Track[]> {
+  const client = await yt;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Search timeout")), timeoutMs);
+  });
+  const searchPromise = (async () => {
+    try {
+      const res = await client.search(query);
+      const items = (res.results ?? []).filter((v: any) => v.type === "Video" || v.video_id || v.id);
+      return items.flatMap((v: any) => {
+        const id = v.id || v.video_id;
+        if (!id) return [];
+        const title = v.title?.text ?? v.title?.toString() ?? "";
+        const artists = v.author ? [{ name: v.author.name, id: v.author.id }] : [];
+        const duration = v.duration?.text ?? v.length_text?.text ?? v.duration?.toString();
+        return [{
+          id,
+          title,
+          artists,
+          duration,
+          secs: v.duration?.seconds ?? parseSecs(duration),
+          thumb: v.thumbnails?.[0]?.url,
+        }];
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  })().catch(() => [] as Track[]);
+  try {
+    return await Promise.race([searchPromise, timeoutPromise]);
+  } catch {
+    return [];
+  }
 }
 
 export async function suggestions(query: string): Promise<string[]> {
@@ -541,6 +638,7 @@ export async function radio(id: string): Promise<Track[]> {
             albumId: v.album?.id,
             thumb: v.thumbnail[0]?.url,
             duration: v.duration.text,
+            secs: parseSecs(v.duration.text),
             ...explicit(v.badges),
           }]
         : [],
@@ -558,7 +656,7 @@ export async function details(id: string) {
     if (!me) continue;
     const album = me.album ?? all.find((x) => x.album)?.album;
     const artists = withUnlinked(me.artists?.map((x) => ({ name: x.name, id: x.channel_id })) ?? [], artistLine(me.author));
-    return { album: album?.name, albumId: album?.id, duration: me.duration?.text || undefined, artists };
+    return { album: album?.name, albumId: album?.id, duration: me.duration?.text || undefined, secs: parseSecs(me.duration?.text), artists };
   }
 }
 

@@ -18,6 +18,7 @@ import { SignIn } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
+import { importPlaylistFile } from "./import";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
 function useAsync<T>(fn: () => Promise<T> | undefined, deps: unknown[]) {
@@ -35,6 +36,9 @@ function useAsync<T>(fn: () => Promise<T> | undefined, deps: unknown[]) {
   }, deps);
   return state;
 }
+
+const fold = (s = "") => s.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
+const matches = (t: Track, q: string) => fold([t.title, t.album, ...(t.artists ?? []).map((a) => a.name)].join(" ")).includes(fold(q));
 
 // A tile per genre that searches for it.
 const genres = [
@@ -958,9 +962,12 @@ export function CollectionPage({ id }: { id: string }) {
   const page = fresh ?? kept;
   const data = page && { ...page, by: [page.by ?? []].flat() }; // kept before an album's artists were a list
   const saved = useLibrary((s) => s.saved.some((a) => a.id === id));
+  const [query, setQuery] = useState("");
   if (!data && error) return <p className="px-8 pt-20 text-muted">Couldn’t open this. Go back and try again.</p>;
   if (!data) return <Skeleton className="h-[380px] bg-ink/[0.04]" />;
   const album = isAlbum(id);
+  const q = query.trim();
+  const shown = q ? data.tracks.filter((t) => matches(t, q)) : data.tracks;
 
   return (
     <div className="animate-enter">
@@ -971,7 +978,7 @@ export function CollectionPage({ id }: { id: string }) {
         sub={data.by.length > 0 && <Artists list={data.by} />}
         meta={[data.kind, ...data.meta].filter(Boolean).join(" · ")}
       >
-        <PlayButtons tracks={data.tracks} from={libraryKey("album", id)} />
+        <PlayButtons tracks={shown} from={libraryKey("album", id)} />
         <DownloadButton id={libraryKey("album", id)} about={() => (!saved && toggleSave({ id, title: data.title, by: data.by.map((a) => a.name).join(", "), thumb: data.thumb }), { title: data.title, thumb: data.thumb, collection: data })} />
         <button onClick={() => toggleSave({ id, title: data.title, by: data.by.map((a) => a.name).join(", "), thumb: data.thumb })} aria-pressed={saved} className={`${pill} bg-white/20 px-4 hover:bg-white/30`}>
           {saved ? <Check size={16} strokeWidth={2.6} /> : <Plus size={16} strokeWidth={2.6} />} {saved ? "Saved" : "Save"}
@@ -979,8 +986,22 @@ export function CollectionPage({ id }: { id: string }) {
       </Masthead>
       <div className="px-8">
         {data.about && <p className="mt-6 line-clamp-2 max-w-2xl text-[15px] leading-relaxed text-ink/65">{data.about}</p>}
-        <div className="mt-6">
-          <TrackList tracks={data.tracks} numbered={album} plain={album} from={libraryKey("album", id)} />
+        {data.tracks.length > 5 && (
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <PlaylistSearch
+              value={query}
+              onChange={setQuery}
+              placeholder={album ? "Search in Album" : "Search in Playlist"}
+              name="collection-q"
+            />
+          </div>
+        )}
+        <div className="mt-2">
+          {shown.length ? (
+            <TrackList tracks={shown} numbered={album} plain={album} from={libraryKey("album", id)} />
+          ) : (
+            <p className="py-8 text-muted">No songs match “{q}”.</p>
+          )}
         </div>
       </div>
     </div>
@@ -1056,8 +1077,6 @@ const LIBRARY_SORTS = [["recents", "Recents"], ["added", "Recently Added"], ["na
 // Songs order by the same setting, read for songs.
 const SONG_ORDER: Record<LibrarySort, TrackSort> = { recents: "custom", added: "custom", name: "title", creator: "artist" };
 const SONG_SORT_LABEL: Record<LibrarySort, string> = { recents: "Recently Added", added: "Recently Added", name: "Title", creator: "Artist" };
-const fold = (s = "") => s.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
-const matches = (t: Track, q: string) => fold([t.title, t.album, ...t.artists.map((a) => a.name)].join(" ")).includes(fold(q));
 
 // The big Liked Songs card, with the latest likes stacked like sleeves pulled from a crate.
 function LikedHero({ liked }: { liked: Track[] }) {
@@ -1308,6 +1327,88 @@ function SortSelect({ value, onChange, custom }: { value: TrackSort; onChange: (
   );
 }
 
+// Spotify-style search button that expands into an input next to the sort button.
+function PlaylistSearch({
+  value,
+  onChange,
+  placeholder = "Search in Playlist",
+  name = "playlist-q",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  name?: string;
+}) {
+  const [open, setOpen] = useState(Boolean(value));
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleOpen = () => {
+    setOpen(true);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const handleClose = () => {
+    if (value) {
+      onChange("");
+      inputRef.current?.focus();
+    } else {
+      setOpen(false);
+    }
+  };
+
+  if (!open && !value) {
+    return (
+      <button
+        type="button"
+        data-playlist-search
+        onClick={handleOpen}
+        aria-label={placeholder}
+        title={placeholder}
+        className={round2}
+      >
+        <SearchIcon size={16} />
+      </button>
+    );
+  }
+
+  return (
+    <label className="flex h-8 w-44 animate-enter items-center gap-1.5 rounded-full bg-ink/[0.07] px-2.5 transition-all duration-200 focus-within:bg-ink/[0.1] focus-within:w-56 @3xl:focus-within:w-64">
+      <SearchIcon size={14} className="shrink-0 text-muted" />
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            if (value) onChange("");
+            else setOpen(false);
+          }
+        }}
+        onBlur={() => {
+          if (!value.trim()) setOpen(false);
+        }}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        name={name}
+        autoComplete="off"
+        spellCheck={false}
+        className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted"
+      />
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={handleClose}
+        aria-label="Close search"
+        className="press flex size-5 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.08] hover:text-ink"
+      >
+        <X size={13} />
+      </button>
+    </label>
+  );
+}
+
 // Liked Songs, or one of your playlists: rename it, describe it, give it your own cover, order it, drag
 // its songs about (in Custom Order), duplicate it, file it in a folder.
 export function PlaylistPage({ id }: { id: string }) {
@@ -1318,10 +1419,15 @@ export function PlaylistPage({ id }: { id: string }) {
   const folder = useLibrary((s) => s.folders.find((f) => f.id === playlist?.folder));
   const signedIn = useAccount((s) => !!s.user);
   const file = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
   const tracks = playlist?.tracks ?? liked;
   useEffect(() => fillIn(tracks), [tracks]); // albums, lengths and artists some songs came without
   const sort = (playlist ? playlist.sort : likedSort) ?? "custom";
-  const rows = useMemo(() => sorted(tracks, sort), [tracks, sort]);
+  const rows = useMemo(() => {
+    const list = sorted(tracks, sort);
+    const q = query.trim();
+    return q ? list.filter((r) => matches(r.t, q)) : list;
+  }, [tracks, sort, query]);
   if (id !== "liked" && !playlist) return <p className="px-8 pt-20 text-muted">This playlist was deleted.</p>;
   const from = playlist ? libraryKey("playlist", id) : "liked";
   const shown = rows.map((r) => r.t);
@@ -1410,13 +1516,36 @@ export function PlaylistPage({ id }: { id: string }) {
       </Masthead>
       {playlist && <input ref={file} type="file" accept="image/*" hidden onChange={(e) => (e.target.files?.[0] && void coverFrom(e.target.files[0]).then((c) => setCover(id, c), report), (e.target.value = ""))} />}
       <div className="mt-6 px-8">
-        {tracks.length > 1 && (
-          <div className="mb-2 flex justify-end">
-            <SortSelect value={sort} custom={playlist ? undefined : "Recently Added"} onChange={(s) => (playlist ? sortPlaylist(id, s) : useSettings.setState({ likedSort: s }))} />
+        {tracks.length > 0 && (
+          <div className="mb-2 flex items-center justify-end gap-2">
+            <PlaylistSearch
+              value={query}
+              onChange={setQuery}
+              placeholder={id === "liked" ? "Search in Liked Songs" : "Search in Playlist"}
+              name="playlist-q"
+            />
+            {tracks.length > 1 && (
+              <SortSelect
+                value={sort}
+                custom={playlist ? undefined : "Recently Added"}
+                onChange={(s) => (playlist ? sortPlaylist(id, s) : useSettings.setState({ likedSort: s }))}
+              />
+            )}
           </div>
         )}
         {tracks.length ? (
-          <TrackList tracks={shown} playlist={playlist?.id} origin={rows.map((r) => r.i)} from={from} added onMove={playlist && sort === "custom" ? (a, b) => movePlaylistTrack(id, a, b) : undefined} />
+          shown.length ? (
+            <TrackList
+              tracks={shown}
+              playlist={playlist?.id}
+              origin={rows.map((r) => r.i)}
+              from={from}
+              added
+              onMove={playlist && sort === "custom" && !query.trim() ? (a, b) => movePlaylistTrack(id, a, b) : undefined}
+            />
+          ) : (
+            <p className="py-8 text-muted">No songs match “{query.trim()}”.</p>
+          )
         ) : (
           <p className="text-muted">{playlist ? "Right-click any song and choose Add to Playlist." : "Tap the heart on any song and it lands here."}</p>
         )}
@@ -1443,11 +1572,15 @@ const copyLink = (link: string, detail = link) => navigator.clipboard.writeText(
 export function SharedPage({ id }: { id: string }) {
   const online = useOnline();
   const { data, error } = useAsync(() => (canSignIn ? sharedPlaylist(id) : Promise.reject(new Error("Accounts aren’t set up"))), [id, online]);
+  const [query, setQuery] = useState("");
   if (data === null) return <p className="px-8 pt-20 text-muted">This playlist isn’t shared any more.</p>;
   if (!data && error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t open this playlist. Check your connection and try again.</p>;
   if (!data) return <Skeleton className="h-[380px] bg-ink/[0.04]" />;
   const p = data.playlist;
   const owner = id.split("/")[0];
+  const q = query.trim();
+  const shown = q ? p.tracks.filter((t) => matches(t, q)) : p.tracks;
+
   return (
     <div className="animate-enter">
       <Masthead
@@ -1462,7 +1595,7 @@ export function SharedPage({ id }: { id: string }) {
         }
         meta={["Public Playlist", count(p.tracks.length)].join(" · ")}
       >
-        <PlayButtons tracks={p.tracks} />
+        <PlayButtons tracks={shown} />
         <button onClick={() => copyPlaylist(p)} className={`${pill} bg-white/20 px-4 hover:bg-white/30`}>
           <Plus size={16} strokeWidth={2.6} /> Save a Copy
         </button>
@@ -1472,7 +1605,25 @@ export function SharedPage({ id }: { id: string }) {
       </Masthead>
       <div className="mt-6 px-8">
         {p.about && <p className="mb-6 line-clamp-2 max-w-2xl text-[15px] leading-relaxed text-ink/65">{p.about}</p>}
-        {p.tracks.length ? <TrackList tracks={p.tracks} /> : <p className="text-muted">No songs in it yet.</p>}
+        {p.tracks.length > 0 && (
+          <div className="mb-2 flex items-center justify-end gap-2">
+            <PlaylistSearch
+              value={query}
+              onChange={setQuery}
+              placeholder="Search in Playlist"
+              name="shared-q"
+            />
+          </div>
+        )}
+        {p.tracks.length ? (
+          shown.length ? (
+            <TrackList tracks={shown} />
+          ) : (
+            <p className="py-8 text-muted">No songs match “{q}”.</p>
+          )
+        ) : (
+          <p className="text-muted">No songs in it yet.</p>
+        )}
       </div>
     </div>
   );
@@ -3391,9 +3542,36 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "unmatched" ? <UnmatchedDialog d={dialog} /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
+
+function UnmatchedDialog({ d }: { d: Extract<Dialog, { kind: "unmatched" }> }) {
+  return (
+    <Modal label={d.title} onClose={closeDialog} className="w-[min(520px,94vw)] p-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold tracking-tight">{d.title}</h2>
+        <button onClick={closeDialog} className={round2}>
+          <X size={18} />
+        </button>
+      </div>
+      <p className="mt-1 text-sm text-muted">These songs couldn’t be matched on YouTube Music:</p>
+      <ul className="mt-4 max-h-80 divide-y divide-ink/10 overflow-y-auto">
+        {d.items.map((item, i) => (
+          <li key={i} className="py-2.5">
+            <div className="truncate font-semibold">{item.title}</div>
+            <div className="truncate text-sm text-muted">{item.artist}</div>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-6 flex justify-end">
+        <button onClick={closeDialog} className={solid}>
+          Done
+        </button>
+      </div>
+    </Modal>
+  );
+}
 
 // Your own lyrics for a song: plain text, or LRC ("[01:02.50] line") to sync them. While the song plays,
 // Stamp Line (⌘↩) puts its time on the line the cursor is in and moves to the next, so a song can be synced
@@ -4157,6 +4335,7 @@ function exportLibrary() {
 function LibraryPane() {
   const { liked, saved, playlists, followed, hidden, blocked } = useLibrary();
   const file = useRef<HTMLInputElement>(null);
+  const csvFile = useRef<HTMLInputElement>(null);
   const stats = [["Liked songs", liked.length, LIKED], ["Playlists", playlists.length, tint("a")], ["Albums", saved.length, tint("b")], ["Artists", followed.length, tint("c")]] as const;
   return (
     <>
@@ -4168,7 +4347,7 @@ function LibraryPane() {
           </div>
         ))}
       </dl>
-      <div className="mt-6 flex gap-2">
+      <div className="mt-6 flex flex-wrap gap-2">
         <button onClick={exportLibrary} className={solid}>
           <Download size={16} /> Export
         </button>
@@ -4176,6 +4355,10 @@ function LibraryPane() {
           <Upload size={16} /> Restore from File…
         </button>
         <input ref={file} type="file" accept=".json,application/json" hidden onChange={(e) => (e.target.files?.[0] && restore(e.target.files[0]), (e.target.value = ""))} />
+        <button onClick={() => csvFile.current?.click()} className={quiet}>
+          <Upload size={16} /> Import Playlist from File…
+        </button>
+        <input ref={csvFile} type="file" accept=".csv,text/csv" hidden onChange={(e) => (e.target.files?.[0] && void importPlaylistFile(e.target.files[0]), (e.target.value = ""))} />
       </div>
       {canHaveFiles && <LocalFolders />}
       {canDownload && <Downloads />}

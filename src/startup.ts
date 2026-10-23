@@ -125,7 +125,7 @@ async function buildMenu(): Promise<Menu> {
     } else {
       items.push({
         id: "now_playing_title",
-        text: `🎵  ${titleText}`,
+        text: `${titleText}`,
         action: () => {
           show();
           toggleSheet("playing");
@@ -161,7 +161,7 @@ async function buildMenu(): Promise<Menu> {
 
     items.push({
       id: "open_lyrics",
-      text: "🎤  Open Lyrics",
+      text: "Open Lyrics",
       action: () => {
         show();
         toggleSheet("lyrics");
@@ -175,7 +175,7 @@ async function buildMenu(): Promise<Menu> {
     });
     items.push({
       id: "idle_play",
-      text: "▶  Open Sleeve & Play",
+      text: "Open Sleeve & Play",
       action: show,
     });
   }
@@ -190,12 +190,12 @@ async function buildMenu(): Promise<Menu> {
   });
   items.push({
     id: "next_track",
-    text: "⏭  Next",
+    text: "Next",
     action: next,
   });
   items.push({
     id: "prev_track",
-    text: "⏮  Previous",
+    text: "Previous",
     action: prev,
   });
 
@@ -235,14 +235,14 @@ async function buildMenu(): Promise<Menu> {
   }
 
   items.push({
-    text: `📜  Up Next (${upcoming.length})`,
+    text: `Up Next (${upcoming.length})`,
     items: queueItems,
   });
 
   // --- 4. Modes & Audio Controls ---
   const sleepText = s.sleep ? (s.sleep === "track" ? " (At End)" : " (Active)") : "";
   items.push({
-    text: "🎛  Modes & Audio",
+    text: "Modes & Audio",
     items: [
       {
         text: s.shuffle === "smart" ? "✨  Smart Shuffle (Active)" : s.shuffle ? "🔀  Shuffle (On)" : "🔀  Shuffle (Off)",
@@ -254,7 +254,7 @@ async function buildMenu(): Promise<Menu> {
       },
       { item: "Separator" },
       {
-        text: `🔊  Volume (${Math.round((audio.muted ? 0 : audio.volume) * 100)}%)`,
+        text: `Volume (${Math.round((audio.muted ? 0 : audio.volume) * 100)}%)`,
         items: [
           { text: "100%", action: () => setVolume(1.0) },
           { text: "75%", action: () => setVolume(0.75) },
@@ -265,7 +265,7 @@ async function buildMenu(): Promise<Menu> {
         ],
       },
       {
-        text: `⏱  Sleep Timer${sleepText}`,
+        text: `Sleep Timer${sleepText}`,
         items: [
           { text: s.sleep ? "Turn Off Sleep Timer" : "Off", action: () => sleepIn(undefined) },
           { item: "Separator" },
@@ -284,7 +284,7 @@ async function buildMenu(): Promise<Menu> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const librarySubItems: any[] = [
     {
-      text: `♥  Liked Songs (${liked.length})`,
+      text: `Liked Songs (${liked.length})`,
       action: () => {
         show();
         open({ name: "playlist", id: "liked" });
@@ -294,7 +294,7 @@ async function buildMenu(): Promise<Menu> {
 
   if (playlists.length > 0) {
     const plItems = playlists.slice(0, 15).map((p) => ({
-      text: `▶  ${p.name} (${p.tracks.length} songs)`,
+      text: `${p.name} (${p.tracks.length} songs)`,
       action: () => void play(p.tracks, 0, libraryKey("playlist", p.id)),
     }));
     librarySubItems.push({
@@ -305,14 +305,14 @@ async function buildMenu(): Promise<Menu> {
 
   librarySubItems.push(
     {
-      text: "🕒  Listening History",
+      text: "Listening History",
       action: () => {
         show();
         open({ name: "history" });
       },
     },
     {
-      text: "💾  Local Files",
+      text: "Local Files",
       action: () => {
         show();
         open({ name: "local" });
@@ -321,7 +321,7 @@ async function buildMenu(): Promise<Menu> {
   );
 
   items.push({
-    text: "📁  Library & Playlists",
+    text: "Library & Playlists",
     items: librarySubItems,
   });
 
@@ -330,7 +330,7 @@ async function buildMenu(): Promise<Menu> {
   // --- 6. Window & App Controls ---
   items.push({
     id: "toggle_mini",
-    text: "🪟  Mini Player",
+    text: "Mini Player",
     action: () => void toggleMini(),
   });
   items.push({

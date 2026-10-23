@@ -10,28 +10,9 @@ fn truncate_str(s: &str, max_chars: usize) -> &str {
     }
 }
 
+// Baked in at build time from DISCORD_CLIENT_ID (or the .env Vite reads): a built app has no .env beside it.
 fn client_id() -> Option<String> {
-    if let Ok(id) = std::env::var("DISCORD_CLIENT_ID") {
-        if !id.trim().is_empty() {
-            return Some(id.trim().to_string());
-        }
-    }
-    for path in [".env", "../.env"] {
-        if let Ok(content) = std::fs::read_to_string(path) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                for prefix in ["DISCORD_CLIENT_ID=", "VITE_DISCORD_CLIENT_ID="] {
-                    if let Some(rest) = trimmed.strip_prefix(prefix) {
-                        let val = rest.trim().trim_matches('"').trim_matches('\'');
-                        if !val.is_empty() {
-                            return Some(val.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
+    option_env!("DISCORD_CLIENT_ID").map(str::trim).filter(|s| !s.is_empty()).map(String::from)
 }
 
 fn get_or_connect() -> Result<std::sync::MutexGuard<'static, Option<DiscordIpcClient>>, ()> {

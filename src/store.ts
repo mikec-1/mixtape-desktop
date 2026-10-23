@@ -66,12 +66,7 @@ export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, 
 export const go = (name: Root) => set({ stack: [{ name }], ahead: [], sheet: undefined });
 // Opens that sheet, or closes it if it's the one showing.
 export const toggleSheet = (sheet: State["sheet"]) => set((s) => ({ sheet: s.sheet === sheet ? undefined : sheet }));
-export const report = (e: unknown) => {
-  const msg = e instanceof Error ? e.message : String(e);
-  console.error("Playback error:", e);
-  notify({ text: "Playback Error", detail: msg });
-  set({ error: msg, loading: false });
-};
+export const report = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e), loading: false });
 
 // Your library, in IndexedDB: no 5 MB cap like localStorage, and the same code runs in the web build.
 // ponytail: the whole library is rewritten on every change; per-row SQLite if imports reach ~100k tracks.

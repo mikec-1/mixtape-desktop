@@ -433,7 +433,7 @@ async function findBestTrack(
     const key = `${prefix}:${query.toLowerCase()}`;
     const cached = cache.get(key);
     if (cached) return cached;
-    const res = await fetcher(query, 3500).catch(() => []);
+    const res = await fetcher(query, 10000).catch(() => []);
     if (res.length) cache.set(key, res);
     return res;
   }
@@ -503,7 +503,7 @@ async function matchAll(
     }
   }
 
-  const concurrency = Math.min(5, rows.length);
+  const concurrency = Math.min(3, rows.length);
   const workers = Array.from({ length: concurrency }, () => worker());
   await Promise.all(workers);
 

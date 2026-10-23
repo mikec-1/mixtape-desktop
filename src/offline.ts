@@ -142,8 +142,8 @@ async function nextExtras() {
   fetching--;
 }
 
-// The key: made once, kept in IndexedDB as raw bytes and imported into a non-extractable CryptoKey in memory,
-// avoiding macOS Keychain prompts on each build. Each file starts with its own 16-byte counter block.
+// The key: made once, kept in IndexedDB as raw bytes. A stored CryptoKey would be safer, but WebKit wraps
+// those with a Keychain key, which asks for your password on every new build. Each file starts with its own 16-byte counter block.
 const key = (async () => {
   let raw = await idbGet<Uint8Array>("offline-key-raw").catch(() => undefined);
   if (!raw || !(raw instanceof Uint8Array) || raw.byteLength !== 32) {
@@ -163,12 +163,11 @@ async function open(data: ArrayBuffer) {
   return crypto.subtle.decrypt({ name: "AES-CTR", counter: new Uint8Array(data, 0, 16), length: 64 }, await key, new Uint8Array(data, 16));
 }
 
-const timeout = <T>(p: Promise<T>, ms: number, err: string): Promise<T> =>
-  Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(err)), ms))]);
-
 const folder = canDownload ? invoke<string>("downloads_dir") : Promise.reject(new Error("Downloads need the app"));
 export const ready = folder.then((d) => void (dir = d), () => {});
 const CHUNK = 1 << 20;
+// Saved under a key we no longer have (the old CryptoKey) or damaged: decrypts to noise.
+class Corrupt extends Error {}
 function isValidAudio(buf: ArrayBuffer): boolean {
   if (buf.byteLength < 8) return false;
   const u8 = new Uint8Array(buf, 0, 8);
@@ -182,8 +181,8 @@ async function read(id: string, saved: Saved) {
   const dir = await folder;
   const r = await fetch(convertFileSrc(`${dir}/${id}`));
   if (!r.ok) throw new Error(`Download missing: ${r.status}`);
-  const plain = await timeout(open(await r.arrayBuffer()), 1500, "Decryption timed out");
-  if (!isValidAudio(plain)) throw new Error("Corrupted offline download (key mismatch)");
+  const plain = await open(await r.arrayBuffer());
+  if (!isValidAudio(plain)) throw new Corrupt();
   const chunks: Promise<ArrayBuffer>[] = [];
   for (let at = 0; at < plain.byteLength; at += CHUNK) chunks.push(Promise.resolve(plain.slice(at, at + CHUNK)));
   return { chunks, mime: saved.mime, duration: saved.duration, loudness: saved.loudness };
@@ -193,14 +192,17 @@ downloads.read = (id) => {
   const saved = get().songs[id];
   if (!saved) return undefined;
   return read(id, saved).catch(async (e) => {
-    console.warn(`Failed to read offline download ${id}, streaming online instead:`, e);
-    // Remove the incompatible/corrupt download and trigger a fresh re-download
-    set((s) => {
-      const songs = { ...s.songs };
-      delete songs[id];
-      return { songs };
-    });
-    void invoke("delete_downloads", { names: [id] }).catch(() => {});
+    console.warn(`Offline copy of ${id} unreadable, streaming instead:`, e);
+    // Only a file that's really broken is thrown away (sync downloads it again); a missing folder or a
+    // slow read keeps it.
+    if (e instanceof Corrupt) {
+      set((s) => {
+        const songs = { ...s.songs };
+        delete songs[id];
+        return { songs };
+      });
+      void invoke("delete_downloads", { names: [id] }).catch(() => {});
+    }
     return fetchAudio(id, useSettings.getState().quality);
   });
 };

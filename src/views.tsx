@@ -440,12 +440,12 @@ export function Search() {
                   )}
                   {data.albums && data.albums.length > 0 && (
                     <Section title="Albums">
-                      <SearchAlbumsRow items={data.albums} />
+                      <Albums items={data.albums} remember />
                     </Section>
                   )}
                   {data.artists && data.artists.length > 0 && (
                     <Section title="Artists">
-                      <SearchArtistsRow items={data.artists} />
+                      <ArtistCards items={data.artists} remember />
                     </Section>
                   )}
                 </>
@@ -482,7 +482,7 @@ export function Search() {
                   ))}
                 </div>
               ) : tabData.albums?.length ? (
-                <AlbumsGrid items={tabData.albums} />
+                <Albums items={tabData.albums} grid remember />
               ) : (
                 <p className="mt-8 text-muted">No albums found for “{term}”.</p>
               )}
@@ -499,7 +499,7 @@ export function Search() {
                   ))}
                 </div>
               ) : tabData.artists?.length ? (
-                <ArtistsGrid items={tabData.artists} />
+                <ArtistCards items={tabData.artists} grid remember />
               ) : (
                 <p className="mt-8 text-muted">No artists found for “{term}”.</p>
               )}
@@ -516,7 +516,7 @@ export function Search() {
                   ))}
                 </div>
               ) : tabData.playlists?.length ? (
-                <AlbumsGrid items={tabData.playlists} />
+                <Albums items={tabData.playlists} grid remember />
               ) : (
                 <p className="mt-8 text-muted">No playlists found for “{term}”.</p>
               )}
@@ -602,130 +602,6 @@ const albumMenu = (a: Album) =>
     { text: "Add to Queue", action: () => collection(a.id).then((c) => enqueue(c.tracks, false), report) },
     { text: useLibrary.getState().saved.some((x) => x.id === a.id) ? "Remove from Library" : "Add to Library", action: () => toggleSave(a) },
   ]);
-
-function SearchAlbumsRow({ items }: { items: Album[] }) {
-  return (
-    <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
-      {items.map((a) => (
-        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative w-44 shrink-0">
-          <button
-            onClick={() => {
-              addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
-              open({ name: "collection", id: a.id });
-            }}
-            className="press block w-full rounded-xl text-left"
-          >
-            <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
-              <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
-            </div>
-            <div className="mt-2.5 truncate font-semibold">{a.title}</div>
-            <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>
-          </button>
-          <button
-            onClick={() => {
-              addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
-              playCollection(a.id);
-            }}
-            aria-label={`Play ${a.title}`}
-            className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
-          >
-            <Play size={18} className="ml-0.5 fill-current" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ArtistsRow({ items, numbered }: { items: { id: string; name: string; thumb?: string }[]; numbered?: boolean }) {
-  return (
-    <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
-      {items.map((a, i) => (
-        <button
-          key={a.id}
-          onClick={() => {
-            addRecentSearch({ id: a.id, kind: "artist", title: a.name, thumb: a.thumb });
-            open({ name: "artist", id: a.id });
-          }}
-          className="press group w-36 shrink-0 text-left"
-        >
-          <div className="relative aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">
-            {a.thumb ? (
-              <img src={art(a.thumb, 300)} alt="" loading="lazy" className="size-full object-cover group-hover:scale-105 transition-transform duration-300" />
-            ) : (
-              <div className="size-full bg-ink/[0.08]" />
-            )}
-            {numbered && (
-              <span className="absolute bottom-1 left-1 flex size-6 items-center justify-center rounded-full bg-black/75 text-xs font-extrabold text-white shadow-sm tabular-nums backdrop-blur-xs">
-                {i + 1}
-              </span>
-            )}
-          </div>
-          <div className="mt-2.5 truncate font-semibold text-center">{a.name}</div>
-          <div className="truncate text-xs text-muted text-center">Artist</div>
-        </button>
-      ))}
-    </div>
-  );
-}
-const SearchArtistsRow = ArtistsRow;
-
-function AlbumsGrid({ items }: { items: Album[] }) {
-  return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-5">
-      {items.map((a) => (
-        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative">
-          <button
-            onClick={() => {
-              addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
-              open({ name: "collection", id: a.id });
-            }}
-            className="press block w-full rounded-xl text-left"
-          >
-            <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
-              <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
-            </div>
-            <div className="mt-2.5 truncate font-semibold">{a.title}</div>
-            <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>
-          </button>
-          <button
-            onClick={() => {
-              addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
-              playCollection(a.id);
-            }}
-            aria-label={`Play ${a.title}`}
-            className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
-          >
-            <Play size={18} className="ml-0.5 fill-current" />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ArtistsGrid({ items }: { items: SearchArtist[] }) {
-  return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-6">
-      {items.map((a) => (
-        <button
-          key={a.id}
-          onClick={() => {
-            addRecentSearch({ id: a.id, kind: "artist", title: a.name, thumb: a.thumb });
-            open({ name: "artist", id: a.id });
-          }}
-          className="press group text-center"
-        >
-          <div className="aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">
-            <img src={art(a.thumb, 300)} alt="" loading="lazy" className="size-full object-cover group-hover:scale-105 transition-transform duration-300" />
-          </div>
-          <div className="mt-3 truncate font-semibold">{a.name}</div>
-          <div className="truncate text-xs text-muted">Artist</div>
-        </button>
-      ))}
-    </div>
-  );
-}
 
 const LIKED = "bg-linear-to-br from-[#ff375f] to-[#b80f3c]";
 // A playlist with no artwork yet still gets its own colour, picked from its id.
@@ -2657,7 +2533,7 @@ export function Artist({ id }: { id: string }) {
         )}
         {data.fans && data.fans.length > 0 && (
           <Section title="Fans Also Like">
-            <ArtistsRow items={data.fans} />
+            <ArtistCards items={data.fans} />
           </Section>
         )}
         {data.about && (
@@ -2735,79 +2611,16 @@ export function Artist({ id }: { id: string }) {
   );
 }
 
-// Full discography grid with Albums, Singles & EPs, and Compilations filters.
-export function DiscographyPage({ id, params: initialParams, artist }: { id: string; params?: string; artist?: string }) {
-  const [params, setParams] = useState(initialParams ?? "ggMIegYIARoCAQI%3D");
-  const { data: items, error, loading } = useAsync(() => discography(id, params), [id, params]);
-
-  const chips = [
-    { label: "Albums", params: "ggMIegYIARoCAQI%3D" },
-    { label: "Singles & EPs", params: "ggMIegYIAhoCAQI%3D" },
-    { label: "Compilations", params: "ggMIegYIAxoCAQI%3D" },
-  ];
-
-  const isCurrent = (p: string) =>
-    decodeURIComponent(params ?? "") === decodeURIComponent(p) ||
-    (params ?? "").includes(p.replace(/%3D/g, "")) ||
-    params === p;
-
+// The page behind an artist's Albums or Singles "More": all of them.
+export function DiscographyPage({ id, params, artist }: { id: string; params?: string; artist?: string }) {
+  const { data, error } = useAsync(() => discography(id, params), [id, params]);
   return (
     <div className="animate-enter px-8 pt-14">
-      <div className="flex flex-col gap-1">
-        {artist && <p className="text-sm font-semibold text-muted">{artist}</p>}
-        <h1 className="text-display">Discography</h1>
+      {artist && <p className="text-sm font-semibold text-muted">{artist}</p>}
+      <h1 className="text-display">Discography</h1>
+      <div className="mt-6">
+        {error ? <p className="text-muted">Couldn’t load these. Go back and try again.</p> : data ? <Albums items={data} grid /> : <Skeleton className="h-60 w-full rounded-xl" />}
       </div>
-      <div className="mt-6 flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
-        {chips.map((c) => {
-          const active = isCurrent(c.params);
-          return (
-            <button
-              key={c.label}
-              onClick={() => setParams(c.params)}
-              className={`${pill} ${active ? "bg-ink text-paper" : "bg-ink/[0.07] text-ink hover:bg-ink/[0.12]"}`}
-            >
-              {c.label}
-            </button>
-          );
-        })}
-      </div>
-      {error && <p className="mt-8 text-muted">Couldn’t load discography. Go back and try again.</p>}
-      {loading && !items && (
-        <div className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="space-y-2.5">
-              <Skeleton className="aspect-square w-full rounded-xl" />
-              <Skeleton className="h-4 w-3/4 rounded-sm" />
-              <Skeleton className="h-3 w-1/2 rounded-sm" />
-            </div>
-          ))}
-        </div>
-      )}
-      {items && items.length === 0 && !loading && (
-        <p className="mt-8 text-muted">No releases found.</p>
-      )}
-      {items && items.length > 0 && (
-        <div className="mt-6 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6">
-          {items.map((a) => (
-            <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative">
-              <button onClick={() => open({ name: "collection", id: a.id })} className="press block w-full rounded-xl text-left">
-                <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
-                  <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-105" />
-                </div>
-                <div className="mt-2.5 truncate font-semibold">{a.title}</div>
-                <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>
-              </button>
-              <button
-                onClick={() => playCollection(a.id)}
-                aria-label={`Play ${a.title}`}
-                className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-accent text-paper opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
-              >
-                <Play size={18} className="ml-0.5 fill-current" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -2884,7 +2697,7 @@ export function ChartsPage() {
               {shelf.tracks.length > 0 && <TrackGrid tracks={shelf.tracks} numbered={/trend|chart|top/i.test(shelf.title)} />}
               {shelf.albums.length > 0 && <Albums items={shelf.albums} />}
               {shelf.artists && shelf.artists.length > 0 && (
-                <ArtistsRow items={shelf.artists} numbered={/trend|chart|top/i.test(shelf.title)} />
+                <ArtistCards items={shelf.artists} />
               )}
             </Section>
           ))}
@@ -4921,27 +4734,54 @@ function LikeButton({ track }: { track: Track }) {
   );
 }
 
-function Albums({ items }: { items: Album[] }) {
+// A row of album (or playlist) cards that scrolls sideways, or a grid of them. remember: opening one
+// from search adds it to Recent Searches.
+const ROW = "-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]";
+const GRID = "grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6";
+function Albums({ items, grid, remember }: { items: Album[]; grid?: boolean; remember?: boolean }) {
+  const pick = (a: Album) => remember && addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
   return (
-    <div className="-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]">
+    <div className={grid ? GRID : ROW}>
       {items.map((a) => (
-        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative w-44 shrink-0">
-          <button onClick={() => open({ name: "collection", id: a.id })} className="press block w-full rounded-xl text-left">
+        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className={`group relative ${grid ? "" : "w-44 shrink-0"}`}>
+          <button onClick={() => (pick(a), open({ name: "collection", id: a.id }))} className="press block w-full rounded-xl text-left">
             <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
               <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
             </div>
             <div className="mt-2.5 truncate font-semibold">{a.title}</div>
-            <div className="truncate text-sm text-muted">{a.year ?? a.by}</div>
+            <div className="truncate text-sm text-muted">{[a.kind, a.year ?? a.by].filter(Boolean).join(" · ")}</div>
           </button>
-          {/* Sits on the cover's bottom-right corner: 176px cover − 44px button − 8px inset. */}
-          <button
-            onClick={() => playCollection(a.id)}
-            aria-label={`Play ${a.title}`}
-            className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
-          >
-            <Play size={18} className="ml-0.5 fill-current" />
-          </button>
+          {/* Sits on the cover's bottom-right corner. */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 aspect-square">
+            <button
+              onClick={() => (pick(a), playCollection(a.id))}
+              aria-label={`Play ${a.title}`}
+              className="pointer-events-auto absolute right-2 bottom-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+            >
+              <Play size={18} className="ml-0.5 fill-current" />
+            </button>
+          </div>
         </div>
+      ))}
+    </div>
+  );
+}
+
+function ArtistCards({ items, grid, remember }: { items: SearchArtist[]; grid?: boolean; remember?: boolean }) {
+  return (
+    <div className={grid ? GRID : ROW}>
+      {items.map((a) => (
+        <button
+          key={a.id}
+          onClick={() => (remember && addRecentSearch({ id: a.id, kind: "artist", title: a.name, thumb: a.thumb }), open({ name: "artist", id: a.id }))}
+          className={`press group text-center ${grid ? "" : "w-36 shrink-0"}`}
+        >
+          <div className="aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">
+            {a.thumb && <img src={art(a.thumb, 300)} alt="" loading="lazy" className="size-full object-cover transition-transform duration-300 group-hover:scale-105" />}
+          </div>
+          <div className="mt-2.5 truncate font-semibold">{a.name}</div>
+          <div className="text-xs text-muted">Artist</div>
+        </button>
       ))}
     </div>
   );

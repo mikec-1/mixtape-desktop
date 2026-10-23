@@ -616,7 +616,7 @@ on("timeupdate", () => {
 
 on("play", () => {
   const t = get().queue[get().index];
-  if (t) sendNowPlaying(t, audio.duration || undefined);
+  if (t) sendNowPlaying(t, audio.duration || undefined, audio.currentTime);
 });
 on("pause", () => clearDiscordRpc());
 usePrivate.subscribe((s) => s.on && clearDiscordRpc());
@@ -626,7 +626,6 @@ export function pause() {
   clearInterval(ramp);
   players.forEach((p) => p.pause());
   fades.set(audio, 1), level(audio);
-  clearDiscordRpc();
 }
 export const toggle = () => (!audio.src && !get().loading ? load(get().index, resume.time) : audio.paused ? audio.play().catch(() => {}) : pause());
 let saved = 0;

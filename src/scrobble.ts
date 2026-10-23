@@ -1,257 +1,107 @@
 import { fetch } from "@tauri-apps/plugin-http";
-import md5 from "js-md5";
+import { md5 } from "js-md5";
 import { idbGet, idbPut, notify, usePrivate, useSettings } from "./store";
-import type { Artist, Track } from "./yt";
+import type { Track } from "./yt";
 
-const LASTFM_KEY = import.meta.env.VITE_LASTFM_KEY || "";
-const LASTFM_SECRET = import.meta.env.VITE_LASTFM_SECRET || "";
+// Sends what you play to Last.fm and ListenBrainz, and shows it on Discord. Scrobbles that fail (offline)
+// wait in IndexedDB and go with the next one that gets through.
+const KEY = import.meta.env.VITE_LASTFM_KEY || "";
+const SECRET = import.meta.env.VITE_LASTFM_SECRET || "";
+const LASTFM = "https://ws.audioscrobbler.com/2.0/";
 
-// Sign Last.fm API parameters with the shared secret
-function lastfmSign(params: Record<string, string>) {
-  const sorted = Object.keys(params)
-    .filter((k) => k !== "format" && k !== "callback" && k !== "api_sig")
-    .sort();
-  let str = "";
-  for (const k of sorted) str += k + params[k];
-  str += LASTFM_SECRET;
-  return (md5 as any)(str);
+const by = (t: Track) => t.artists.map((a) => a.name).join(", ") || "Unknown Artist";
+
+// Last.fm signs every call: the params sorted and run together, then the secret, md5'd.
+function signed(params: Record<string, string>) {
+  const sig = md5(Object.keys(params).sort().map((k) => k + params[k]).join("") + SECRET);
+  return new URLSearchParams({ ...params, api_key: KEY, api_sig: sig, format: "json" });
+}
+async function lastfm(params: Record<string, string>, post = true) {
+  const body = signed({ ...params, api_key: KEY });
+  const r = post ? await fetch(LASTFM, { method: "POST", body }) : await fetch(`${LASTFM}?${body}`);
+  const data = await r.json();
+  if (!r.ok || data.error) throw new Error(data.message || `Last.fm: ${r.status}`);
+  return data;
 }
 
-// Start Last.fm desktop authentication: fetch token and open browser auth page
-export async function lastfmAuthStart(): Promise<string> {
-  if (!LASTFM_KEY || !LASTFM_SECRET) {
-    throw new Error("Last.fm API key or secret is missing from .env");
-  }
-  const res = await fetch(`https://ws.audioscrobbler.com/2.0/?method=auth.getToken&api_key=${LASTFM_KEY}&format=json`);
-  if (!res.ok) throw new Error(`Last.fm token error: ${res.status}`);
-  const data = (await res.json()) as { token?: string; message?: string };
-  if (!data.token) throw new Error(data.message || "Failed to obtain token from Last.fm");
-  const url = `https://www.last.fm/api/auth?api_key=${LASTFM_KEY}&token=${data.token}`;
-  try {
-    const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(url);
-  } catch {
-    window.open(url, "_blank");
-  }
-  return data.token;
+// Sign-in: Last.fm's desktop flow. Start opens its page in the browser; finish runs after you allow it there.
+export async function lastfmAuthStart() {
+  if (!KEY || !SECRET) throw new Error("Last.fm isn't set up in this build");
+  const { token } = await lastfm({ method: "auth.getToken" }, false);
+  await (await import("@tauri-apps/plugin-opener")).openUrl(`https://www.last.fm/api/auth?api_key=${KEY}&token=${token}`);
+  return token as string;
 }
-
-// Complete Last.fm authentication: exchange token for session key
-export async function lastfmAuthFinish(token: string): Promise<{ username: string; sessionKey: string }> {
-  const params: Record<string, string> = {
-    method: "auth.getSession",
-    api_key: LASTFM_KEY,
-    token,
-  };
-  params.api_sig = lastfmSign(params);
-  params.format = "json";
-
-  const qs = new URLSearchParams(params).toString();
-  const res = await fetch(`https://ws.audioscrobbler.com/2.0/?${qs}`);
-  if (!res.ok) throw new Error(`Last.fm session error: ${res.status}`);
-  const data = (await res.json()) as { session?: { name: string; key: string }; message?: string };
-  if (!data.session?.key) throw new Error(data.message || "Failed to authenticate session with Last.fm");
-  const username = data.session.name;
-  const sessionKey = data.session.key;
-  useSettings.setState({ lastfmSessionKey: sessionKey, lastfmUsername: username });
-  notify({ text: `Connected to Last.fm as ${username}` });
-  return { username, sessionKey };
+export async function lastfmAuthFinish(token: string) {
+  const { session } = await lastfm({ method: "auth.getSession", token }, false);
+  useSettings.setState({ lastfmSessionKey: session.key, lastfmUsername: session.name });
+  notify({ text: `Connected to Last.fm as ${session.name}` });
 }
-
 export function lastfmSignOut() {
   useSettings.setState({ lastfmSessionKey: "", lastfmUsername: "" });
-  notify({ text: "Disconnected from Last.fm" });
 }
 
-type OfflineScrobble = {
-  artist: string;
-  track: string;
-  album?: string;
-  timestamp: number;
-  duration?: number;
-};
-
-// Retry any scrobbles that failed while offline
-async function drainOfflineScrobbles() {
-  const sessionKey = useSettings.getState().lastfmSessionKey;
-  if (!sessionKey || !LASTFM_KEY || !LASTFM_SECRET) return;
-  const queue = (await idbGet<OfflineScrobble[]>("lastfm-offline-scrobbles").catch(() => undefined)) || [];
-  if (!queue.length) return;
-
-  const remaining: OfflineScrobble[] = [];
-  for (const item of queue) {
-    try {
-      const params: Record<string, string> = {
-        method: "track.scrobble",
-        api_key: LASTFM_KEY,
-        sk: sessionKey,
-        artist: item.artist,
-        track: item.track,
-        timestamp: String(item.timestamp),
-      };
-      if (item.album) params.album = item.album;
-      if (item.duration) params.duration = String(Math.round(item.duration));
-      params.api_sig = lastfmSign(params);
-      params.format = "json";
-
-      const body = new URLSearchParams(params).toString();
-      const res = await fetch("https://ws.audioscrobbler.com/2.0/", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body,
-      });
-      if (!res.ok) remaining.push(item);
-    } catch {
-      remaining.push(item);
-    }
-  }
-  await idbPut("lastfm-offline-scrobbles", remaining).catch(() => {});
-}
-
-// ListenBrainz submission helper
-async function submitListenBrainz(
-  token: string,
-  listenType: "playing_now" | "single",
-  track: Track,
-  listenedAt?: number,
-) {
-  const artistName = track.artists.map((a: Artist) => a.name).join(", ") || track.artists[0]?.name || "Unknown Artist";
-  const payload: any = {
-    track_metadata: {
-      artist_name: artistName,
-      track_name: track.title,
-      additional_info: {
-        media_player: "Sleeve",
-        submission_client: "Sleeve",
-      },
-    },
-  };
-  if (track.album) payload.track_metadata.release_name = track.album;
-  if (listenType === "single" && listenedAt) {
-    payload.listened_at = Math.floor(listenedAt / 1000);
-  }
-
-  const res = await fetch("https://api.listenbrainz.org/1/submit-listens", {
+type Listen = { track: Track; at: number; secs?: number }; // at: when it started, in ms
+const toLastfm = ({ track, at, secs }: Listen) => ({
+  artist: by(track), track: track.title, timestamp: String(Math.floor(at / 1000)),
+  ...(track.album && { album: track.album }), ...(secs && { duration: String(Math.round(secs)) }),
+});
+const toBrainz = ({ track, at }: Partial<Listen> & { track: Track }) => ({
+  ...(at && { listened_at: Math.floor(at / 1000) }),
+  track_metadata: { artist_name: by(track), track_name: track.title, release_name: track.album, additional_info: { media_player: "Sleeve" } },
+});
+async function brainz(token: string, listen_type: "playing_now" | "single" | "import", payload: object[]) {
+  const r = await fetch("https://api.listenbrainz.org/1/submit-listens", {
     method: "POST",
-    headers: {
-      Authorization: `Token ${token.trim()}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      listen_type: listenType,
-      payload: [payload],
-    }),
+    headers: { Authorization: `Token ${token.trim()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ listen_type, payload }),
   });
-  return res.ok;
+  if (!r.ok) throw new Error(`ListenBrainz: ${r.status}`);
 }
 
-// Discord Rich Presence helper
-async function setDiscordRpc(track: Track, duration?: number) {
-  if (!("__TAURI_INTERNALS__" in window)) return;
-  const { invoke } = await import("@tauri-apps/api/core");
-  const artist = track.artists.map((a: Artist) => a.name).join(", ") || "";
-  const start = Date.now();
-  const end = duration && duration > 0 ? start + Math.round(duration * 1000) : undefined;
-  await invoke("discord_set", {
-    title: track.title,
-    artist,
-    art: track.thumb,
-    start,
-    end,
-  }).catch(() => {});
-}
-
-export async function clearDiscordRpc() {
-  if (!("__TAURI_INTERNALS__" in window)) return;
-  const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("discord_clear").catch(() => {});
-}
-
-// Send "now playing" notification when a track starts
-export function sendNowPlaying(track: Track, duration?: number) {
+export function sendNowPlaying(track: Track, secs?: number, at = 0) {
   if (usePrivate.getState().on) return;
-  const { listenBrainzToken, lastfmSessionKey, discordRpc } = useSettings.getState();
-
-  // 1. ListenBrainz
-  if (listenBrainzToken) {
-    submitListenBrainz(listenBrainzToken, "playing_now", track).catch(() => {});
+  const { listenBrainzToken: lb, lastfmSessionKey: sk, discordRpc } = useSettings.getState();
+  if (lb) brainz(lb, "playing_now", [toBrainz({ track })]).catch(() => {});
+  if (sk && KEY) {
+    const { timestamp: _, ...p } = toLastfm({ track, at: 0, secs });
+    lastfm({ method: "track.updateNowPlaying", sk, ...p }).catch(() => {});
   }
-
-  // 2. Last.fm
-  if (lastfmSessionKey && LASTFM_KEY && LASTFM_SECRET) {
-    const artist = track.artists.map((a: Artist) => a.name).join(", ") || track.artists[0]?.name || "Unknown Artist";
-    const params: Record<string, string> = {
-      method: "track.updateNowPlaying",
-      api_key: LASTFM_KEY,
-      sk: lastfmSessionKey,
-      artist,
-      track: track.title,
-    };
-    if (track.album) params.album = track.album;
-    if (duration && duration > 0) params.duration = String(Math.round(duration));
-    params.api_sig = lastfmSign(params);
-    params.format = "json";
-
-    const body = new URLSearchParams(params).toString();
-    fetch("https://ws.audioscrobbler.com/2.0/", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    }).catch(() => {});
-  }
-
-  // 3. Discord Rich Presence
-  if (discordRpc) {
-    setDiscordRpc(track, duration).catch(() => {});
-  }
+  if (discordRpc) showDiscord(track, secs, at);
 }
 
-// Submit a completed scrobble
-export async function sendScrobble(track: Track, startedAt: number, duration?: number) {
+// Each service keeps its own waiting list, so one being down doesn't hold up the other.
+async function send(service: "lastfm" | "brainz", listen?: Listen) {
+  const { listenBrainzToken: lb, lastfmSessionKey: sk } = useSettings.getState();
+  const idb = `scrobbles-${service}`;
+  const queue = [...((await idbGet<Listen[]>(idb)) ?? []), ...(listen ? [listen] : [])];
+  if (!queue.length) return;
+  try {
+    if (service === "brainz") await brainz(lb, queue.length > 1 ? "import" : "single", queue.map(toBrainz));
+    // Last.fm takes up to 50 in one call, as track[0], artist[0]…
+    else for (let i = 0; i < queue.length; i += 50) {
+      const batch = Object.assign({}, ...queue.slice(i, i + 50).map((l, n) => Object.fromEntries(Object.entries(toLastfm(l)).map(([k, v]) => [`${k}[${n}]`, v]))));
+      await lastfm({ method: "track.scrobble", sk, ...batch });
+    }
+    await idbPut(idb, []);
+  } catch {
+    await idbPut(idb, queue.slice(-1000)); // ponytail: oldest dropped past 1000; Last.fm refuses >2 weeks old anyway
+  }
+}
+export function sendScrobble(track: Track, at: number, secs?: number) {
   if (usePrivate.getState().on) return;
   const { listenBrainzToken, lastfmSessionKey } = useSettings.getState();
+  if (listenBrainzToken) void send("brainz", { track, at, secs });
+  if (lastfmSessionKey && KEY) void send("lastfm", { track, at, secs });
+}
 
-  // 1. ListenBrainz
-  if (listenBrainzToken) {
-    submitListenBrainz(listenBrainzToken, "single", track, startedAt).catch(() => {});
-  }
-
-  // 2. Last.fm
-  if (lastfmSessionKey && LASTFM_KEY && LASTFM_SECRET) {
-    const artist = track.artists.map((a: Artist) => a.name).join(", ") || track.artists[0]?.name || "Unknown Artist";
-    const timestamp = Math.floor(startedAt / 1000);
-    const params: Record<string, string> = {
-      method: "track.scrobble",
-      api_key: LASTFM_KEY,
-      sk: lastfmSessionKey,
-      artist,
-      track: track.title,
-      timestamp: String(timestamp),
-    };
-    if (track.album) params.album = track.album;
-    if (duration && duration > 0) params.duration = String(Math.round(duration));
-    params.api_sig = lastfmSign(params);
-    params.format = "json";
-
-    const body = new URLSearchParams(params).toString();
-    try {
-      const res = await fetch("https://ws.audioscrobbler.com/2.0/", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body,
-      });
-      if (!res.ok) throw new Error(`Last.fm scrobble failed: ${res.status}`);
-      void drainOfflineScrobbles();
-    } catch {
-      const queue = (await idbGet<OfflineScrobble[]>("lastfm-offline-scrobbles").catch(() => undefined)) || [];
-      queue.push({
-        artist,
-        track: track.title,
-        album: track.album,
-        timestamp,
-        duration,
-      });
-      await idbPut("lastfm-offline-scrobbles", queue).catch(() => {});
-    }
-  }
+// Discord: at is how far into the song you are, so its elapsed timer matches after a resume.
+async function showDiscord(t: Track, secs: number | undefined, at: number) {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const start = Date.now() - at * 1000;
+  invoke("discord_set", { title: t.title, artist: by(t), art: t.thumb, start, end: secs ? start + secs * 1000 : undefined }).catch(() => {});
+}
+export async function clearDiscordRpc() {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  (await import("@tauri-apps/api/core")).invoke("discord_clear").catch(() => {});
 }

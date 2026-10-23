@@ -21,6 +21,7 @@
     "core:tray:default",
     "core:app:allow-default-window-icon",
     "core:menu:default",
+    "autostart:default",
     {
       "identifier": "http:default",
       "allow": [

@@ -1,17 +1,7 @@
-use tauri::{webview::PageLoadEvent, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-#[cfg(target_os = "macos")]
-use tauri::RunEvent;
+use tauri::{webview::PageLoadEvent, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 mod account;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod discord;
-#[cfg(any(target_os = "android", target_os = "ios"))]
-mod discord {
-    #[tauri::command]
-    pub fn discord_set(_title: String, _artist: String, _art: Option<String>, _start: Option<i64>, _end: Option<i64>) {}
-    #[tauri::command]
-    pub fn discord_clear() {}
-}
 mod local;
 mod offline;
 
@@ -48,19 +38,12 @@ fn float_mini(window: tauri::WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default()
+    tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
+        .plugin(tauri_plugin_opener::init())
         // Settings → Startup. Opened at login it starts hidden; main.tsx shows it unless you chose otherwise.
-        builder = builder.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--login"])));
-    }
-
-    builder
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--login"])))
         .invoke_handler(tauri::generate_handler![float_mini, local::scan_music, local::allow_music, local::local_lyrics, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;

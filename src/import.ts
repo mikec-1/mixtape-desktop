@@ -1,6 +1,6 @@
 import { fetch } from "@tauri-apps/plugin-http";
 import { searchKind, searchYouTube, parseSecs, SEP, type Track } from "./yt";
-import { newPlaylist, notify, open, useStore, type View } from "./store";
+import { likeAll, newPlaylist, notify, open, plural, useStore, type Dialog, type View } from "./store";
 import { playlist as dzPlaylist } from "./deezer";
 
 // A song the import wasn't sure of (pick: the guess it added) or didn't find, with the next best results to choose from.
@@ -182,22 +182,26 @@ const byArtist = (row: CsvTrack, c: Track) => {
   return rowArtists(row.artist).some((a) => words(a).every((w) => hay.includes(w)));
 };
 
-// Matches rows a few at a time; throttled searches are retried in find, so a miss is a real miss.
-async function matchAll(rows: CsvTrack[], each: (done: number) => void, stopped = () => false) {
-  const out: Awaited<ReturnType<typeof find>>[] = [];
-  const cache = new Map<string, Promise<Track[]>>();
+// Runs fn over items a few at a time, saying how many are done.
+export async function pool<T, R>(items: T[], fn: (x: T) => Promise<R>, each: (done: number, got: R) => void, stopped = () => false) {
+  const out: R[] = [];
   let next = 0, done = 0;
-  // ponytail: 6 songs at once; at 12 YouTube started refusing searches.
+  // ponytail: 6 at once; at 12 YouTube started refusing searches.
   await Promise.all(
-    Array.from({ length: Math.min(6, rows.length) }, async () => {
-      while (next < rows.length && !stopped()) {
+    Array.from({ length: Math.min(6, items.length) }, async () => {
+      while (next < items.length && !stopped()) {
         const i = next++;
-        out[i] = await find(rows[i], cache).catch(() => ({ hit: undefined, sure: false, options: [] }));
-        each(++done);
+        out[i] = await fn(items[i]);
+        each(++done, out[i]);
       }
     }),
   );
   return out;
+}
+// Matches rows; throttled searches are retried in find, so a miss is a real miss.
+function matchAll(rows: CsvTrack[], each: (done: number, got?: { hit?: Track }) => void, stopped = () => false) {
+  const cache = new Map<string, Promise<Track[]>>();
+  return pool(rows, (row) => find(row, cache).catch(() => ({ hit: undefined, sure: false, options: [] as Track[] })), each, stopped);
 }
 
 // Search again for the ones still not found, e.g. after YouTube stopped throttling.
@@ -266,22 +270,35 @@ export async function importLink(text: string) {
   }
 }
 
-async function importRows(name: string, rows: CsvTrack[], cover?: string) {
+// Reviews wait their turn (several playlists from Spotify): the next opens when the last one closes.
+// Watched from the first one on, not at load: store.ts reaches this file (through deezer.ts) before it's done.
+const waiting: Dialog[] = [];
+let watching: (() => void) | undefined;
+const later = (d: Dialog) => (waiting.push(d), (watching ??= useStore.subscribe((s) => !s.dialog && waiting.length && useStore.setState({ dialog: waiting.shift() }))));
+
+// Matches rows into a new playlist, or with liked into Liked Songs (cover is then only the toast's). Resolves true if it was cancelled.
+export async function importRows(name: string, rows: CsvTrack[], cover?: string, liked = false) {
   cancel?.();
   let stopped = false;
   const stop = (cancel = () => (stopped = true));
   const action = { label: "Cancel", run: stop };
   let shown = 0;
-  const progress = (done: number) => Date.now() - shown > 250 && !stopped && ((shown = Date.now()), notify({ text: `Importing ${name}…`, detail: `${done} of ${rows.length} songs`, action, sticky: true }));
+  const progress = (done: number, got?: { hit?: Track }) => Date.now() - shown > 250 && !stopped && ((shown = Date.now()), notify({ text: `Importing ${name}…`, detail: `${done} of ${rows.length} songs`, action, sticky: true, thumb: cover ?? got?.hit?.thumb }));
   progress(0);
   const found = await matchAll(rows, progress, () => stopped);
   if (cancel === stop) cancel = undefined;
 
   const tracks = found.flatMap((f) => (f?.hit ? [f.hit] : []));
   const review: Review[] = found.flatMap((f, i) => (f && !f.sure ? [{ row: rows[i], pick: f.hit, options: f.options }] : []));
-  const id = tracks.length ? newPlaylist(tracks, undefined, name, cover) : undefined;
-  if (stopped) return notify({ text: "Import Cancelled", detail: tracks.length ? `Saved ${tracks.length} songs to ${name}` : "No songs were imported", thumb: tracks[0]?.thumb });
-  useStore.setState({ toast: undefined, dialog: { kind: "import", playlist: id ?? newPlaylist([], undefined, name, cover), name, added: tracks.length, items: review } });
+  if (liked && tracks.length) likeAll(tracks, true);
+  const id = liked ? undefined : tracks.length ? newPlaylist(tracks, undefined, name, cover) : undefined;
+  if (stopped) return notify({ text: "Import Cancelled", detail: tracks.length ? `Saved ${tracks.length} songs to ${name}` : "No songs were imported", thumb: cover ?? tracks[0]?.thumb }), true;
+  if (!review.length) return notify({ text: `Imported ${name}`, detail: plural(tracks.length, "song"), thumb: cover ?? tracks[0]?.thumb }), false;
+  const d: Dialog = { kind: "import", playlist: liked ? undefined : (id ?? newPlaylist([], undefined, name, cover)), name, added: tracks.length, items: review };
+  useStore.setState({ toast: undefined });
+  if (useStore.getState().dialog) later(d);
+  else useStore.setState({ dialog: d });
+  return false;
 }
 
 export function demo() {

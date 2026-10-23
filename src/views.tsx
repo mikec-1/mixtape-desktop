@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ArrowDownToLine, Link2, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, Disc3, Link2, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
@@ -21,6 +21,7 @@ import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCom
 import { version } from "../package.json";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
 import { importLink, importPlaylistFile, isLink, rematch } from "./import";
+import { connect, contents, disconnect, importSpotify, useSpotify } from "./spotify";
 
 // An album from Deezer (artist pages) or YouTube Music (search, Home).
 const collection = (id: string) => (isDeezer(id) ? deezerAlbum(id) : ytCollection(id));
@@ -593,7 +594,7 @@ export function Library() {
           <button onClick={() => open({ name: "history" })} aria-label="History" title="History" className={round2}>
             <HistoryIcon size={17} />
           </button>
-          <button onClick={() => popup([{ text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist() }) }, { text: "New Folder", action: () => open({ name: "folder", id: newFolder() }) }, { text: "Import from Link…", action: () => useStore.setState({ dialog: { kind: "link" } }) }])} aria-label="New" title="New Playlist or Folder" className={round2}>
+          <button onClick={() => popup([{ text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist() }) }, { text: "New Folder", action: () => open({ name: "folder", id: newFolder() }) }, { text: "Import from Link…", action: () => useStore.setState({ dialog: { kind: "link" } }) }, ...(canHaveFiles ? [{ text: "Import from Spotify…", action: () => useStore.setState({ dialog: { kind: "spotify" } }) }] : [])])} aria-label="New" title="New Playlist or Folder" className={round2}>
             <Plus size={18} />
           </button>
         </div>
@@ -2230,7 +2231,7 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "import" ? <ImportReview d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "import" ? <ImportReview d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
 
@@ -2260,6 +2261,76 @@ function LinkImport() {
         <button onClick={closeDialog} className={quiet}>Cancel</button>
         <button disabled={!isLink(text)} onClick={go} className={solid}>Import</button>
       </div>
+    </Modal>
+  );
+}
+
+// Your Spotify library, once you're signed in (spotify.ts): everything is ticked, untick what stays behind.
+function SpotifyImport() {
+  const name = useSpotify((s) => s.name);
+  const history = useSettings((s) => s.history);
+  const [lib, setLib] = useState<Awaited<ReturnType<typeof contents>>>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [off, setOff] = useState(() => new Set<string>()); // unticked: playlist ids, or liked, albums, artists, recent
+  const say = (e: unknown) => setError(String(e instanceof Error ? e.message : e));
+  useEffect(() => void (name && contents().then(setLib, say)), [name]);
+  const tick = (id: string) => setOff((o) => (o.has(id) ? new Set([...o].filter((x) => x !== id)) : new Set([...o, id])));
+  const signIn = () => (setBusy(true), setError(""), connect().catch(say).finally(() => setBusy(false)));
+  const on = (id: string) => !off.has(id) && (id !== "recent" || history);
+  const picked = lib ? lib.playlists.filter((p) => on(p.id)) : [];
+  const any = !!lib && (picked.length > 0 || ["liked", "albums", "artists", "recent"].some(on));
+  const go = () => lib && (closeDialog(), void importSpotify({ playlists: picked, liked: on("liked"), albums: on("albums"), artists: on("artists"), recent: on("recent") }));
+  // A plain function, not a component, so ticking one keeps its focus.
+  const row = (id: string, cover: ReactNode, title: string, detail: string) => (
+    <li key={id}>
+      <label className={`flex h-14 items-center gap-3 rounded-xl px-2 hover:bg-ink/[0.05] ${id === "recent" && !history ? "opacity-50" : ""}`}>
+        {cover}
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-semibold">{title}</div>
+          <div className="truncate text-sm text-muted">{detail}</div>
+        </div>
+        <input type="checkbox" checked={on(id)} disabled={id === "recent" && !history} onChange={() => tick(id)} className="size-4 shrink-0 accent-accent" />
+      </label>
+    </li>
+  );
+  const tile = (bg: string, icon: ReactNode) => <div className={`grid size-10 shrink-0 place-items-center rounded-md text-white ${bg}`}>{icon}</div>;
+  return (
+    <Modal label="Import from Spotify" onClose={closeDialog} className="flex max-h-[86vh] w-[min(520px,94vw)] flex-col">
+      <header className="px-6 pt-5">
+        <h2 className="text-xl font-bold tracking-tight">Import from Spotify</h2>
+        <p className="text-sm text-muted">{name ? `Signed in as ${name}. Untick anything you’d rather leave behind.` : "Sign in to bring over your playlists, Liked Songs, albums and artists. Your recent plays join your History, and keep coming in while you’re signed in."}</p>
+      </header>
+      {lib ? (
+        <ul className="mt-3 min-h-0 flex-1 overflow-y-auto px-4">
+          {row("liked", tile(LIKED, <Heart size={16} className="fill-white" />), "Liked Songs", plural(lib.liked, "song"))}
+          {row("albums", tile(tint("b"), <Disc3 size={18} />), "Albums", plural(lib.albums, "album"))}
+          {row("artists", tile(tint("c"), <UserCheck size={18} />), "Artists", plural(lib.artists, "artist"))}
+          {row("recent", tile(tint("a"), <HistoryIcon size={18} />), "Recent Plays", history ? "Your last 50 plays, into History" : "History is off in Settings")}
+          {lib.playlists.length > 0 && (
+            <li className="flex items-baseline px-2 pt-4 pb-1">
+              <span className="text-sm font-semibold text-muted">Playlists</span>
+              <button onClick={() => setOff((o) => new Set(lib.playlists.every((p) => !o.has(p.id)) ? [...o, ...lib.playlists.map((p) => p.id)] : [...o].filter((id) => !lib.playlists.some((p) => p.id === id))))} className="ml-auto text-sm font-semibold text-accent">
+                {lib.playlists.every((p) => !off.has(p.id)) ? "Select None" : "Select All"}
+              </button>
+            </li>
+          )}
+          {lib.playlists.map((p) => {
+            const n = (p.items ?? p.tracks)?.total;
+            return row(p.id, <img src={p.images?.[0]?.url} alt="" loading="lazy" className="size-10 shrink-0 rounded-md bg-black object-cover" />, p.name, [n !== undefined && plural(n, "song"), p.owner?.display_name !== name && p.owner?.display_name && `by ${p.owner.display_name}`].filter(Boolean).join(" · "));
+          })}
+        </ul>
+      ) : (
+        name && !error && <LoaderCircle size={20} className="mx-auto my-8 animate-spin text-muted" />
+      )}
+      {error && <p className="px-6 pt-3 text-sm text-[#ff375f]">{error}</p>}
+      <footer className="flex items-center gap-2 px-6 py-4">
+        {name && <button onClick={() => (disconnect(), setLib(undefined))} className={quiet}>Sign Out</button>}
+        <div className="ml-auto flex gap-2">
+          <button onClick={closeDialog} className={quiet}>Cancel</button>
+          {name ? <button disabled={!any} onClick={go} className={solid}>Import</button> : <button disabled={busy} onClick={signIn} className={`${btn} bg-[#1ed760] text-black`}>{busy ? "Waiting for Spotify…" : "Sign In with Spotify"}</button>}
+        </div>
+      </footer>
     </Modal>
   );
 }
@@ -3150,6 +3221,11 @@ function LibraryPane() {
         <button onClick={() => useStore.setState({ dialog: { kind: "link" } })} className={quiet}>
           <Link2 size={16} /> Import from Link…
         </button>
+        {canHaveFiles && (
+          <button onClick={() => useStore.setState({ dialog: { kind: "spotify" } })} className={quiet}>
+            <ArrowDownToLine size={16} /> Import from Spotify…
+          </button>
+        )}
         <input ref={csvFile} type="file" accept=".csv,text/csv" hidden onChange={(e) => (e.target.files?.[0] && void importPlaylistFile(e.target.files[0]), (e.target.value = ""))} />
       </div>
       {canHaveFiles && <LocalFolders />}

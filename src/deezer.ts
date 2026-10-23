@@ -32,7 +32,7 @@ type DzTrack = { id: number; title: string; duration?: number; explicit_lyrics?:
 
 export const isDeezer = (id: string) => id.startsWith("dz:");
 const who = (a: DzArtist): Artist => ({ id: `dz:artist:${a.id}`, name: a.name });
-const length = (s = 0) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+export const length = (s = 0) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 const toTrack = (t: DzTrack, album = t.album): Track => ({
   id: `dz:${t.id}`,
   title: t.title,
@@ -83,16 +83,16 @@ export async function playlist(id: string) {
 export const withGuests = (tracks: Track[]) =>
   Promise.all(tracks.map((t) => (isDeezer(t.id) ? get(`track/${t.id.slice(3)}`).then((d: DzTrack) => (d.contributors && d.contributors.length > 1 ? { ...t, artists: d.contributors.map(who) } : t), () => t) : t)));
 
-// A song from Deezer plays from its copy on YouTube, found the way a CSV import finds songs, the first time
-// it's played or queued up next, and remembered.
+// A song from Deezer or Spotify plays from its copy on YouTube, found the way a CSV import finds songs, the
+// first time it's played or queued up next, and remembered.
 const found: Record<string, string> = JSON.parse(localStorage.youtubeIds ?? "{}");
 const finding = new Map<string, Promise<string>>();
 export function youtubeId(t: Track): Promise<string> {
-  if (!isDeezer(t.id) || found[t.id]) return Promise.resolve(found[t.id] ?? t.id);
+  if (!/^(dz|sp):/.test(t.id) || found[t.id]) return Promise.resolve(found[t.id] ?? t.id);
   if (!finding.has(t.id))
     finding.set(
       t.id,
-      findSong({ title: t.title, artist: t.artists.map((a) => a.name).join(", "), album: t.album, secs: parseSecs(t.duration) })
+      findSong({ title: t.title, artist: t.artists.map((a) => a.name).join(", "), album: t.album, secs: parseSecs(t.duration), isrc: t.isrc })
         .then((hit) => (hit ? ((found[t.id] = hit.id), (localStorage.youtubeIds = JSON.stringify(found)), hit.id) : Promise.reject(new Error(`Couldn’t find “${t.title}” on YouTube`))))
         .finally(() => finding.delete(t.id)),
     );

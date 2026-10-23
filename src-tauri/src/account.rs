@@ -6,17 +6,21 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// The ports Sleeve's redirect URLs are registered for (docs/accounts.md), tried in turn.
+/// The ports Sleeve's redirect URLs are registered for (docs/accounts.md), tried in turn. Spotify (spotify.ts)
+/// asks for its own one port.
 const PORTS: [u16; 3] = [53682, 53683, 53684];
 static LISTENER: Mutex<Option<TcpListener>> = Mutex::new(None);
 /// Starting again gives up on a wait still going (a sign-in left half done in the browser).
 static ROUND: AtomicU64 = AtomicU64::new(0);
 
 #[tauri::command]
-pub fn oauth_start() -> Result<u16, String> {
-    let l = PORTS.iter().find_map(|p| TcpListener::bind(("127.0.0.1", *p)).ok()).ok_or("Every sign-in port is in use")?;
-    let port = l.local_addr().map_err(|e| e.to_string())?.port();
+pub fn oauth_start(port: Option<u16>) -> Result<u16, String> {
+    // A wait still going gives up first and lets go of its port within 100 ms, so trying again can have it.
     ROUND.fetch_add(1, Ordering::SeqCst);
+    let ports = port.map_or(PORTS.to_vec(), |p| vec![p]);
+    let bind = || ports.iter().find_map(|p| TcpListener::bind(("127.0.0.1", *p)).ok());
+    let l = bind().or_else(|| (std::thread::sleep(Duration::from_millis(250)), bind()).1).ok_or("Every sign-in port is in use")?;
+    let port = l.local_addr().map_err(|e| e.to_string())?.port();
     *LISTENER.lock().unwrap() = Some(l);
     Ok(port)
 }

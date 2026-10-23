@@ -36,6 +36,7 @@ export default function App() {
   const open = useSettings((s) => s.sidebar);
   const width = useSettings((s) => s.sidebarWidth);
   const queue = useSettings((s) => s.queue);
+  const queueWidth = useSettings((s) => s.queueWidth);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -95,7 +96,7 @@ export default function App() {
     // The sidebar, one big page card and the queue side by side, the player under all three. The gaps drag the window.
     // --sidebar and --panel centre the toasts on the page card. The welcome goes over all of it.
     <>
-    <div data-tauri-drag-region inert={!!welcome} className={`flex h-full flex-col gap-2 p-2 ${onWindows ? "pt-8" : ""}`} style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
+    <div data-tauri-drag-region inert={!!welcome} className={`flex h-full flex-col gap-2 p-2 ${onWindows ? "pt-8" : ""}`} style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? `${queueWidth + 8}px` : "0px" } as CSSProperties}>
       <div className="flex min-h-0 flex-1 gap-2">
         <Sidebar root={root} open={open} width={width} inert={covered} />
         <main inert={covered} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
@@ -349,7 +350,7 @@ function Toast() {
   const t = toast ?? last;
 
   return (
-    <div role="status" className="pointer-events-none fixed bottom-[92px] left-[calc(50%+var(--sidebar)/2-var(--panel)/2+4px)] z-40 -translate-x-1/2">
+    <div role="status" className="pointer-events-none fixed bottom-[110px] left-[calc(50%+var(--sidebar)/2-var(--panel)/2+4px)] z-40 -translate-x-1/2">
       {t && (
         <div
           inert={!toast}
@@ -357,7 +358,7 @@ function Toast() {
           onPointerLeave={() => setHold(false)}
           onFocus={() => setHold(true)}
           onBlur={() => setHold(false)}
-          className={`flex w-[min(460px,calc(100vw-140px))] items-center gap-4 rounded-[22px] bg-neutral-900 p-3 text-white shadow-2xl ring-1 shadow-black/30 ring-white/10 ${
+          className={`flex w-[min(460px,calc(100vw-var(--sidebar)-var(--panel)-56px))] items-center gap-4 rounded-[22px] bg-neutral-900 p-3 text-white ${t.thumb || t.sticky ? "" : "pl-5"} shadow-2xl ring-1 shadow-black/30 ring-white/10 ${
             toast
               ? "pointer-events-auto translate-y-0 scale-100 opacity-100 transition-[opacity,translate,scale] duration-400 ease-(--ease-out)"
               : "translate-y-4 scale-95 opacity-0 transition-[opacity,translate,scale] duration-200 ease-in"
@@ -365,9 +366,8 @@ function Toast() {
         >
           {/* A new toast over a showing one swaps its contents in place. */}
           <div key={t.id} className="flex min-w-0 flex-1 animate-enter items-center gap-4">
-            <div className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-[10px] bg-white/10">
-              {t.thumb ? <img src={art(t.thumb, 120)} alt="" className="size-full object-cover" /> : <Music size={22} className="text-white/60" />}
-            </div>
+            {/* Ones still working keep a black square for the cover they're about to get. */}
+            {(t.thumb || t.sticky) && <div className="size-14 shrink-0 overflow-hidden rounded-[10px] bg-black">{t.thumb && <img src={art(t.thumb, 120)} alt="" className="size-full object-cover" />}</div>}
             <div className="min-w-0 flex-1">
               <div className="truncate text-[17px] font-bold tracking-tight">{t.text}</div>
               {t.detail && <div className="truncate text-sm text-white/60">{t.detail}</div>}

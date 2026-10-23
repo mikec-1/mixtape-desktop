@@ -41,10 +41,11 @@ type State = {
 export type Dialog =
   | { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track }
   | { kind: "card"; track: Track; pick: number[] }
-  | { kind: "import"; playlist: string; name: string; added: number; items: Review[] }
+  | { kind: "import"; playlist?: string; name: string; added: number; items: Review[] } // no playlist: Liked Songs
   | { kind: "songs"; paths: string[]; editing?: boolean }
   | { kind: "warn"; title: string; text: string; yes: string; then: () => void }
-  | { kind: "link" };
+  | { kind: "link" }
+  | { kind: "spotify" };
 // Feedback for a library change: what happened, to what, and a way back.
 export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean };
 
@@ -122,8 +123,9 @@ let toasts = 0;
 // A sticky toast stays until replaced; one with the same text updates in place (import progress).
 export const notify = (t: Omit<Toast, "id">) => {
   const current = get().toast;
-  const id = current?.sticky && t.sticky && current.text === t.text ? current.id : ++toasts;
-  set({ toast: { ...t, id } });
+  // Progress on the same thing updates in place and keeps the first cover it got, so it doesn't flick between songs.
+  const same = current?.sticky && t.sticky && current.text === t.text;
+  set({ toast: { ...t, id: same ? current.id : ++toasts, thumb: (same && current.thumb) || t.thumb } });
 };
 
 // Every library change goes through here: apply it, say so, offer Undo. Undo puts back only the
@@ -160,9 +162,12 @@ export const toggleFollow = (a: Followed) =>
   change(has(useLibrary.getState().followed, a.id) ? "Unfollowed" : "Following", { title: a.name, thumb: a.thumb }, (s) => ({ followed: toggleIn(s.followed, a) }));
 export const addToPlaylist = (id: string, tracks: Track[]) =>
   change(`Added to ${playlist(id)?.name}`, tracks[0], edit(id, (p) => ({ tracks: [...p.tracks, ...tracks.map(entry)] })));
-// The import review's choices: each guess swapped for the chosen song (or dropped), then the found ones added.
-export const fixImport = (id: string, swap: Map<string, Track | undefined>, add: Track[]) =>
-  change(`Updated ${playlist(id)?.name}`, add[0], edit(id, (p) => ({ tracks: [...p.tracks.flatMap((t) => (!swap.has(t.id) ? [t] : swap.get(t.id) ? [entry(swap.get(t.id)!)] : [])), ...add.map(entry)] })));
+// The import review's choices, in a playlist or (no id) Liked Songs: each guess swapped for the chosen song
+// (or dropped), then the found ones added.
+export const fixImport = (id: string | undefined, swap: Map<string, Track | undefined>, add: Track[]) => {
+  const fix = (ts: Track[]) => [...ts.flatMap((t) => (!swap.has(t.id) ? [t] : swap.get(t.id) ? [entry(swap.get(t.id)!)] : [])), ...add.map(entry)];
+  change(`Updated ${id ? playlist(id)?.name : "Liked Songs"}`, add[0], id ? edit(id, (p) => ({ tracks: fix(p.tracks) })) : (s) => ({ liked: fix(s.liked) }));
+};
 export const removeFromPlaylist = (id: string, at: number[]) =>
   change(`Removed from ${playlist(id)?.name}`, at.length > 1 ? { title: plural(at.length, "song"), thumb: playlist(id)?.tracks[at[0]]?.thumb } : playlist(id)?.tracks[at[0]], edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => !at.includes(i)) })));
 // Rows picked together move together, in their order, to either side of the one they're dropped on.
@@ -356,6 +361,24 @@ export async function plays(each: (p: Play, key: number) => boolean, before?: nu
     };
     r.onerror = () => fail(r.error);
   });
+}
+// Plays from elsewhere (Spotify's recently played), put in time order among yours; ones already in are skipped.
+// ponytail: rewrites the whole history, fine for tens of thousands of plays.
+export async function addPlays(add: Play[]) {
+  if (!useSettings.getState().history || !add.length) return;
+  // Read and rewritten in one transaction, so a play logged meanwhile isn't lost.
+  const tx = (await db).transaction("plays", "readwrite"), s = tx.objectStore("plays"), r = s.getAll();
+  let sorted: Play[] = [];
+  r.onsuccess = () => {
+    const had = new Set((r.result as Play[]).map((p) => `${p.t.id} ${p.at}`));
+    sorted = [...r.result, ...add.filter((p) => !had.has(`${p.t.id} ${p.at}`))].sort((a, b) => a.at - b.at);
+    s.clear();
+    for (const p of sorted) s.add(p);
+  };
+  await new Promise((ok, fail) => ((tx.oncomplete = ok), (tx.onerror = () => fail(tx.error))));
+  const seen: Track[] = [];
+  for (const p of sorted.reverse()) if (!seen.some((x) => x.id === p.t.id) && seen.push(p.t) >= RECENT) break;
+  useHistory.setState({ recent: seen });
 }
 export function clearHistory() {
   void kv("readwrite", (s) => s.clear(), "plays");

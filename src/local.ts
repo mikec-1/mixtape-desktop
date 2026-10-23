@@ -91,28 +91,63 @@ const within = (a: Set<string>, b: Set<string>) => a.size > 0 && [...a].every((w
 const jaccard = (a: Set<string>, b: Set<string>) => [...a].filter((w) => b.has(w)).length / (new Set([...a, ...b]).size || 1);
 type Apple = { trackName: string; artistName: string; collectionName: string; releaseDate?: string; primaryGenreName?: string; artworkUrl100?: string };
 export type Found = { edit: SongEdit; source: "Apple Music" | "YouTube Music"; sure: boolean };
-export async function lookUp(e: SongEdit): Promise<Found | undefined> {
-  const title = stripVersion(e.title);
-  const t = words(title), a = words(e.artist);
-  const r = await fetch(`https://itunes.apple.com/search?${new URLSearchParams({ term: `${e.artist} ${title}`.trim(), entity: "song", limit: "25" })}`)
-    .then((r) => r.json() as Promise<{ results: Apple[] }>)
-    .catch(() => ({ results: [] }));
-  const best = r.results
+// The best of Apple's results for the song read this way round, if any is it.
+function apple(e: SongEdit, results: Apple[]): Found | undefined {
+  const t = words(stripVersion(e.title)), a = words(e.artist);
+  const best = results
     .filter((x) => !/karaoke|tribute|made famous|instrumental/i.test(x.trackName) && within(t, words(stripVersion(x.trackName))) && (!a.size || within(a, words(x.artistName)) || within(words(x.artistName), a)))
     .map((x) => ({ x, score: jaccard(t, words(stripVersion(x.trackName))) * 0.65 + (a.size ? jaccard(a, words(x.artistName)) : 0.5) * 0.35 }))
     .sort((p, q) => q.score - p.score)[0];
-  if (best && best.score >= 0.25) {
-    const x = best.x;
-    const [artist, ...feat] = x.artistName.split(/\s*(?:,|&|\bfeat\.?|\bft\.?)\s*/i).filter(Boolean);
-    return {
-      edit: { ...e, artist, feat: e.feat || feat.join(", "), album: x.collectionName.replace(/\s*-\s*(Single|EP)$/i, ""), year: x.releaseDate?.slice(0, 4), genre: x.primaryGenreName, cover: x.artworkUrl100?.replace("100x100bb", "1000x1000bb") },
-      source: "Apple Music",
-      sure: best.score >= 0.6,
-    };
-  }
-  // Not in Apple's catalogue (a lot of edits only live on YouTube): artwork from YouTube Music, if anything.
-  const [y] = await searchKind(`${e.artist} ${title}`, "song").catch(() => []);
-  return y && within(t, words(y.title)) ? { edit: { ...e, album: e.album || y.album || "", cover: y.thumb }, source: "YouTube Music", sure: false } : undefined;
+  if (!best || best.score < 0.25) return;
+  const x = best.x;
+  const [artist, ...feat] = x.artistName.split(SPLIT).filter(Boolean);
+  return {
+    edit: { ...e, artist, feat: e.feat || feat.join(", "), album: x.collectionName.replace(/\s*-\s*(Single|EP)$/i, ""), year: x.releaseDate?.slice(0, 4), genre: x.primaryGenreName, cover: x.artworkUrl100?.replace("100x100bb", "1000x1000bb") },
+    source: "Apple Music",
+    sure: best.score >= 0.6,
+  };
+}
+// The first of YouTube Music's top songs with all the title's words and the artist (a lot of edits, and
+// some whole artists, are only there): its artwork and album.
+function youtube(e: SongEdit, results: Track[]): Found | undefined {
+  const t = words(stripVersion(e.title)), a = words(e.artist);
+  const y = results.slice(0, 5).find((y) => within(t, words(stripVersion(y.title))) && (!a.size || y.artists.some((n) => within(a, words(n.name)) || within(words(n.name), a))));
+  return y && { edit: { ...e, album: e.album || y.album || "", cover: y.thumb }, source: "YouTube Music", sure: false };
+}
+const SPLIT = /\s*(?:,|&|\bfeat\.?|\bft\.?)\s*/i;
+const key = (s: string) => s.trim().toLowerCase();
+// A search that fails or takes over 6 s counts as finding nothing, so the sheet never waits on it.
+const capped = <T,>(p: Promise<T>, none: T) => Promise.race([p.catch(() => none), new Promise<T>((ok) => setTimeout(() => ok(none), 6000))]);
+type Row = Apple & { wrapperType?: string; artistId?: number };
+const STORES = ["gb", "us", "au", "ca"];
+const itunes = (path: string, q: Record<string, string>) => capped(fetch(`https://itunes.apple.com/${path}?${new URLSearchParams(q)}`).then((r) => r.json() as Promise<{ results: Row[] }>).then((r) => r.results), []);
+const stores = async (q: (country: string) => Promise<Row[]>) => (await Promise.all(STORES.map(q))).flat();
+// Mixtape's search: the title in all four stores, plus every song the artist has (found in GB first, then
+// US, AU, CA). Apple's text search leaves a lot out ("Mist" by EsDeeKid); the artist's catalogue has it.
+async function catalogue(e: SongEdit) {
+  const title = stripVersion(e.title), artist = e.artist.trim() || title;
+  const [named, ids] = await Promise.all([
+    stores((country) => itunes("search", { term: title, media: "music", entity: "song", limit: "25", country })),
+    Promise.all(STORES.map((country) => itunes("search", { term: artist, entity: "musicArtist", limit: "5", country }))),
+  ]);
+  const id = ids.find((r) => r[0]?.artistId)?.[0].artistId;
+  const theirs = id ? await stores((country) => itunes("lookup", { id: String(id), entity: "song", limit: "200", country })) : [];
+  const seen = new Set<string>();
+  return [...named, ...theirs].filter((x) => x.wrapperType === "track" && !seen.has(key(`${x.trackName}|${x.artistName}`)) && !!seen.add(key(`${x.trackName}|${x.artistName}`)));
+}
+export async function lookUp(e: SongEdit): Promise<Found | undefined> {
+  const [songs, ys] = await Promise.all([catalogue(e), capped(searchKind(`${stripVersion(e.artist)} ${stripVersion(e.title)}`.trim(), "song"), [])]);
+  // "Song - Artist" is as common as "Artist - Song": a miss is looked up again the other way round.
+  const flip = { ...e, title: e.artist, artist: e.title };
+  const flipped = !apple(e, songs) && e.artist ? await catalogue(flip) : [];
+  songs.push(...flipped);
+  const hit = apple(e, songs) ?? (e.artist ? apple(flip, flipped) : undefined) ?? youtube(e, ys) ?? (e.artist ? youtube(flip, ys) : undefined);
+  if (hit) return hit;
+  // Found in neither (unreleased, say): the artists the searches did turn up still say which way round it is.
+  const apples = new Set(songs.flatMap((x) => x.artistName.split(SPLIT).map(key))), yts = new Set(ys.flatMap((y) => y.artists.map((n) => key(n.name))));
+  const named = (s: string) => apples.has(key(s)) || yts.has(key(s));
+  const way = named(e.artist) ? e : e.artist && named(e.title) ? flip : undefined;
+  if (way) return { edit: way, source: apples.has(key(way.artist)) ? "Apple Music" : "YouTube Music", sure: false };
 }
 export const addedFiles = (paths: string[]) => {
   const t = fileTrack(useLocal.getState().files[paths[0]]);

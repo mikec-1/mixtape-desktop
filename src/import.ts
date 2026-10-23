@@ -78,6 +78,8 @@ export const bareTitle = (t: string) =>
 
 const rowArtists = (s: string) => s.split(/[;/]/).flatMap((p) => p.split(SEP)).map((a) => a.trim()).filter(Boolean);
 
+const EXTRA = new Set("remix mix edit version vip flip bootleg sped speed up slowed reverb tiktok tik tok nightcore extended radio club original remaster remastered live acoustic instrumental deluxe explicit clean bonus single prod feat ft featuring with lofi lo fi bass boosted 8d".split(" "));
+
 // The wrong song is worse than no song: the title must be there, and one of the artists.
 function matches(row: CsvTrack, c: Track) {
   const hay = norm(`${c.title} ${c.artists.map((a) => a.name).join(" ")} ${c.album ?? ""}`);
@@ -85,8 +87,10 @@ function matches(row: CsvTrack, c: Track) {
   const has = (w: string) => plain.includes(w) || latin.includes(w);
 
   // Mixtape's rule too: an upload called just "Popular" by the right artist is "Popular - TikTok Remix".
-  const theirs = words(bareTitle(c.title)), mine = new Set(words(row.title)), by = norm(c.artists.map((a) => a.name).join(" "));
-  if (theirs.every((w) => mine.has(w)) && rowArtists(row.artist).some((a) => words(a).every((w) => squash(by).includes(w)))) return true;
+  // Only when what the row has over it is version talk or the artists' names: "Love" isn't "Love Me Like You Do".
+  const theirs = words(bareTitle(c.title)), mine = words(bareTitle(row.title)), by = squash(norm(c.artists.map((a) => a.name).join(" ")));
+  const names = rowArtists(row.artist), named = new Set(names.flatMap(words));
+  if (theirs.length && theirs.every((w) => mine.includes(w)) && mine.every((w) => theirs.includes(w) || named.has(w) || EXTRA.has(w) || /^\d{4}$/.test(w)) && names.some((a) => words(a).every((w) => by.includes(w)))) return true;
 
   const title = words(bareTitle(row.title));
   const need = title.length <= 2 ? title.length : Math.ceil(title.length * 0.7);
@@ -252,5 +256,7 @@ export function demo() {
   ok(!!best(rows[7], [t("Verstappen Garten", "keyblade", "2:10")]), "collab");
   ok(!!best(rows[8], [t("Popular", "TommyMuzzic - Topic", "2:31")]), "upload with a shorter title");
   ok(!best(rows[8], [t("Popular", "The Weeknd", "3:35")]), "same name, other artist");
+  ok(!best({ title: "Love Me Like You Do", artist: "Ellie Goulding" }, [t("Love", "Ellie Goulding")]), "a shorter title that's another song");
+  ok(!!best({ title: "Save Your Tears (Remix) (with Ariana Grande)", artist: "The Weeknd;Ariana Grande" }, [t("Save Your Tears", "The Weeknd")]), "the original for a remix");
   return "ok";
 }

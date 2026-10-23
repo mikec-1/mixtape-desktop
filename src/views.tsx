@@ -2181,19 +2181,23 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
   const saved = d.editing ? useLocal.getState().edits[path] : undefined;
   const [edit, setEdit] = useState<SongEdit>(() => saved ?? guessTags(file));
   const [found, setFound] = useState<Awaited<ReturnType<typeof lookUp>> | null>(null);
+  // Lookups by file, so the next song's is already under way (or done) by the time you get to it.
+  const asked = useRef(new Map<string, ReturnType<typeof lookUp>>());
+  const ask = (p: string) => asked.current.get(p) ?? asked.current.set(p, lookUp(guessTags(files[p])).catch(() => undefined)).get(p)!;
   useEffect(() => {
     const own = saved ?? guessTags(files[path]);
     setEdit(own), setFound(null), touched.current.clear();
     if (saved) return setFound(undefined);
     let live = true;
-    lookUp(own).then(
+    if (d.paths[at + 1]) ask(d.paths[at + 1]);
+    ask(path).then(
       (f) =>
         live &&
         (setFound(f),
         f &&
           setEdit((e) => {
             const mine = Object.fromEntries([...touched.current].map((k) => [k, e[k]]));
-            return { ...f.edit, title: e.title, cover: files[path].cover ? undefined : f.edit.cover, ...mine };
+            return { ...f.edit, cover: files[path].cover ? undefined : f.edit.cover, ...mine };
           })),
     );
     return () => void (live = false);
@@ -2270,7 +2274,7 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
       </div>
       <footer className="flex items-center justify-end gap-2 px-6 pt-3 pb-5">
         <button onClick={() => (d.editing ? closeDialog() : next(false))} className="press rounded-full px-5 py-2.5 font-semibold hover:bg-ink/[0.06]">{d.editing ? "Cancel" : "Skip"}</button>
-        <button onClick={() => next(true)} className="press rounded-full bg-accent px-6 py-2.5 font-semibold text-paper">{d.editing ? "Save" : at < d.paths.length - 1 ? "Apply & Next" : "Apply Changes"}</button>
+        <button onClick={() => next(true)} className={`press rounded-full px-6 py-2.5 font-semibold transition-colors duration-300 ${looking ? "bg-ink/[0.07] text-ink" : "bg-accent text-paper"}`}>{d.editing ? "Save" : at < d.paths.length - 1 ? "Apply & Next" : "Apply Changes"}</button>
       </footer>
     </Modal>
   );

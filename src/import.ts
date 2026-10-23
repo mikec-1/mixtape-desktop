@@ -81,6 +81,10 @@ function matches(row: CsvTrack, c: Track) {
   const plain = squash(hay), latin = squash([...hay].map((ch) => CYRILLIC[ch] ?? ch).join(""));
   const has = (w: string) => plain.includes(w) || latin.includes(w);
 
+  // Mixtape's rule too: an upload called just "Popular" by the right artist is "Popular - TikTok Remix".
+  const theirs = words(bareTitle(c.title)), mine = new Set(words(row.title)), by = norm(c.artists.map((a) => a.name).join(" "));
+  if (theirs.every((w) => mine.has(w)) && rowArtists(row.artist).some((a) => words(a).every((w) => squash(by).includes(w)))) return true;
+
   const title = words(bareTitle(row.title));
   const need = title.length <= 2 ? title.length : Math.ceil(title.length * 0.7);
   if (title.filter(has).length < need) return false;
@@ -118,18 +122,34 @@ function toTrack(row: CsvTrack, c: Track): Track {
 }
 
 const SEARCH = { song: (q: string) => searchKind(q, "song"), video: (q: string) => searchKind(q, "video"), youtube: searchYouTube };
-const within = <T,>(p: Promise<T>, ms: number, fallback: T) => Promise.race([p.catch(() => fallback), new Promise<T>((r) => setTimeout(() => r(fallback), ms))]);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// A failed search is YouTube throttling, not a missing song: wait and try again rather than count it as not found.
+async function retry<T>(run: () => Promise<T>, waits = [2000, 6000, 15000]): Promise<T> {
+  for (const ms of waits) {
+    try {
+      return await run();
+    } catch {
+      await sleep(ms);
+    }
+  }
+  return run();
+}
 
 // Cheapest search first: ISRC, songs, music videos, the second credited artist, then all of YouTube.
 async function find(row: CsvTrack, cache: Map<string, Promise<Track[]>>) {
   const artists = rowArtists(row.artist);
   const q = (a = artists[0] ?? row.artist) => `${bareTitle(row.title)} ${a}`;
   const steps: [keyof typeof SEARCH, string | undefined][] = [["song", row.isrc], ["song", q()], ["video", q()], ["song", artists[1] && q(artists[1])], ["youtube", q()]];
-  for (const [kind, query] of steps) {
-    if (!query) continue;
-    const key = `${kind}:${query.toLowerCase()}`;
-    if (!cache.has(key)) cache.set(key, within(SEARCH[kind](query), 10000, []));
-    const hit = best(row, await cache.get(key)!);
+  const get = ([kind, query]: (typeof steps)[number]) => {
+    const key = `${kind}:${query!.toLowerCase()}`;
+    if (!cache.has(key)) cache.set(key, retry(() => SEARCH[kind](query!)).catch(() => []));
+    return cache.get(key)!;
+  };
+  // The ISRC and the plain song search go out together, as one or the other almost always hits.
+  if (row.isrc) void get(steps[1]);
+  for (const step of steps) {
+    if (!step[1]) continue;
+    const hit = best(row, await get(step));
     if (hit) return toTrack(row, hit);
   }
 }
@@ -150,9 +170,9 @@ export async function importPlaylistFile(file: File) {
   let next = 0, done = 0, shown = 0;
   const progress = () => notify({ text: `Importing ${name}…`, detail: `${done} of ${rows.length} songs`, action, sticky: true });
   progress();
-  // ponytail: 3 searches at once; more gets throttled by YouTube.
+  // ponytail: 6 songs at once; at 12 YouTube started refusing searches. Throttled ones are retried above.
   await Promise.all(
-    Array.from({ length: Math.min(3, rows.length) }, async () => {
+    Array.from({ length: Math.min(6, rows.length) }, async () => {
       while (next < rows.length && !stopped) {
         const i = next++;
         found[i] = await find(rows[i], cache).catch(() => undefined);
@@ -189,11 +209,12 @@ export function demo() {
       `Навернопотомучто,Vremya i Steklo,Album,204000,`,
       `Boss Orange feat. RB030 (Bonus),Pashanim;RB030,Album,150000,`,
       `Verstappen Garten,Akh;Can;keyblade;Tony Hilfiger,Single,130000,`,
+      `Popular - TikTok Remix,TommyMuzzic;ZeddMusique,Single,150000,`,
     ].join("\n"),
   );
   const t = (title: string, artist: string, duration = "3:00"): Track => ({ id: title, title, artists: [{ name: artist }], duration });
   const ok = (c: boolean, what: string) => { if (!c) throw new Error(what); };
-  ok(rows.length === 8 && rows[0].title === "The Less I Know, The Better" && rows[0].secs === 216 && rows[0].isrc === "AUUM71500303", "csv");
+  ok(rows.length === 9 && rows[0].title === "The Less I Know, The Better" && rows[0].secs === 216 && rows[0].isrc === "AUUM71500303", "csv");
   ok(bareTitle(rows[6].title) === "Boss Orange", "bareTitle");
   ok(!best(rows[1], [t("Tyga - Ice Cream (Official Music Video)", "Tyga")]), "rejects the wrong Ice Cream");
   ok(!!best(rows[2], [t("Blame (feat. John Newman)", "Calvin Harris", "3:32")]), "Blame");
@@ -201,5 +222,7 @@ export function demo() {
   ok(!!best(rows[4], [t("WIEN LEBT", "mon€ - Topic", "1:55")]), "WIEN LEBT");
   ok(!!best(rows[5], [t("Время и Стекло - Навернопотомучто", "Время и Стекло", "3:24")]), "Cyrillic");
   ok(!!best(rows[7], [t("Verstappen Garten", "keyblade", "2:10")]), "collab");
+  ok(!!best(rows[8], [t("Popular", "TommyMuzzic - Topic", "2:31")]), "upload with a shorter title");
+  ok(!best(rows[8], [t("Popular", "The Weeknd", "3:35")]), "same name, other artist");
   return "ok";
 }

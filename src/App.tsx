@@ -9,7 +9,7 @@ import { Welcome } from "./welcome";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { addFiles, canHaveFiles } from "./local";
-import { importPlaylistFile } from "./import";
+import { importLink, importPlaylistFile, isLink } from "./import";
 import { art, type Track } from "./yt";
 
 // A picture that can't load (offline, say) leaves its grey tile rather than WebKit's broken-image mark;
@@ -51,7 +51,15 @@ export default function App() {
       action.run();
     };
     addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
+    // A playlist or album link pasted outside a text field imports it.
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text") ?? "";
+      if ((e.target as Element).closest?.("input, textarea, [contenteditable]") || !isLink(text)) return;
+      e.preventDefault();
+      void importLink(text);
+    };
+    addEventListener("paste", onPaste);
+    return () => (removeEventListener("keydown", onKey), removeEventListener("paste", onPaste));
   }, []);
 
   // Files dropped on the window: a playlist (.csv) imports, songs play from Local Files.

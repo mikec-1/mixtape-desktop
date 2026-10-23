@@ -43,7 +43,8 @@ export type Dialog =
   | { kind: "card"; track: Track; pick: number[] }
   | { kind: "import"; playlist: string; name: string; added: number; items: Review[] }
   | { kind: "songs"; paths: string[]; editing?: boolean }
-  | { kind: "warn"; title: string; text: string; yes: string; then: () => void };
+  | { kind: "warn"; title: string; text: string; yes: string; then: () => void }
+  | { kind: "link" };
 // Feedback for a library change: what happened, to what, and a way back.
 export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean };
 
@@ -105,7 +106,7 @@ export const idb: StateStorage = {
   removeItem: (k) => kv("readwrite", (s) => s.delete(k)).then(() => {}),
 };
 
-// about, cover (a data URL, the image you picked) and sort (how its page lists the songs) are yours to
+// about, cover (a data URL of the image you picked, or a link to an imported playlist's own) and sort (how its page lists the songs) are yours to
 // set; folder is the folder it's in. public: anyone with its link can see it (account.ts).
 export type Playlist = { id: string; name: string; tracks: Track[]; about?: string; cover?: string; folder?: string; sort?: TrackSort; public?: boolean; at?: number };
 export type TrackSort = "custom" | "title" | "artist" | "album" | "added" | "duration";
@@ -192,8 +193,8 @@ export function duplicatePlaylist(id: string) {
   return copy.id;
 }
 // An empty one opens straight onto its page, which says enough; one made from a song gets a toast.
-export function newPlaylist(tracks: Track[] = [], folder?: string, name?: string) {
-  const p: Playlist = { id: crypto.randomUUID(), name: name || `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks: tracks.map(entry), at: Date.now(), ...(folder && { folder }) };
+export function newPlaylist(tracks: Track[] = [], folder?: string, name?: string, cover?: string) {
+  const p: Playlist = { id: crypto.randomUUID(), name: name || `Playlist ${useLibrary.getState().playlists.length + 1}`, tracks: tracks.map(entry), at: Date.now(), ...(folder && { folder }), ...(cover && { cover }) };
   if (tracks.length) change(`Added to ${p.name}`, tracks[0], (s) => ({ playlists: [...s.playlists, p] }), false);
   else lib((s) => ({ playlists: [...s.playlists, p] }));
   return p.id;

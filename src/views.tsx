@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ArrowDownToLine, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { ArrowDownToLine, Link2, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
@@ -20,7 +20,7 @@ import { SignIn } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
-import { importPlaylistFile, rematch } from "./import";
+import { importLink, importPlaylistFile, isLink, rematch } from "./import";
 
 // An album from Deezer (artist pages) or YouTube Music (search, Home).
 const collection = (id: string) => (isDeezer(id) ? deezerAlbum(id) : ytCollection(id));
@@ -593,7 +593,7 @@ export function Library() {
           <button onClick={() => open({ name: "history" })} aria-label="History" title="History" className={round2}>
             <HistoryIcon size={17} />
           </button>
-          <button onClick={() => popup([{ text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist() }) }, { text: "New Folder", action: () => open({ name: "folder", id: newFolder() }) }])} aria-label="New" title="New Playlist or Folder" className={round2}>
+          <button onClick={() => popup([{ text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist() }) }, { text: "New Folder", action: () => open({ name: "folder", id: newFolder() }) }, { text: "Import from Link…", action: () => useStore.setState({ dialog: { kind: "link" } }) }])} aria-label="New" title="New Playlist or Folder" className={round2}>
             <Plus size={18} />
           </button>
         </div>
@@ -2230,7 +2230,7 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "import" ? <ImportReview d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "import" ? <ImportReview d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
 
@@ -2242,6 +2242,23 @@ function Warning({ d }: { d: Extract<Dialog, { kind: "warn" }> }) {
       <div className="mt-6 flex justify-end gap-2">
         <button onClick={closeDialog} className={quiet}>Cancel</button>
         <button autoFocus onClick={() => (closeDialog(), d.then())} className={`${btn} bg-[#ff375f] text-white`}>{d.yes}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// A playlist or album from another app, by its link (import.ts importLink). Pasting one anywhere does the same.
+function LinkImport() {
+  const [text, setText] = useState("");
+  const go = () => isLink(text) && (closeDialog(), void importLink(text));
+  return (
+    <Modal label="Import from a Link" onClose={closeDialog} className="w-[440px] p-6">
+      <p className="text-lg leading-snug font-bold">Import from a Link</p>
+      <p className="mt-1.5 text-sm text-muted">A playlist or album from Spotify, Apple Music, Deezer or YouTube Music. Pasting a link anywhere in the app works too.</p>
+      <input autoFocus value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && go()} placeholder="https://open.spotify.com/playlist/…" aria-label="Link" autoComplete="off" spellCheck={false} className="mt-4 h-10 w-full rounded-lg bg-ink/[0.06] px-3 text-sm outline-none placeholder:text-muted focus:ring-2 focus:ring-accent" />
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={closeDialog} className={quiet}>Cancel</button>
+        <button disabled={!isLink(text)} onClick={go} className={solid}>Import</button>
       </div>
     </Modal>
   );
@@ -3129,6 +3146,9 @@ function LibraryPane() {
         <input ref={file} type="file" accept=".json,application/json" hidden onChange={(e) => (e.target.files?.[0] && restore(e.target.files[0]), (e.target.value = ""))} />
         <button onClick={() => csvFile.current?.click()} className={quiet}>
           <Upload size={16} /> Import Playlist from File…
+        </button>
+        <button onClick={() => useStore.setState({ dialog: { kind: "link" } })} className={quiet}>
+          <Link2 size={16} /> Import from Link…
         </button>
         <input ref={csvFile} type="file" accept=".csv,text/csv" hidden onChange={(e) => (e.target.files?.[0] && void importPlaylistFile(e.target.files[0]), (e.target.value = ""))} />
       </div>

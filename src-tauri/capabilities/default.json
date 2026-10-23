@@ -51,6 +51,21 @@
           "url": "https://api.deezer.com/*"
         },
         {
+          "url": "https://open.spotify.com/*"
+        },
+        {
+          "url": "https://spotify.link/*"
+        },
+        {
+          "url": "https://music.apple.com/*"
+        },
+        {
+          "url": "https://link.deezer.com/*"
+        },
+        {
+          "url": "https://deezer.page.link/*"
+        },
+        {
           "url": "https://music.163.com/*"
         },
         {

@@ -70,6 +70,13 @@ export async function album(id: string): Promise<Collection> {
   };
 }
 
+// A playlist from a link: all its songs, 100 to a call, imported as they are (each finds its YouTube copy when played).
+export async function playlist(id: string) {
+  const p = await get(`playlist/${id}`), list: DzTrack[] = [];
+  for (let i = 0; i < p.nb_tracks; i += 100) list.push(...((await get(`playlist/${id}/tracks?index=${i}&limit=100`)).data ?? []));
+  return { name: p.title as string, cover: p.picture_xl as string | undefined, tracks: list.map((t) => toTrack(t)) };
+}
+
 // An album's songs with their guests, from each song's own entry, as in Mixtape. One request a song, so
 // the page shows the album first and these a moment later; a song with no guests, or one that fails,
 // stays as it was.

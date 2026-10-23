@@ -1,5 +1,7 @@
+import { fetch } from "@tauri-apps/plugin-http";
 import { searchKind, searchYouTube, parseSecs, SEP, type Track } from "./yt";
-import { newPlaylist, notify, useStore } from "./store";
+import { newPlaylist, notify, open, useStore, type View } from "./store";
+import { playlist as dzPlaylist } from "./deezer";
 
 // A song the import wasn't sure of (pick: the guess it added) or didn't find, with the next best results to choose from.
 export type Review = { row: CsvTrack; pick?: Track; options: Track[] };
@@ -210,13 +212,64 @@ export async function rematch(items: Review[]): Promise<(Review & { found: boole
 let cancel: (() => void) | undefined;
 
 export async function importPlaylistFile(file: File) {
+  const rows = parsePlaylistCsv(await file.text());
+  if (!rows.length) return notify({ text: "Couldn’t Import Playlist", detail: `${file.name} has no title and artist columns` });
+  return importRows(file.name.replace(/\.[^.]+$/, "") || "Imported Playlist", rows);
+}
+
+// Playlists and albums from a link. Spotify's and Apple Music's own pages list the songs (Spotify's embed only
+// the first 100), which are then matched like a CSV; Deezer's come as they are, and YouTube Music's just open.
+export const isLink = (text: string) => /^https:\/\/(open\.spotify\.com|spotify\.link|music\.apple\.com|(www\.)?deezer\.com|link\.deezer\.com|deezer\.page\.link|(music|www)\.youtube\.com)\//.test(text.trim());
+const UA = { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15" };
+const page = (url: string) => fetch(url, { headers: UA }).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`The page answered ${r.status}`))));
+const script = (html: string, id: string) => JSON.parse(html.match(new RegExp(`<script[^>]*id="${id}"[^>]*>([\\s\\S]*?)</script>`))?.[1] ?? "null");
+
+// What a link holds: a page to open, songs to match, or (from Deezer) songs as they are.
+export type Linked = { view: View } | { name: string; cover?: string; rows: CsvTrack[] } | { name: string; cover?: string; tracks: Track[] };
+export async function readLink(text: string): Promise<Linked | undefined> {
+  let url = new URL(text.trim());
+  // Share links (spotify.link, link.deezer.com) go to the real page, by a redirect or from the page itself.
+  if (/^(spotify\.link|link\.deezer\.com|deezer\.page\.link)$/.test(url.host)) {
+    const r = await fetch(url, { headers: UA });
+    url = new URL(/spotify\.com|deezer\.com\/(?!s\/)/.test(r.url) ? r.url : ((await r.text()).match(/https:\/\/(open\.spotify\.com|www\.deezer\.com)\/[^"'\s<>]+/)?.[0] ?? r.url));
+  }
+  const [kind, id] = url.pathname.replace(/^\/(intl-[\w-]+|[a-z]{2})(?=\/)/, "").split("/").filter(Boolean);
+  const list = url.searchParams.get("list");
+  if (url.host.endsWith("youtube.com")) {
+    if (list) return { view: { name: "collection", id: list.startsWith("VL") ? list : `VL${list}` } };
+    if (kind === "browse" && id) return { view: { name: "collection", id } };
+  } else if (url.host.endsWith("deezer.com") && id) {
+    if (kind === "album") return { view: { name: "collection", id: `dz:album:${id}` } };
+    if (kind === "playlist") return dzPlaylist(id);
+  } else if (url.host === "open.spotify.com" && id && (kind === "playlist" || kind === "album")) {
+    const e = script(await page(`https://open.spotify.com/embed/${kind}/${id}`), "__NEXT_DATA__")?.props?.pageProps?.state?.data?.entity;
+    if (e?.trackList?.length) return { name: e.name, cover: e.coverArt?.sources?.[0]?.url ?? e.visualIdentity?.image?.reduce((a: { maxWidth: number }, b: { maxWidth: number }) => (b.maxWidth > a.maxWidth ? b : a))?.url, rows: e.trackList.map((t: { title: string; subtitle: string; duration: number }) => ({ title: t.title, artist: t.subtitle, album: kind === "album" ? e.name : undefined, secs: Math.round(t.duration / 1000) })) };
+  } else if (url.host === "music.apple.com" && /^(playlist|album)$/.test(kind)) {
+    type Link = { title: string };
+    const sections: { itemKind: string; items: any[] }[] = script(await page(url.href), "serialized-server-data")?.data?.[0]?.data?.sections ?? [];
+    const head = sections[0]?.items[0], by = head?.subtitleLinks?.map((l: Link) => l.title).join(", ");
+    const rows = sections.filter((s) => s.itemKind === "trackLockup").flatMap((s) => s.items).map((t) => ({ title: t.title, artist: t.subtitleLinks?.map((l: Link) => l.title).join(", ") || by, album: t.tertiaryLinks?.[0]?.title ?? (kind === "album" ? head.title : undefined), secs: Math.round(t.duration / 1000) }));
+    if (rows.length) return { name: head.title, cover: head.artwork?.dictionary?.url?.replace("{w}x{h}bb.{f}", "600x600bb.jpg"), rows };
+  }
+}
+
+export async function importLink(text: string) {
+  notify({ text: "Reading Link…", sticky: true });
+  try {
+    const got = await readLink(text);
+    if (!got) return notify({ text: "Couldn’t Import That Link", detail: "Paste a playlist or album link from Spotify, Apple Music, Deezer or YouTube Music" });
+    if ("view" in got) return useStore.setState({ toast: undefined }), open(got.view);
+    if ("tracks" in got) return open({ name: "playlist", id: newPlaylist(got.tracks, undefined, got.name, got.cover) });
+    return importRows(got.name, got.rows, got.cover);
+  } catch (e) {
+    notify({ text: "Couldn’t Import That Link", detail: String(e instanceof Error ? e.message : e) });
+  }
+}
+
+async function importRows(name: string, rows: CsvTrack[], cover?: string) {
   cancel?.();
   let stopped = false;
   const stop = (cancel = () => (stopped = true));
-  const name = file.name.replace(/\.[^.]+$/, "") || "Imported Playlist";
-  const rows = parsePlaylistCsv(await file.text());
-  if (!rows.length) return notify({ text: "Couldn’t Import Playlist", detail: `${file.name} has no title and artist columns` });
-
   const action = { label: "Cancel", run: stop };
   let shown = 0;
   const progress = (done: number) => Date.now() - shown > 250 && !stopped && ((shown = Date.now()), notify({ text: `Importing ${name}…`, detail: `${done} of ${rows.length} songs`, action, sticky: true }));
@@ -226,9 +279,9 @@ export async function importPlaylistFile(file: File) {
 
   const tracks = found.flatMap((f) => (f?.hit ? [f.hit] : []));
   const review: Review[] = found.flatMap((f, i) => (f && !f.sure ? [{ row: rows[i], pick: f.hit, options: f.options }] : []));
-  const id = tracks.length ? newPlaylist(tracks, undefined, name) : undefined;
+  const id = tracks.length ? newPlaylist(tracks, undefined, name, cover) : undefined;
   if (stopped) return notify({ text: "Import Cancelled", detail: tracks.length ? `Saved ${tracks.length} songs to ${name}` : "No songs were imported", thumb: tracks[0]?.thumb });
-  useStore.setState({ toast: undefined, dialog: { kind: "import", playlist: id ?? newPlaylist([], undefined, name), name, added: tracks.length, items: review } });
+  useStore.setState({ toast: undefined, dialog: { kind: "import", playlist: id ?? newPlaylist([], undefined, name, cover), name, added: tracks.length, items: review } });
 }
 
 export function demo() {

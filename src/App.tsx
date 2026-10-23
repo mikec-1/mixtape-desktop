@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, X, type LucideIcon } from "lucide-react";
-import { audio, back, cycleRepeat, go, next, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { audio, back, cycleRepeat, go, next, notify, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { actionFor, comboFrom, findSearch, recording } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
@@ -61,20 +61,23 @@ export default function App() {
     if (!canHaveFiles) return;
     const sort = (paths: string[]) => ({
       csv: paths.filter((p) => /\.csv$/i.test(p)),
-      // Folders (no extension) are added whole, like Settings → Add Folder.
-      songs: paths.filter((p) => /\.(mp3|m4a|aac|flac|wav|aiff?|ogg|oga|opus)$|\/[^./]+$/i.test(p)),
+      // Folders (no extension; "Vol. 2" isn't one) are added whole, like Settings → Add Folder.
+      songs: paths.filter((p) => /\.(mp3|m4a|aac|flac|wav|aiff?|ogg|oga|opus)$/i.test(p) || !/\.[a-z0-9]{1,5}$/i.test(p)),
     });
     const off = getCurrentWebview().onDragDropEvent(async ({ payload: e }) => {
       if (e.type === "over") return;
       if (e.type === "enter") {
         const { csv, songs } = sort(e.paths);
-        return setDragging(csv.length ? (csv.length > 1 ? `Import ${csv.length} Playlists` : "Import Playlist") : songs.length ? (songs.length > 1 ? `Play ${songs.length} Songs` : "Play Song") : "Can’t Open These");
+        return setDragging(csv.length ? (csv.length > 1 ? `Import ${csv.length} Playlists` : "Import Playlist") : songs.length ? "Add to Local Files" : "Can’t Open These");
       }
       setDragging(undefined);
       if (e.type !== "drop") return;
       const { csv, songs } = sort(e.paths);
       if (songs.length) void addFiles(songs);
-      for (const p of csv) await importPlaylistFile(new File([await invoke<string>("read_text", { path: p })], p.split(/[\\/]/).pop()!));
+      for (const p of csv) {
+        const name = p.split(/[\\/]/).pop()!;
+        await invoke<string>("read_text", { path: p }).then((text) => importPlaylistFile(new File([text], name))).catch((e) => notify({ text: "Couldn’t Import Playlist", detail: `${name}: ${e}` }));
+      }
     });
     return () => void off.then((f) => f());
   }, []);

@@ -66,10 +66,14 @@ pub struct LocalLyrics {
     lrc: Option<String>,
 }
 
-/// A playlist file dropped on the window: the page gets its path, not its contents.
+/// A playlist file dropped on the window: the page gets its path, not its contents. Only a .csv, so the
+/// page can't read any file it names; one saved by Excel needn't be UTF-8.
 #[tauri::command]
 pub fn read_text(path: String) -> Result<String, String> {
-    fs::read_to_string(path).map_err(|e| e.to_string())
+    if !Path::new(&path).extension().is_some_and(|x| x.eq_ignore_ascii_case("csv")) {
+        return Err("Not a playlist file".into());
+    }
+    fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

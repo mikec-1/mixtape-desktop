@@ -6,13 +6,13 @@ import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, fixImport, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
-  shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
+  shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
   useRecentSearches, addRecentSearch,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { albumByName, art, artist, artistByName, charts, collection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
-import { addFolder, canHaveFiles, guessTags, localTracks, lookUp, addedFiles, removeFile, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
+import { addFolder, canHaveFiles, guessTags, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
 import { SignIn } from "./signin";
@@ -75,7 +75,8 @@ export function Search() {
   const online = useOnline(); // a search that failed offline runs again on reconnect
   const ok = term && !fromLink(term);
   const found = useAsync(() => (ok && tab === "all" ? search(term) : undefined), [term, tab, online]);
-  const kind = useAsync<(Track & Album & SearchArtist)[] | undefined>(() => (ok && tab !== "all" ? (searchKind(term, KINDS[tab]) as Promise<(Track & Album & SearchArtist)[]>) : undefined), [term, tab, online]);
+  // Which tab they're for: the last tab's results stay up while the next tab's load, and aren't its kind.
+  const kind = useAsync(() => (ok && tab !== "all" ? (searchKind(term, KINDS[tab]) as Promise<(Track & Album & SearchArtist)[]>).then((items) => ({ tab, items })) : undefined), [term, tab, online]);
   const { error, loading } = tab === "all" ? found : kind;
   const sugs = useAsync(() => (typing && query.trim() ? suggestions(query) : undefined), [typing && query]).data ?? [];
   // A Sleeve link pasted in opens what it's for.
@@ -86,7 +87,7 @@ export function Search() {
   const go = (q: string) => (useStore.setState({ query: q }), setTerm(q), setTyping(false), addRecentSearch({ id: q.toLowerCase(), kind: "query", title: q }));
   const playFrom = (list: Track[]) => (i: number) => (rememberTrack(list[i]), play(list, i));
   const all = tab === "all" ? found.data : undefined;
-  const list = tab === "all" ? undefined : kind.data;
+  const list = kind.data?.tab === tab ? kind.data.items : undefined;
   const top = all?.top;
 
   return (
@@ -212,6 +213,15 @@ const count = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 // Right-click menus are the OS's own. ponytail: Tauri-only; the web build needs an HTML fallback.
 export const popup = (items: MenuOptions["items"]) => Menu.new({ items }).then((m) => m.popup(), report);
 
+// Anything that deletes asks first (Warning): what goes, and a red button that Return presses.
+export const warn = (title: string, yes: string, then: () => void, text = "") => useStore.setState({ dialog: { kind: "warn", title, text, yes, then } });
+const named = (ts: Track[]) => (ts.length === 1 ? `“${ts[0].title}”` : count(ts.length));
+// The removals songs' menus and ⌘⌫ share.
+const unlike = (ts: Track[]) => warn(`Remove ${named(ts)} from Liked Songs?`, "Remove", () => likeAll(ts, false));
+const unlist = (id: string, at: number[], ts: Track[]) => warn(`Remove ${named(ts)} from “${useLibrary.getState().playlists.find((p) => p.id === id)?.name}”?`, "Remove", () => removeFromPlaylist(id, at));
+const unsave = (key: string) => warn(`Remove “${useOffline.getState().lists[key]?.title}” from Downloads?`, "Remove", () => removeDownload(key), "Its songs will stream again, so they need the internet.");
+const unfile = (ts: Track[]) => warn(`Remove ${named(ts)} from your library?`, "Remove", () => removeFiles(ts.map((t) => t.file!)), `${ts.length === 1 ? "The file stays" : "The files stay"} on your disk.`);
+
 // from: the row is in one of your playlists, or in the queue (an index into the whole queue).
 export function trackMenu(t: Track, from?: { playlist: string; index: number } | { queue: number }) {
   const { liked, playlists, hidden } = useLibrary.getState();
@@ -233,12 +243,12 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
     ...(t.file
       ? [
           { text: "Edit Song Info…", action: () => useStore.setState({ dialog: { kind: "songs", paths: [t.file!], editing: true } }) },
-          { text: "Remove from Sleeve", action: () => removeFile(t.file!) },
+          { text: "Remove from Sleeve", action: () => unfile([t]) },
         ]
       : []),
     { text: "Edit Lyrics…", action: () => editLyrics(t) },
     { item: "Separator" as const },
-    { text: liked.some((x) => x.id === t.id) ? "Remove from Liked Songs" : "Add to Liked Songs", action: () => toggleLike(t) },
+    liked.some((x) => x.id === t.id) ? { text: "Remove from Liked Songs", action: () => unlike([t]) } : { text: "Add to Liked Songs", action: () => toggleLike(t) },
     {
       text: "Add to Playlist",
       items: [
@@ -247,11 +257,35 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
         ...playlists.map((p) => ({ text: p.name, action: () => addToPlaylist(p.id, [t]) })),
       ],
     },
-    ...(from && "playlist" in from ? [{ text: "Remove from This Playlist", action: () => removeFromPlaylist(from.playlist, from.index) }] : []),
+    ...(from && "playlist" in from ? [{ text: "Remove from This Playlist", action: () => unlist(from.playlist, [from.index], [t]) }] : []),
     { text: hidden.some((x) => x.id === t.id) ? "Unhide Song" : "Hide Song", action: () => toggleHide(t) },
     ...(by.length ? [{ item: "Separator" as const }] : []),
     ...(by.length === 1 ? [{ text: `Go to ${by[0].name}`, action: () => goToArtist(by[0]) }] : by.length ? [{ text: "Go to Artist", items: by.map((a) => ({ text: a.name, action: () => goToArtist(a) })) }] : []),
     ...(t.album ? [{ text: "Go to Album", action: () => goToAlbum(t) }] : []),
+  ]);
+}
+
+// Several songs picked in a list at once: what applies to all of them. at: their places in a playlist.
+function tracksMenu(ts: Track[], playlist?: { id: string; at: number[] }) {
+  const { liked, playlists } = useLibrary.getState();
+  const allLiked = ts.every((t) => liked.some((x) => x.id === t.id));
+  const files = ts.every((t) => t.file);
+  popup([
+    { text: "Play Next", action: () => enqueue(ts, true) },
+    { text: "Add to Queue", action: () => enqueue(ts, false) },
+    ...(files ? [{ text: "Edit Song Info…", action: () => useStore.setState({ dialog: { kind: "songs", paths: ts.map((t) => t.file!), editing: true } }) }] : []),
+    { item: "Separator" as const },
+    allLiked ? { text: "Remove from Liked Songs", action: () => unlike(ts) } : { text: "Add to Liked Songs", action: () => likeAll(ts, true) },
+    {
+      text: "Add to Playlist",
+      items: [
+        { text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist(ts) }) },
+        ...(playlists.length ? [{ item: "Separator" as const }] : []),
+        ...playlists.map((p) => ({ text: p.name, action: () => addToPlaylist(p.id, ts) })),
+      ],
+    },
+    ...(playlist ? [{ text: "Remove from This Playlist", action: () => unlist(playlist.id, playlist.at, ts) }] : []),
+    ...(files ? [{ text: "Remove from Sleeve", action: () => unfile(ts) }] : []),
   ]);
 }
 
@@ -260,7 +294,7 @@ const albumMenu = (a: Album) =>
     { text: "Play", action: () => playCollection(a.id) },
     { text: "Play Next", action: () => collection(a.id).then((c) => enqueue(c.tracks, true), report) },
     { text: "Add to Queue", action: () => collection(a.id).then((c) => enqueue(c.tracks, false), report) },
-    { text: useLibrary.getState().saved.some((x) => x.id === a.id) ? "Remove from Library" : "Add to Library", action: () => toggleSave(a) },
+    useLibrary.getState().saved.some((x) => x.id === a.id) ? { text: "Remove from Library", action: () => warn(`Remove “${a.title}” from your library?`, "Remove", () => toggleSave(a)) } : { text: "Add to Library", action: () => toggleSave(a) },
   ]);
 
 const LIKED = "bg-linear-to-br from-[#ff375f] to-[#b80f3c]";
@@ -325,7 +359,7 @@ function DownloadButton({ id, about }: { id: string; about: () => Parameters<typ
   const p = progress(id, state);
   const label = !p ? "Download" : p.done ? "Downloaded" : `Downloading, ${p.saved} of ${p.total}`;
   return (
-    <button onClick={() => (p ? popup([{ text: "Remove Download", action: () => removeDownload(id) }]) : download(id, about()))} aria-label={label} title={label} aria-haspopup={p ? "menu" : undefined} className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
+    <button onClick={() => (p ? popup([{ text: "Remove Download", action: () => unsave(id) }]) : download(id, about()))} aria-label={label} title={label} aria-haspopup={p ? "menu" : undefined} className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
       {!p ? (
         <ArrowDownToLine size={18} />
       ) : p.done ? (
@@ -373,7 +407,6 @@ function RecentlyPlayed() {
 // What you played on this day a year ago, or that week if the day itself was quiet; five songs or more.
 function OnThisDay() {
   const [tracks, setTracks] = useState<Track[]>([]);
-  const recent = useHistory((s) => s.recent);
   useEffect(() => {
     const d = new Date(), day = (n: number) => new Date(d.getFullYear() - 1, d.getMonth(), d.getDate() + n).getTime();
     const week: PlayRow[] = [];
@@ -384,7 +417,7 @@ function OnThisDay() {
       if (live) setTracks(list.length >= 5 ? list : []);
     });
     return () => void (live = false);
-  }, [recent]);
+  }, []); // a year ago doesn't change as you play
   if (!tracks.length) return null;
   return (
     <Section title="On This Day">
@@ -762,11 +795,11 @@ function itemMenu(i: Item) {
             ],
           },
           { text: "Duplicate", action: () => void duplicatePlaylist(i.id) },
-          { text: "Delete Playlist", action: () => deletePlaylist(i.id) },
+          { text: "Delete Playlist", action: () => warn(`Delete “${i.title}”?`, "Delete", () => deletePlaylist(i.id)) },
         ]
       : []),
-    ...(i.kind === "folder" ? [{ text: "Delete Folder", action: () => deleteFolder(i.id) }] : []),
-    ...(i.kind === "album" ? [{ text: "Remove from Library", action: () => toggleSave({ id: i.id, title: i.title }) }] : []),
+    ...(i.kind === "folder" ? [{ text: "Delete Folder", action: () => warn(`Delete “${i.title}”?`, "Delete", () => deleteFolder(i.id), "Its playlists stay in your library.") }] : []),
+    ...(i.kind === "album" ? [{ text: "Remove from Library", action: () => warn(`Remove “${i.title}” from your library?`, "Remove", () => toggleSave({ id: i.id, title: i.title })) }] : []),
     ...(i.kind === "artist" ? [{ text: "Unfollow", action: () => toggleFollow({ id: i.id, name: i.title }) }] : []),
   ]);
 }
@@ -878,7 +911,7 @@ export function PlaylistPage({ id }: { id: string }) {
     popup([
       { text: pinned ? "Unpin" : "Pin to Top", action: () => togglePin(from) },
       { text: "Choose Cover Image…", action: () => file.current?.click() },
-      ...(playlist?.cover ? [{ text: "Remove Cover Image", action: () => setCover(id) }] : []),
+      ...(playlist?.cover ? [{ text: "Remove Cover Image", action: () => warn("Remove the cover image?", "Remove", () => setCover(id)) }] : []),
       { item: "Separator" as const },
       {
         text: "Move to Folder",
@@ -898,7 +931,7 @@ export function PlaylistPage({ id }: { id: string }) {
           ]
         : []),
       { item: "Separator" as const },
-      { text: "Delete Playlist", action: () => (back(), deletePlaylist(id)) },
+      { text: "Delete Playlist", action: () => warn(`Delete “${playlist?.name}”?`, "Delete", () => (back(), deletePlaylist(id))) },
     ]);
 
   return (
@@ -1137,7 +1170,7 @@ export function FolderPage({ id }: { id: string }) {
       >
         <PlayButtons tracks={tracks} from={key} />
         <button
-          onClick={() => popup([{ text: useLibrary.getState().pinned.includes(key) ? "Unpin" : "Pin to Top", action: () => togglePin(key) }, { text: "New Playlist in Folder", action: () => open({ name: "playlist", id: newPlaylist([], id) }) }, { item: "Separator" }, { text: "Delete Folder", action: () => (back(), deleteFolder(id)) }])}
+          onClick={() => popup([{ text: useLibrary.getState().pinned.includes(key) ? "Unpin" : "Pin to Top", action: () => togglePin(key) }, { text: "New Playlist in Folder", action: () => open({ name: "playlist", id: newPlaylist([], id) }) }, { item: "Separator" }, { text: "Delete Folder", action: () => warn(`Delete “${folder.name}”?`, "Delete", () => (back(), deleteFolder(id)), "Its playlists stay in your library.") }])}
           aria-label="More"
           title="More"
           aria-haspopup="menu"
@@ -1223,7 +1256,7 @@ export function HistoryPage() {
     <div className="animate-enter px-8 pt-14">
       <div className="flex items-end justify-between gap-6">
         <h1 className="text-display">History</h1>
-        {rows.length > 0 && <button onClick={() => popup([{ text: "Clear History", action: clearHistory }])} className={quiet}>Clear…</button>}
+        {rows.length > 0 && <button onClick={() => warn("Clear your listening history?", "Clear History", clearHistory, "Every play goes, and Recently Played on Home with it.")} className={quiet}>Clear…</button>}
       </div>
       {!rows.length && done && <p className="mt-6 text-muted">Songs you listen to for 30 seconds or more land here.</p>}
       {days.map(({ day, rows }) => (
@@ -2163,9 +2196,22 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "import" ? <ImportReview d={dialog} /> : dialog?.kind === "songs" ? <SongImport d={dialog} /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "import" ? <ImportReview d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
+
+function Warning({ d }: { d: Extract<Dialog, { kind: "warn" }> }) {
+  return (
+    <Modal label={d.title} onClose={closeDialog} className="w-[400px] p-6">
+      <p className="text-lg leading-snug font-bold text-balance">{d.title}</p>
+      {d.text && <p className="mt-1.5 text-sm text-muted">{d.text}</p>}
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={closeDialog} className={quiet}>Cancel</button>
+        <button autoFocus onClick={() => (closeDialog(), d.then())} className={`${btn} bg-[#ff375f] text-white`}>{d.yes}</button>
+      </div>
+    </Modal>
+  );
+}
 
 // Songs dropped on the window, one at a time before they go into Local Files: what the file says, read
 // sensibly (local.ts guessTags), then the original song looked up (lookUp) for its artist, album, year,
@@ -2317,7 +2363,7 @@ function ImportReview({ d }: { d: Extract<Dialog, { kind: "import" }> }) {
           {!items.length && "Every song was found."}
         </p>
       </header>
-      <ol className="mt-3 min-h-0 flex-1 divide-y divide-ink/10 overflow-y-auto px-6">
+      <ol className="@container mt-3 min-h-0 flex-1 divide-y divide-ink/10 overflow-y-auto px-6">
         {items.map((r, i) => (
           <li key={i} className="py-3">
             <div className="flex items-baseline gap-2">
@@ -2657,7 +2703,7 @@ function AccountPane() {
     <>
       <div className="flex items-center gap-5">
         <button
-          onClick={() => (profile?.avatar ? popup([{ text: "Choose Picture…", action: () => picture.current?.click() }, { text: "Remove Picture", action: () => setProfile({ avatar: undefined }) }]) : picture.current?.click())}
+          onClick={() => (profile?.avatar ? popup([{ text: "Choose Picture…", action: () => picture.current?.click() }, { text: "Remove Picture", action: () => warn("Remove your picture?", "Remove", () => setProfile({ avatar: undefined })) }]) : picture.current?.click())}
           aria-label="Change Picture"
           title="Change Picture"
           className="press group/avatar relative rounded-full"
@@ -3117,11 +3163,11 @@ function Downloads() {
                   <div className="truncate font-semibold">{l.title}</div>
                   <div className="truncate text-sm text-muted">{count(listTracks(key).length)}</div>
                 </div>
-                <button onClick={() => removeDownload(key)} className={quiet}>Remove</button>
+                <button onClick={() => unsave(key)} className={quiet}>Remove</button>
               </div>
             ))}
           </div>
-          <button onClick={() => popup([{ text: "Remove All Downloads", action: removeAllDownloads }])} className={quiet}>Remove All…</button>
+          <button onClick={() => warn("Remove all downloads?", "Remove All", removeAllDownloads, "Their songs will stream again, so they need the internet.")} className={quiet}>Remove All…</button>
         </>
       )}
     </section>
@@ -3146,7 +3192,7 @@ function LocalFolders() {
                 <div className="truncate font-semibold">{f.split(/[\\/]/).filter(Boolean).at(-1) ?? f}</div>
                 <div className="truncate text-sm text-muted">{f}</div>
               </div>
-              <button onClick={() => removeFolder(f)} className={quiet}>Remove</button>
+              <button onClick={() => warn(`Remove the “${f.split(/[\\/]/).filter(Boolean).at(-1) ?? f}” folder?`, "Remove", () => removeFolder(f), "Its songs leave your library. The files stay on your disk.")} className={quiet}>Remove</button>
             </div>
           ))}
         </div>
@@ -3236,7 +3282,7 @@ function Privacy() {
           </div>
         </Row>
         <Row label="Clear Listening History" detail="Removes every play, and Recently Played on Home">
-          <button onClick={() => popup([{ text: "Clear History", action: clearHistory }])} className={quiet}>Clear…</button>
+          <button onClick={() => warn("Clear your listening history?", "Clear History", clearHistory, "Every play goes, and Recently Played on Home with it.")} className={quiet}>Clear…</button>
         </Row>
       </div>
       <p className="mt-6 max-w-xl text-sm leading-relaxed text-muted">Sleeve sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
@@ -3453,7 +3499,7 @@ export function QueuePanel() {
 // reorder; times: when each was played (History), shown in place of its length; header false: without
 // the header (an artist's few top songs). plain: an album's own songs, numbered, without covers or album.
 // Hidden songs and blocked artists' are dimmed.
-type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number, to: number) => void; times?: number[]; added?: boolean; header?: boolean; onPlay?: (i: number) => void };
+type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number[], to: number) => void; times?: number[]; added?: boolean; header?: boolean; onPlay?: (i: number) => void };
 function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, added, header = true, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
   const current = useStore((s) => s.queue[s.index]?.id);
   useLibrary((s) => s.hidden), useLibrary((s) => s.blocked), useOnline(); // re-dim as they change
@@ -3462,6 +3508,126 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   const cols = useSettings((s) => s.trackCols);
   const [drag, setDrag] = useState<number>();
   const [over, setOver] = useState<number>();
+  // Picked rows, as in Finder: click one, ⌘-click to add or take away, shift-click or drag for a run, or
+  // drag a box from empty space. ↑ and ↓ move (shift: stretch the run), ⌥↑ ⌥↓ Home End go to the ends,
+  // typing a title goes to it, ⌘⌫ removes them from here (asking first). Double-click plays. anchor: where a
+  // run starts; lead: its moving end; sweeping: a drag-select under way from a row; held: a picked row
+  // pressed again in a list that reorders, picked alone if let go without a drag; boxing: a box being drawn.
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const anchor = useRef(0);
+  const lead = useRef(0);
+  const [boxing, setBoxing] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const [sweeping, setSweeping] = useState(false);
+  const held = useRef<number>(undefined);
+  const list = useRef<HTMLOListElement>(null);
+  const run = (a: number, b: number) => new Set(Array.from({ length: Math.abs(b - a) + 1 }, (_, k) => Math.min(a, b) + k));
+  // A new list, not the same one made again on a render, starts with nothing picked.
+  const ids = tracks.map((t) => t.id).join("\n");
+  useEffect(() => setSel(new Set()), [ids]);
+  // ⌘A picks the list the pointer is over, or the one already picked in.
+  const hot = useRef(false);
+  const typed = useRef({ text: "", at: 0 });
+  useEffect(() => {
+    const up = () => setSweeping(false);
+    // Rows are found under the pointer: WebKit keeps sending a press's moves to the row it began on.
+    const sweep = (e: PointerEvent) => {
+      if (!sweeping || !(e.buttons & 1)) return;
+      const row = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("li[data-i]");
+      if (row && list.current?.contains(row)) setSel(run(anchor.current, (lead.current = +row.dataset.i!)));
+    };
+    const away = (e: PointerEvent) => {
+      const t = e.target as Element, page = list.current?.closest<HTMLElement>("main > div");
+      if (list.current?.contains(t) || t.closest?.("[role=menu]")) return;
+      // Empty space on this list's page, level with it or below it (and below no later list): a box.
+      const empty = e.button === 0 && page?.contains(t) && !t.closest("button, a, input, textarea, select, li, [role=separator]") && [...page.querySelectorAll("ol[data-rows]")].filter((o) => o.getBoundingClientRect().top <= e.clientY).pop() === list.current;
+      if (empty && page) draw(e, page, e.metaKey || e.ctrlKey || e.shiftKey ? sel : new Set());
+      else if (sel.size) setSel(new Set());
+    };
+    const keys = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || (e.target as Element).closest?.("input, textarea, [role=dialog]") || !(sel.size || hot.current)) return;
+      const mod = e.metaKey || e.ctrlKey, end = tracks.length - 1;
+      const by = (e.altKey ? { ArrowDown: end, ArrowUp: -end } : { ArrowDown: 1, ArrowUp: -1 })[e.key] ?? { Home: -end, End: end }[e.key];
+      const land = (i: number) => {
+        e.preventDefault(), (lead.current = i);
+        if (e.shiftKey) setSel(run(anchor.current, i));
+        else (anchor.current = i), setSel(new Set([i]));
+        list.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: "nearest" });
+      };
+      if (e.key === "Escape") setSel(new Set());
+      else if (e.key === "a" && mod) e.preventDefault(), setSel(run(0, end));
+      else if (e.key === "Enter" && sel.size) onPlay(Math.min(...sel));
+      else if ((e.key === "Backspace" || e.key === "Delete") && mod && sel.size) {
+        e.preventDefault();
+        const at = [...sel].sort((a, b) => a - b), ts = at.map((k) => tracks[k]);
+        if (playlist) unlist(playlist, at.map((k) => origin?.[k] ?? k), ts);
+        else if (from === "liked") unlike(ts);
+        else if (from === "local") unfile(ts);
+      } else if (by && (sel.size || e.key === "Home" || e.key === "End")) land(Math.max(0, Math.min(end, lead.current + by)));
+      // Typing a title goes to the first that starts with it, as in Finder; a pause starts a new word.
+      else if (e.key.length === 1 && e.key !== " " && !mod && !e.altKey) {
+        const t = typed.current, q = (t.text = (e.timeStamp - t.at < 1000 ? t.text : "") + e.key.toLowerCase());
+        t.at = e.timeStamp;
+        const i = tracks.findIndex((x) => x.title.toLowerCase().startsWith(q));
+        if (i >= 0) land(i);
+      }
+    };
+    addEventListener("pointerup", up), addEventListener("pointermove", sweep), addEventListener("pointerdown", away), addEventListener("keydown", keys);
+    return () => (removeEventListener("pointerup", up), removeEventListener("pointermove", sweep), removeEventListener("pointerdown", away), removeEventListener("keydown", keys));
+  }, [sel, sweeping, tracks, onPlay]);
+  // The box, kept to the page and redrawn as the pointer moves and every frame (so it follows the scroll).
+  // Held past the page's top or bottom, the page scrolls, faster the further out. The rows it touches are
+  // found by halving (rows not drawn yet aren't their real height). add: the rows picked already, kept
+  // with ⌘ or shift.
+  const draw = (e: PointerEvent, page: HTMLElement, add: Set<number>) => {
+    const x0 = e.clientX, y0 = e.clientY + page.scrollTop;
+    let x = x0, y = e.clientY, was = "", frame = 0;
+    const paint = () => {
+      const p = page.getBoundingClientRect(), o = list.current?.getBoundingClientRect();
+      const [left, right] = [Math.max(p.left, Math.min(x0, x)), Math.min(p.right, Math.max(x0, x))];
+      const [top, bottom] = [Math.max(p.top, Math.min(y0 - page.scrollTop, y)), Math.min(p.bottom, Math.max(y0 - page.scrollTop, y))];
+      if (box.current) Object.assign(box.current.style, { left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
+      const rows = list.current?.children ?? [];
+      const row = (y: number) => {
+        let [lo, hi] = [0, rows.length - 1];
+        while (lo < hi) { const m = (lo + hi + 1) >> 1; if (rows[m].getBoundingClientRect().top <= y) lo = m; else hi = m - 1; }
+        return lo;
+      };
+      const [a, b] = o && right > o.left && left < o.right && bottom > o.top && top < o.bottom ? [row(top), row(bottom)] : [0, -1];
+      if (`${a} ${b}` !== was) (was = `${a} ${b}`), setSel(new Set([...add, ...(b >= a ? run(a, b) : [])])), b >= a && (anchor.current = lead.current = a);
+    };
+    const move = (e: PointerEvent) => ((x = e.clientX), (y = e.clientY), paint());
+    const step = () => {
+      const p = page.getBoundingClientRect();
+      page.scrollTop += Math.max(-40, Math.min(40, y < p.top + 16 ? (y - p.top - 16) / 2 : y > p.bottom - 16 ? (y - p.bottom + 16) / 2 : 0));
+      paint(), (frame = requestAnimationFrame(step));
+    };
+    const done = (e: PointerEvent) => (cancelAnimationFrame(frame), move(e), removeEventListener("pointermove", move), removeEventListener("pointerup", done), document.documentElement.classList.remove("select-none"), setBoxing(false));
+    addEventListener("pointermove", move), addEventListener("pointerup", done);
+    document.documentElement.classList.add("select-none");
+    setBoxing(true), setSel(new Set(add)), (frame = requestAnimationFrame(step));
+  };
+  const pick = (e: React.PointerEvent, i: number) => {
+    if (e.button !== 0) return;
+    held.current = undefined;
+    lead.current = i;
+    if (e.shiftKey) return setSel(run(anchor.current, i));
+    anchor.current = i;
+    if (e.metaKey || e.ctrlKey) return setSel((s) => (s.has(i) ? (s.delete(i), new Set(s)) : new Set(s).add(i)));
+    // A row already picked stays with the others, so they can be dragged to a new place together.
+    if (onMove && sel.has(i)) return void (held.current = i);
+    setSweeping(true);
+    setSel(new Set([i]));
+  };
+  const menu = (i: number) => {
+    if (sel.has(i) && sel.size > 1) {
+      const at = [...sel].sort((a, b) => a - b);
+      return tracksMenu(at.map((k) => tracks[k]), playlist ? { id: playlist, at: at.map((k) => origin?.[k] ?? k) } : undefined);
+    }
+    anchor.current = lead.current = i;
+    setSel(new Set([i]));
+    trackMenu(tracks[i], playlist ? { playlist, index: origin?.[i] ?? i } : undefined);
+  };
   const num = numbered || plain;
   // Which of Title, Album and Date Added show (by their place in trackCols), and the grid they make.
   const flex = [0, ...(plain ? [] : [1]), ...(added ? [2] : [])];
@@ -3469,29 +3635,35 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   return (
     <>
       {header && <TrackHeader grid={grid} num={!!num} flex={flex} played={!!times} />}
-      <ol>
+      {boxing && createPortal(<div ref={box} className="pointer-events-none fixed z-50 rounded-[3px] border border-ink/25 bg-ink/[0.08]" />, document.body)}
+      <ol ref={list} data-rows onPointerEnter={() => (hot.current = true)} onPointerLeave={() => (hot.current = false)} className="select-none">
         {tracks.map((t, i) => {
           const off = skipped(t);
           const dim = off || unavailable(t);
           return (
             <li
               key={t.id + i}
-              draggable={!!onMove}
+              // Not mid-sweep: the row a press just picked would start a move in place of the sweep.
+              draggable={!!onMove && sel.has(i) && !sweeping}
+              onPointerDown={(e) => pick(e, i)}
+              onClick={(e) => e.detail === 1 && held.current === i && setSel(new Set([i]))}
+              data-i={i}
               onDragStart={(e) => ((e.dataTransfer.effectAllowed = "move"), setDrag(i))}
               onDragOver={(e) => drag !== undefined && (e.preventDefault(), setOver(i))}
               // Cleared here too: the move re-keys the rows, so dragend never reaches the moved one.
-              onDrop={() => (drag !== undefined && drag !== i && onMove?.(drag, i), setDrag(undefined), setOver(undefined))}
+              onDrop={() => (drag !== undefined && !sel.has(i) && onMove?.(sel.has(drag) ? [...sel].sort((a, b) => a - b) : [drag], i), setDrag(undefined), setOver(undefined))}
               onDragEnd={() => (setDrag(undefined), setOver(undefined))}
-              onContextMenu={(e) => (e.preventDefault(), trackMenu(t, playlist ? { playlist, index: origin?.[i] ?? i } : undefined))}
+              onContextMenu={(e) => (e.preventDefault(), menu(i))}
+              aria-selected={sel.has(i)}
               style={grid}
-              className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors [contain-intrinsic-size:auto_56px] [content-visibility:auto] hover:bg-ink/[0.04] ${drag === i ? "opacity-40" : ""} ${
+              className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors [contain-intrinsic-size:auto_56px] [content-visibility:auto] ${sel.has(i) ? "bg-accent/20" : "hover:bg-ink/[0.04]"} ${drag === i ? "opacity-40" : ""} ${
                 over === i && drag !== undefined && drag !== i ? (drag > i ? "shadow-[inset_0_2px_var(--color-accent)]" : "shadow-[inset_0_-2px_var(--color-accent)]") : ""
               }`}
             >
-              <button onClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
+              <button onClick={(e) => e.detail === 0 && onPlay(i)} onDoubleClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
               {num && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
               <div className="flex min-w-0 items-center gap-3">
-                {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" className={`size-10 shrink-0 rounded-lg bg-ink/[0.06] object-cover ${dim ? "opacity-40" : ""}`} />}
+                {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" draggable={false} className={`size-10 shrink-0 rounded-lg bg-ink/[0.06] object-cover ${dim ? "opacity-40" : ""}`} />}
                 <div className={`min-w-0 ${dim ? "opacity-45" : ""}`}>
                   <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>
                     {off && <EyeOff size={14} aria-label="Hidden" className="mr-1.5 inline -translate-y-px text-muted" />}

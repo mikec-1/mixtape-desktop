@@ -4,7 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { fetch } from "@tauri-apps/plugin-http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { files, idb, notify, plural, useStore } from "./store";
+import { files, forget, idb, notify, plural, useStore } from "./store";
 import { searchKind, type Track } from "./yt";
 
 // Your own music: folders on this computer, read by src-tauri/src/local.rs. What a scan found is kept,
@@ -78,7 +78,9 @@ export async function addFiles(paths: string[]) {
   await rescan();
   const songs = paths.filter((p) => useLocal.getState().files[p]);
   // A folder goes straight in; songs on their own get a look over first.
-  if (songs.length) useStore.setState({ dialog: { kind: "songs", paths: songs } });
+  if (songs.length < paths.length) notify({ text: "Folder Added", detail: `${plural(localTracks().length, "song")} in your Local Files` });
+  // More dropped while still looking over the last ones: they join the end of that list.
+  if (songs.length) useStore.setState(({ dialog: d }) => ({ dialog: { kind: "songs", paths: [...new Set([...(d?.kind === "songs" && !d.editing ? d.paths : []), ...songs])] } }));
 }
 // The song an edit is of, from Apple's catalogue (as Mixtape does it): searched without "slowed", "sped up"
 // and the like, then kept only when the title's words are all in the result's and either artist's name
@@ -153,44 +155,53 @@ export const addedFiles = (paths: string[]) => {
   const t = fileTrack(useLocal.getState().files[paths[0]]);
   notify({ text: paths.length > 1 ? `Added ${paths.length} Songs` : `Added ${t.title}`, detail: "In your Local Files", thumb: t.thumb });
 };
-// Takes a song out of Sleeve, not off the disk: a song dropped on its own goes, one in a folder is passed
-// over by later scans.
-export function removeFile(path: string) {
-  const { folders, skip } = useLocal.getState();
-  if (folders.includes(path)) return removeFolder(path);
+// Takes songs out of Sleeve, not off the disk: songs dropped on their own go, ones in a folder are passed
+// over by later scans. Gone from your playlists and the queue too.
+export function removeFiles(paths: string[]) {
+  const out = new Set(paths);
+  const t = paths.length === 1 && useLocal.getState().files[paths[0]] && fileTrack(useLocal.getState().files[paths[0]]);
   useLocal.setState((s) => {
-    const { [path]: _, ...files } = s.files;
-    return { files, skip: [...skip, path] };
+    const folders = s.folders.filter((f) => !out.has(f));
+    const drop = <T,>(o: Record<string, T>) => Object.fromEntries(Object.entries(o).filter(([p]) => !out.has(p)));
+    return { folders, files: drop(s.files), edits: drop(s.edits), skip: [...s.skip, ...paths.filter((p) => folders.some((f) => inside(p, f)))] };
   });
+  forget(paths.map((p) => `file:${p}`));
+  notify({ text: "Removed from Local Files", detail: t ? t.title : plural(paths.length, "song"), thumb: t ? t.thumb : undefined });
 }
 const inside = (path: string, folder: string) => path === folder || path.startsWith(`${folder}/`) || path.startsWith(`${folder}\\`);
-export const removeFolder = (folder: string) =>
+export function removeFolder(folder: string) {
+  const before = Object.keys(useLocal.getState().files);
   useLocal.setState((s) => {
     const folders = s.folders.filter((f) => f !== folder);
     return { folders, files: Object.fromEntries(Object.entries(s.files).filter(([p]) => folders.some((f) => inside(p, f)))) };
   });
+  const files = useLocal.getState().files;
+  forget(before.filter((p) => !files[p]).map((p) => `file:${p}`));
+}
 
-// Reads the folders again: only files whose modified time changed are read for tags. One at a time.
-let running: Promise<void> | undefined;
-export const rescan = () =>
-  (running ??= (async () => {
-    const { folders, files } = useLocal.getState();
-    useLocal.setState({ scanning: true });
-    try {
-      const known = Object.fromEntries(Object.values(files).map((f) => [f.path, f.mtime]));
-      const r = await invoke<{ files: LocalFile[]; unchanged: string[] }>("scan_music", { folders, known });
-      const next: Record<string, LocalFile> = {};
-      for (const p of r.unchanged) if (files[p]) next[p] = files[p];
-      for (const f of r.files) next[f.path] = f;
-      for (const p of useLocal.getState().skip ?? []) delete next[p];
-      useLocal.setState({ files: next });
-    } catch (e) {
-      notify({ text: "Couldn’t Read Your Music", detail: String(e) });
-    } finally {
-      useLocal.setState({ scanning: false });
-      running = undefined;
-    }
-  })());
+// Reads the folders again: only files whose modified time changed are read for tags. One at a time: asked
+// for while one runs, it runs once more after, so a folder added or removed meanwhile is seen.
+let last = Promise.resolve();
+let waiting: Promise<void> | undefined;
+export const rescan = () => (waiting ??= last.then(() => ((waiting = undefined), (last = scan()))));
+async function scan() {
+  const { folders, files } = useLocal.getState();
+  useLocal.setState({ scanning: true });
+  try {
+    const known = Object.fromEntries(Object.values(files).map((f) => [f.path, f.mtime]));
+    const r = await invoke<{ files: LocalFile[]; unchanged: string[] }>("scan_music", { folders, known });
+    const next: Record<string, LocalFile> = {};
+    for (const p of r.unchanged) if (files[p]) next[p] = files[p];
+    for (const f of r.files) next[f.path] = f;
+    const now = useLocal.getState();
+    const skip = new Set(now.skip);
+    useLocal.setState({ files: Object.fromEntries(Object.entries(next).filter(([p]) => !skip.has(p) && now.folders.some((f) => inside(p, f)))) });
+  } catch (e) {
+    notify({ text: "Couldn’t Read Your Music", detail: String(e) });
+  } finally {
+    useLocal.setState({ scanning: false });
+  }
+}
 
 // At launch: let the webview play from the folders (permission doesn't outlive the app), then look again.
 const boot = () => {

@@ -41,7 +41,8 @@ export type Dialog =
   | { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track }
   | { kind: "card"; track: Track; pick: number[] }
   | { kind: "import"; playlist: string; name: string; added: number; items: Review[] }
-  | { kind: "songs"; paths: string[]; editing?: boolean };
+  | { kind: "songs"; paths: string[]; editing?: boolean }
+  | { kind: "warn"; title: string; text: string; yes: string; then: () => void };
 // Feedback for a library change: what happened, to what, and a way back.
 export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean };
 
@@ -142,6 +143,12 @@ const entry = ({ rec: _, ...t }: Track): Track => ({ ...t, at: Date.now() });
 
 export const toggleLike = (t: Track) =>
   change(has(useLibrary.getState().liked, t.id) ? "Removed from Liked Songs" : "Added to Liked Songs", t, (s) => ({ liked: toggleIn(s.liked, entry(t)) }));
+// Several picked in a list: all in, or all out, with one Undo.
+export const likeAll = (ts: Track[], on: boolean) =>
+  change(on ? "Added to Liked Songs" : "Removed from Liked Songs", { title: plural(ts.length, "song"), thumb: ts[0]?.thumb }, (s) => {
+    const ids = new Set(ts.map((t) => t.id));
+    return { liked: on ? [...ts.filter((t) => !has(s.liked, t.id)).map(entry), ...s.liked] : s.liked.filter((x) => !ids.has(x.id)) };
+  });
 export const toggleSave = (a: Album) =>
   change(has(useLibrary.getState().saved, a.id) ? "Removed from Library" : "Saved to Library", a, (s) => ({ saved: toggleIn(s.saved, a) }));
 // Several at once, quietly (the artists picked when you first open Sleeve).
@@ -154,13 +161,15 @@ export const addToPlaylist = (id: string, tracks: Track[]) =>
 // The import review's choices: each guess swapped for the chosen song (or dropped), then the found ones added.
 export const fixImport = (id: string, swap: Map<string, Track | undefined>, add: Track[]) =>
   change(`Updated ${playlist(id)?.name}`, add[0], edit(id, (p) => ({ tracks: [...p.tracks.flatMap((t) => (!swap.has(t.id) ? [t] : swap.get(t.id) ? [entry(swap.get(t.id)!)] : [])), ...add.map(entry)] })));
-export const removeFromPlaylist = (id: string, index: number) =>
-  change(`Removed from ${playlist(id)?.name}`, playlist(id)?.tracks[index], edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => i !== index) })));
-export const movePlaylistTrack = (id: string, from: number, to: number) =>
+export const removeFromPlaylist = (id: string, at: number[]) =>
+  change(`Removed from ${playlist(id)?.name}`, at.length > 1 ? { title: plural(at.length, "song"), thumb: playlist(id)?.tracks[at[0]]?.thumb } : playlist(id)?.tracks[at[0]], edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => !at.includes(i)) })));
+// Rows picked together move together, in their order, to either side of the one they're dropped on.
+export const movePlaylistTrack = (id: string, from: number[], to: number) =>
   lib(edit(id, (p) => {
-    const tracks = [...p.tracks];
-    tracks.splice(to, 0, ...tracks.splice(from, 1));
-    return { tracks };
+    if (from.includes(to)) return {};
+    const rest = p.tracks.filter((_, i) => !from.includes(i));
+    const at = rest.indexOf(p.tracks[to]) + (from[0] < to ? 1 : 0);
+    return { tracks: [...rest.slice(0, at), ...from.map((i) => p.tracks[i]), ...rest.slice(at)] };
   }));
 export const renamePlaylist = (id: string, name: string) => lib(edit(id, () => ({ name })));
 export const describePlaylist = (id: string, about: string) => lib(edit(id, () => ({ about })));
@@ -271,6 +280,30 @@ export function patch(id: string, p: Partial<Track>) {
   if (liked !== l.liked || hidden !== l.hidden || playlists.some((pl, i) => pl !== l.playlists[i])) lib({ liked, hidden, playlists });
   set((s) => ({ queue: fix(s.queue) }));
   useHistory.setState((s) => ({ recent: fix(s.recent) }));
+}
+
+// Takes songs out of everywhere they're kept (a file removed from Sleeve). One playing stops, and the
+// song after it waits in its place.
+export function forget(ids: string[]) {
+  const out = new Set(ids);
+  const gone = (x: Track) => out.has(x.id);
+  const keep = (list: Track[]) => (list.some(gone) ? list.filter((x) => !gone(x)) : list);
+  const l = useLibrary.getState();
+  const liked = keep(l.liked), hidden = keep(l.hidden), playlists = l.playlists.map((pl) => ((t) => (t === pl.tracks ? pl : { ...pl, tracks: t }))(keep(pl.tracks)));
+  if (liked !== l.liked || hidden !== l.hidden || playlists.some((pl, i) => pl !== l.playlists[i])) lib({ liked, hidden, playlists });
+  const { queue, index, added, original } = get();
+  const stop = !!queue[index] && gone(queue[index]);
+  if (stop) latest++, pause(), audio.removeAttribute("src"), audio.load(), (resume.time = 0);
+  const rest = keep(queue);
+  const before = queue.slice(0, index).filter(gone).length;
+  set({
+    queue: rest,
+    original: original && keep(original),
+    index: Math.min(index - before, rest.length - 1),
+    added: ((n) => (stop && n ? n - 1 : n))(added - queue.slice(index + 1, index + 1 + added).filter(gone).length), // the next one queued may now be playing
+    ...(stop && { loading: false }),
+  });
+  useHistory.setState((s) => ({ recent: keep(s.recent) }));
 }
 
 // When each thing in your library was last opened or played from, for the Library's Recents order.

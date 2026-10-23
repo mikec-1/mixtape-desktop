@@ -4,7 +4,8 @@ import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, 
 // (useSettings keymap, by id; "" is none). Combos are "mod+" (⌘, Ctrl on Windows) and the key, lowercase.
 // Find on this page if it has a search field (or its button), else the Search tab.
 export const findSearch = () => {
-  const el = document.querySelector<HTMLElement>("[data-find]");
+  // Every page in the stack stays mounted: the one showing is the one with a layout box.
+  const el = [...document.querySelectorAll<HTMLElement>("[data-find]")].find((x) => x.offsetParent);
   if (el instanceof HTMLInputElement) el.select();
   else if (el) el.click();
   else {

@@ -47,6 +47,9 @@
           "url": "https://itunes.apple.com/*"
         },
         {
+          "url": "https://api.deezer.com/*"
+        },
+        {
           "url": "https://music.163.com/*"
         },
         {

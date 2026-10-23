@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { downloads, idb, idbGet, idbPut, libraryKey, notify, plural, useLibrary, useSettings } from "./store";
 import { keepLyrics } from "./lyrics";
+import { youtubeId } from "./deezer";
 import { artBase, covers, fetchAudio, sizedArt, type Collection, type Track } from "./yt";
 
 // Offline downloads: Liked Songs, playlists and albums kept on this computer, so they play with no
@@ -84,7 +85,8 @@ async function work() {
     for (let id: string | undefined; (id = get().waiting.find((x) => !busy.has(x))) && navigator.onLine; ) {
       busy.add(id);
       try {
-        const { chunks, mime, duration, loudness } = await fetchAudio(id, useSettings.getState().quality);
+        const song = wanted().get(id);
+        const { chunks, mime, duration, loudness } = await (song ? youtubeId(song) : Promise.resolve(id)).then((y) => fetchAudio(y, useSettings.getState().quality));
         const parts = await Promise.all(chunks);
         const plain = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
         parts.reduce((at, p) => (plain.set(new Uint8Array(p), at), at + p.byteLength), 0);

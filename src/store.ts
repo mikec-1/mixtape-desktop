@@ -6,6 +6,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { art, details, fetchAudio, playAudio, radio, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
 import type { Review } from "./import";
+import { youtubeId } from "./deezer";
 import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
 
 type Root = "home" | "search" | "library" | "settings";
@@ -13,7 +14,7 @@ type Root = "home" | "search" | "library" | "settings";
 // "shared" is someone's public playlist (id "<owner>/<playlist>"), "profile" someone's profile (account.ts).
 export type View =
   | { name: Root | "history" | "local" | "charts" | "releases" | "wrapped" }
-  | { name: "artist" | "collection" | "playlist" | "folder" | "shared" | "profile"; id: string }
+  | { name: "artist" | "collection" | "playlist" | "folder" | "shared" | "profile"; id: string; by?: string } // by: the artist's name, to find them on YT Music when id is "" (or from Deezer)
   | { name: "discography"; id: string; params?: string; artist?: string };
 
 type State = {
@@ -422,9 +423,10 @@ const playable = (t: Track) => !skipped(t) && !unavailable(t);
 // Instant skip: the next track's audio is fetched while this one plays, and recent ones are kept.
 // ponytail: last 4 tracks in memory (~20 MB).
 const cache = new Map<string, ReturnType<typeof fetchAudio>>();
-function fetchCached(id: string) {
+function fetchCached({ id, ...t }: Track) {
   const dl = downloads.read?.(id);
-  const p = cache.get(id) ?? (dl ? dl.catch(() => fetchAudio(id, useSettings.getState().quality)) : fetchAudio(id, useSettings.getState().quality));
+  const stream = () => youtubeId({ id, ...t }).then((y) => fetchAudio(y, useSettings.getState().quality));
+  const p = cache.get(id) ?? (dl ? dl.catch(stream) : stream());
   cache.delete(id);
   cache.set(id, p);
   if (cache.size > 4) cache.delete(cache.keys().next().value!);
@@ -433,7 +435,7 @@ function fetchCached(id: string) {
 }
 const prefetch = () => {
   const t = get().queue[nextIndex(get().index)];
-  if (t && !t.file) fetchCached(t.id).catch(() => {});
+  if (t && !t.file) fetchCached(t).catch(() => {});
 };
 // A song file on this computer plays from disk through the asset protocol: no stream to fetch, and it
 // seeks like any file. A webview that won't stream that into a player (WebKitGTK, on Linux) gets the file
@@ -477,7 +479,7 @@ export function startRadio(t: Track) {
 
 // An artist's or playlist's radio: the "watch next" mixes of a few of its songs, taken in turn.
 async function mix(seeds: Track[], skip = new Set<string>()) {
-  const mixes = await Promise.all(seeds.filter((t) => !t.file).map((t) => radio(t.id).catch(() => [])));
+  const mixes = await Promise.all(seeds.filter((t) => !t.file).map((t) => youtubeId(t).then(radio).catch(() => [])));
   return mixes.flatMap((m) => m.map((t, i) => [i, t] as const)).sort((a, b) => a[0] - b[0]).flatMap(([, t]) => (skip.has(t.id) || skipped(t) ? [] : (skip.add(t.id), [t])));
 }
 export async function radioFrom(tracks: Track[], from?: string) {
@@ -524,7 +526,7 @@ async function load(index: number, start = 0, fade = 0) {
     if (buffered) await audio.play();
     else if (track.file) loudness.set(audio, 0), level(audio), await playFile(audio, track.file, start);
     else {
-      const data = await fetchCached(track.id);
+      const data = await fetchCached(track);
       if (me !== latest) return;
       loudness.set(audio, data.loudness), level(audio);
       await playAudio(audio, data, start);
@@ -556,7 +558,7 @@ async function preload(t: Track) {
   ready = { id: t.id, el };
   try {
     if (t.file) return loudness.set(el, 0), await playFile(el, t.file, 0, false);
-    const data = await fetchCached(t.id);
+    const data = await fetchCached(t);
     if (ready?.el !== el || ready.id !== t.id) return;
     loudness.set(el, data.loudness);
     await playAudio(el, data, 0, false);
@@ -583,7 +585,7 @@ on("durationchange", () => {
 // The queue ran out: carry on with the last track's radio, minus anything already in it.
 async function extend(seed: Track) {
   if (seed.file) return; // not on YouTube, so no radio
-  const more = await radio(seed.id).catch(() => []);
+  const more = await youtubeId(seed).then(radio).catch(() => []);
   const { queue } = get();
   if (queue.at(-1)?.id !== seed.id) return; // you queued or played something else meanwhile
   const ids = new Set(queue.map((t) => t.id));

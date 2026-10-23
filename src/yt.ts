@@ -8,10 +8,24 @@ Platform.shim.eval = (data) => new Function(data.output)();
 // Requests go through Rust (plugin-http): no CORS, and they come from the user's own IP.
 // plugin-http adds the webview's Origin (localhost:1420) which YouTube 403s; an empty Origin
 // removes it (needs the "unsafe-headers" feature). A plain Headers object keeps forbidden names.
+// Now and then YouTube holds calls ~9 s and answers with its "Sorry…" page, while the same call sent again
+// mostly comes back at once. So a call to its API goes again every 2 s it hasn't answered, four goes at
+// most: the first good answer wins, and a bad one counts only once none are still out.
 const ytFetch: typeof globalThis.fetch = (input, init) => {
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
   headers.set("origin", "");
-  return fetch(input, { ...init, headers });
+  const go = () => fetch(input, { ...init, headers });
+  if (!String(input instanceof Request ? input.url : input).includes("/youtubei/")) return go();
+  return new Promise((done, fail) => {
+    let sent = 0, out = 0, over = false, timer: ReturnType<typeof setTimeout>;
+    const end = (then: () => void) => over || ((over = true), clearTimeout(timer), then());
+    const send = () => {
+      sent++, out++;
+      if (sent < 4) timer = setTimeout(send, 2000);
+      go().then((r) => (--out, (r.ok || !out) && end(() => done(r))), (e) => --out || end(() => fail(e)));
+    };
+    send();
+  });
 };
 
 const yt = Innertube.create({ fetch: ytFetch, retrieve_player: true });
@@ -27,7 +41,8 @@ export type Album = { id: string; title: string; year?: string; by?: string; thu
 // downloaded song's artwork (offline.ts sets covers.local) comes from disk instead, at any size.
 export const covers: { local?: (url: string, w: number) => string | undefined } = {};
 export const artBase = (url: string) => url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, "");
-export const sizedArt = (url: string, w: number, h = w) => url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, `=w${w}-h${h}-l90-rj`);
+// Deezer's covers take any size in the path (/1000x1000-000000-80-0-0.jpg).
+export const sizedArt = (url: string, w: number, h = w) => (url.includes("dzcdn.net") ? url.replace(/\/\d+x\d+-/, `/${w}x${h}-`) : url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, `=w${w}-h${h}-l90-rj`));
 export const art = (url: string | undefined, w: number, h = w) => url && (covers.local?.(url, w) ?? sizedArt(url, w, h));
 
 // YT Music links only the artists it has a page for; the rest are plain text in the same line ("Jazeek &

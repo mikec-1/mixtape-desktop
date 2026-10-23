@@ -7,11 +7,12 @@ import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, fixImport, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
   shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
-  useRecentSearches, addRecentSearch,
+  useRecentSearches, addRecentSearch, idbGet, idbPut,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
-import { albumByName, art, artist, artistByName, charts, collection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
+import { albumByName, art, artist, artistByName, charts, collection as ytCollection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
+import { album as deezerAlbum, isDeezer, withGuests } from "./deezer";
 import { addFolder, canHaveFiles, guessTags, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
@@ -20,6 +21,9 @@ import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCom
 import { version } from "../package.json";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
 import { importPlaylistFile, rematch } from "./import";
+
+// An album from Deezer (artist pages) or YouTube Music (search, Home).
+const collection = (id: string) => (isDeezer(id) ? deezerAlbum(id) : ytCollection(id));
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
 function useAsync<T>(fn: () => Promise<T> | undefined, deps: unknown[]) {
@@ -139,7 +143,7 @@ export function Search() {
                 {recents.map((r) => (
                   <div key={r.id} className="group relative w-36 shrink-0">
                     <button
-                      onClick={() => (r.kind === "query" ? go(r.title) : r.kind === "artist" ? open({ name: "artist", id: r.id }) : r.kind === "album" ? open({ name: "collection", id: r.id }) : r.track && play([r.track], 0))}
+                      onClick={() => (r.kind === "query" ? go(r.title) : r.kind === "artist" ? open({ name: "artist", id: r.id, by: r.title }) : r.kind === "album" ? open({ name: "collection", id: r.id }) : r.track && play([r.track], 0))}
                       className="press block w-full text-left"
                     >
                       <div className={`grid aspect-square place-items-center overflow-hidden bg-ink/[0.06] text-muted ${r.kind === "artist" ? "rounded-full" : "rounded-xl"}`}>
@@ -178,7 +182,7 @@ export function Search() {
           {all ? (
             <>
               {top && (
-                <button onClick={() => (addRecentSearch({ id: top.id, kind: "artist", title: top.name, thumb: top.thumb }), open({ name: "artist", id: top.id }))} className="group mt-10 flex items-center gap-6 text-left">
+                <button onClick={() => (addRecentSearch({ id: top.id, kind: "artist", title: top.name, thumb: top.thumb }), open({ name: "artist", id: top.id, by: top.name }))} {...warm(top)} className="group mt-10 flex items-center gap-6 text-left">
                   <div className="size-32 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
                     <img src={art(top.thumb, 400)} alt="" className="size-full object-cover" />
                   </div>
@@ -497,7 +501,8 @@ export function CollectionPage({ id }: { id: string }) {
   const online = useOnline();
   const kept = useOffline((s) => s.lists[libraryKey("album", id)]?.collection);
   const { data: fresh, error } = useAsync(() => (online || !kept ? collection(id) : undefined), [id, online]);
-  const page = fresh ?? kept;
+  const { data: guests } = useAsync(() => (fresh && isDeezer(id) ? withGuests(fresh.tracks) : undefined), [fresh]);
+  const page = fresh && guests ? { ...fresh, tracks: guests } : (fresh ?? kept);
   const data = page && { ...page, by: [page.by ?? []].flat() }; // kept before an album's artists were a list
   const saved = useLibrary((s) => s.saved.some((a) => a.id === id));
   const [query, setQuery] = useState("");
@@ -643,7 +648,7 @@ function LikedHero({ liked }: { liked: Track[] }) {
 
 // One thing in the library, as the Library page and a folder's page show it.
 type Item = { key: string; kind: LibraryKind; id: string; title: string; sub: string; at: number; creator: string; folder?: string };
-const isAlbum = (id: string) => id.startsWith("MPRE");
+const isAlbum = (id: string) => id.startsWith("MPRE") || id.startsWith("dz:album:");
 
 // What the Library shows for a filter and search, pinned first (Liked Songs before all), then in order.
 // Searching looks inside folders too. at: when it was added; things saved before Sleeve kept the time
@@ -727,7 +732,7 @@ function LibraryItems({ items, view }: { items: Item[]; view: "grid" | "list" })
   );
 }
 
-const itemView = (i: Item): View => (i.kind === "liked" ? { name: "playlist", id: "liked" } : i.kind === "album" ? { name: "collection", id: i.id } : i.kind === "local" ? { name: "local" } : { name: i.kind, id: i.id });
+const itemView = (i: Item): View => (i.kind === "liked" ? { name: "playlist", id: "liked" } : i.kind === "album" ? { name: "collection", id: i.id } : i.kind === "local" ? { name: "local" } : { name: i.kind, id: i.id, ...(i.kind === "artist" && { by: i.title }) });
 
 // An item's songs, to play from its card: your own lists at once, the rest from YouTube Music.
 async function itemTracks(i: Item): Promise<Track[]> {
@@ -736,7 +741,7 @@ async function itemTracks(i: Item): Promise<Track[]> {
   if (i.kind === "local") return localTracks();
   if (i.kind === "playlist") return l.playlists.find((p) => p.id === i.id)?.tracks ?? [];
   if (i.kind === "folder") return l.playlists.filter((p) => p.folder === i.id).flatMap((p) => p.tracks);
-  if (i.kind === "artist") return (await artist(i.id)).songs;
+  if (i.kind === "artist") return (await loadArtist(i.id).full).songs;
   return (await collection(i.id)).tracks;
 }
 
@@ -1366,7 +1371,7 @@ export function WrappedPage() {
               {r.artists.map(({ v, n }, i) => (
                 <li key={v.name} className="flex items-center gap-4 py-1.5">
                   <span className="w-5 text-right text-muted tabular-nums">{i + 1}</span>
-                  {v.id ? <button onClick={() => open({ name: "artist", id: v.id! })} className="font-semibold hover:underline">{v.name}</button> : <span className="font-semibold">{v.name}</span>}
+                  {v.id ? <button onClick={() => open({ name: "artist", id: v.id!, by: v.name })} className="font-semibold hover:underline">{v.name}</button> : <span className="font-semibold">{v.name}</span>}
                   <span className="ml-auto text-sm text-muted">{plural(n, "play")}</span>
                 </li>
               ))}
@@ -1430,24 +1435,53 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
   );
 }
 
+// Artist pages, each fetched once per launch: page is YT Music's own (five songs, no lengths), full adds
+// their top ten once that comes too.
+type ArtistPage = Awaited<ReturnType<typeof artist>>;
+const artistPages = new Map<string, { page: Promise<ArtistPage>; full: Promise<ArtistPage> }>();
+function loadArtist(id: string) {
+  if (!artistPages.has(id)) {
+    const page = artist(id);
+    const full = page.then((p) => (p.more ? topSongs(p.more).then((top) => (top.length ? { ...p, songs: top } : p), () => p) : p));
+    artistPages.set(id, { page, full });
+    full.catch(() => artistPages.delete(id));
+  }
+  return artistPages.get(id)!;
+}
+// Resting on a link to an artist starts loading their page, so it's mostly there by the click.
+let resting: ReturnType<typeof setTimeout> | undefined;
+const warm = (a: { id?: string; name: string }) => ({
+  onPointerEnter: () => (resting = setTimeout(() => (a.id && !isDeezer(a.id) ? Promise.resolve(a.id) : artistByName(a.name)).then((id) => void (id && loadArtist(id).full)).catch(() => {}), 120)),
+  onPointerLeave: () => clearTimeout(resting),
+});
+
 // The banner runs edge to edge and fades into the page; the about text floats on it.
 const LINK = "press text-sm font-semibold text-muted hover:text-ink";
-export function Artist({ id }: { id: string }) {
-  const { data: page, error } = useAsync(() => artist(id), [id]);
-  // Their top ten with lengths and albums, a moment after the page's own five (which have neither).
-  const { data: top } = useAsync(() => (page?.more ? topSongs(page.more) : undefined), [page?.more]);
-  const data = page && { ...page, songs: top?.length ? top : page.songs };
+export function Artist({ id: linked, by }: { id: string; by?: string }) {
+  // One YT Music didn't link (on your own files, or from Deezer) opens at once and is found by name meanwhile.
+  const yt = isDeezer(linked) ? "" : linked;
+  // The last copy of the page draws at once (and offline), and the fresh one replaces it whole.
+  const key = `artist:${yt || by?.toLowerCase()}`;
+  const { data: kept } = useAsync(() => idbGet<ArtistPage & { id: string }>(key).catch(() => undefined), [key]);
+  const { data: found, error: lost } = useAsync(() => (yt ? undefined : artistByName(by ?? "").then((id) => id ?? Promise.reject("none"))), [yt, by]);
+  const id = yt || found || kept?.id || "";
+  const { data: page, error } = useAsync(() => (id ? loadArtist(id).page : undefined), [id]);
+  const { data: full } = useAsync(() => (id ? loadArtist(id).full.then((p) => (idbPut(key, { ...p, id }).catch(() => {}), p)) : undefined), [id]);
+  const data = full ?? kept ?? page;
   const [all, setAll] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
-  const following = useLibrary((s) => s.followed.some((a) => a.id === id));
-  const blocked = useLibrary((s) => !!data && s.blocked.some((b) => b.id === id || b.name.toLowerCase() === data.name.toLowerCase()));
+  // Followed or blocked under either id, or their name.
+  const lower = (data?.name ?? by ?? "").toLowerCase();
+  const followed = useLibrary((s) => s.followed.find((a) => a.id === id || a.id === linked || a.name.toLowerCase() === lower));
+  const blocked = useLibrary((s) => s.blocked.find((b) => (b.id && (b.id === id || b.id === linked)) || b.name.toLowerCase() === lower));
   // Your own files credited to them: edits, remixes, songs that aren't on YouTube.
   const files = useLocalTracks();
   const yours = data ? files.filter((t) => t.artists.some((a) => a.name.toLowerCase() === data.name.toLowerCase())) : [];
-  if (error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t load this artist. Go back and try again.</p>;
+  if (lost && !id) return <p title={lost} className="px-8 pt-20 text-muted">Couldn’t find {by} on YouTube Music.</p>;
+  if (error && !data) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t load this artist. Go back and try again.</p>;
   if (!data) return <Skeleton className="h-[min(60vh,540px)] bg-ink/[0.03]" />;
-  const from = libraryKey("artist", id);
-  const me = { id, name: data.name };
+  const me = { id: followed?.id ?? id, name: data.name };
+  const from = libraryKey("artist", me.id);
 
   return (
     <div className="animate-enter">
@@ -1475,8 +1509,8 @@ export function Artist({ id }: { id: string }) {
             <button onClick={() => play(data.songs, firstPlayable(data.songs), from)} disabled={!data.songs.length} className={`${pill} bg-accent text-paper disabled:opacity-50`}>
               <Play size={16} className="fill-current" /> Play
             </button>
-            <button onClick={() => toggleFollow({ ...me, thumb: data.banner })} aria-pressed={following} className={`${pill} bg-ink/[0.08] px-4 hover:bg-ink/[0.14]`}>
-              {following ? <UserCheck size={16} /> : <UserPlus size={16} />} {following ? "Following" : "Follow"}
+            <button onClick={() => toggleFollow(followed ?? { ...me, thumb: data.banner })} aria-pressed={!!followed} className={`${pill} bg-ink/[0.08] px-4 hover:bg-ink/[0.14]`}>
+              {followed ? <UserCheck size={16} /> : <UserPlus size={16} />} {followed ? "Following" : "Follow"}
             </button>
             <button onClick={() => shufflePlay(data.songs, from)} disabled={!data.songs.length} aria-label="Shuffle" title="Shuffle" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
               <Shuffle size={17} />
@@ -1485,7 +1519,7 @@ export function Artist({ id }: { id: string }) {
               <Radio size={17} />
             </button>
             <button
-              onClick={() => popup([...(following ? [{ text: useLibrary.getState().pinned.includes(from) ? "Unpin" : "Pin to Top", action: () => togglePin(from) }] : []), { text: blocked ? "Allow This Artist" : "Don’t Play This Artist", action: () => toggleBlock(me) }])}
+              onClick={() => popup([...(followed ? [{ text: useLibrary.getState().pinned.includes(from) ? "Unpin" : "Pin to Top", action: () => togglePin(from) }] : []), { text: blocked ? "Allow This Artist" : "Don’t Play This Artist", action: () => toggleBlock(blocked ?? me) }])}
               aria-label="More"
               title="More"
               aria-haspopup="menu"
@@ -3372,19 +3406,13 @@ export function Artists({ list }: { list: Track["artists"] }) {
   return list.map((a, i) => (
     <Fragment key={i}>
       {i > 0 && ", "}
-      <button onClick={(e) => (e.stopPropagation(), goToArtist(a))} className="relative hover:text-ink hover:underline">
+      <button onClick={(e) => (e.stopPropagation(), goToArtist(a))} {...warm(a)} className="relative hover:text-ink hover:underline">
         {a.name}
       </button>
     </Fragment>
   ));
 }
-function goToArtist(a: Artist) {
-  if (a.id) return open({ name: "artist", id: a.id });
-  artistByName(a.name).then(
-    (id) => (id ? open({ name: "artist", id }) : notify({ text: "No Page for This Artist", detail: a.name })),
-    () => notify({ text: "Couldn’t Find This Artist", detail: a.name }),
-  );
-}
+const goToArtist = (a: Artist) => open({ name: "artist", id: a.id ?? "", by: a.name });
 
 // The queue beside the page, opened from the player bar (like Spotify's). Drag a row, or use its menu, to reorder.
 const QUEUE_MIN = 260, QUEUE_MAX = 560;
@@ -3824,7 +3852,8 @@ function ArtistCards({ items, grid, remember }: { items: SearchArtist[]; grid?: 
       {items.map((a) => (
         <button
           key={a.id}
-          onClick={() => (remember && addRecentSearch({ id: a.id, kind: "artist", title: a.name, thumb: a.thumb }), open({ name: "artist", id: a.id }))}
+          onClick={() => (remember && addRecentSearch({ id: a.id, kind: "artist", title: a.name, thumb: a.thumb }), open({ name: "artist", id: a.id, by: a.name }))}
+          {...warm(a)}
           className={`press group text-center ${grid ? "" : "w-36 shrink-0"}`}
         >
           <div className="aspect-square w-full overflow-hidden rounded-full bg-ink/[0.06]">

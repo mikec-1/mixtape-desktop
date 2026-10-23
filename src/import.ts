@@ -173,6 +173,8 @@ async function find(row: CsvTrack, cache: Map<string, Promise<Track[]>>) {
     .map(([c]) => toTrack(row, c));
   return { hit: guess && toTrack(row, guess), sure: false, options };
 }
+// One song's YouTube copy, for songs from Deezer (deezer.ts youtubeId).
+export const findSong = (row: CsvTrack) => find(row, new Map()).then((r) => r.hit);
 const byArtist = (row: CsvTrack, c: Track) => {
   const hay = squash(norm(`${c.title} ${c.artists.map((a) => a.name).join(" ")}`));
   return rowArtists(row.artist).some((a) => words(a).every((w) => hay.includes(w)));

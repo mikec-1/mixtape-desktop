@@ -66,6 +66,12 @@ pub struct LocalLyrics {
     lrc: Option<String>,
 }
 
+/// A playlist file dropped on the window: the page gets its path, not its contents.
+#[tauri::command]
+pub fn read_text(path: String) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn local_lyrics(path: String) -> LocalLyrics {
     lyrics(Path::new(&path))
@@ -82,6 +88,8 @@ fn allow<R: Runtime>(app: &AppHandle<R>, folders: &[String]) {
     for f in folders {
         if Path::new(f).is_dir() {
             let _ = app.asset_protocol_scope().allow_directory(f, true);
+        } else {
+            let _ = app.asset_protocol_scope().allow_file(f); // a song dropped on its own
         }
     }
 }
@@ -89,7 +97,12 @@ fn allow<R: Runtime>(app: &AppHandle<R>, folders: &[String]) {
 fn scan(folders: &[String], known: &HashMap<String, u64>, covers: &Path) -> Scan {
     let mut found = Vec::new();
     for f in folders {
-        walk(Path::new(f), &mut found);
+        let path = Path::new(f);
+        if path.is_file() && is_audio(path) {
+            found.push((f.clone(), mtime(path)));
+        } else {
+            walk(path, &mut found);
+        }
     }
     found.sort();
     found.dedup(); // a folder inside another that's also added
@@ -118,10 +131,13 @@ fn walk(dir: &Path, out: &mut Vec<(String, u64)>) {
         if kind.is_dir() {
             walk(&path, out);
         } else if is_audio(&path) {
-            let mtime = fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
-            out.push((path.to_string_lossy().into_owned(), mtime));
+            out.push((path.to_string_lossy().into_owned(), mtime(&path)));
         }
     }
+}
+
+fn mtime(path: &Path) -> u64 {
+    fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64)
 }
 
 fn is_audio(path: &Path) -> bool {

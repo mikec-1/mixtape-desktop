@@ -493,3 +493,10 @@ input[type="range"].knob::-webkit-slider-thumb {
     transform: scaleY(0.25);
   }
 }
+
+/* A song with no artwork: plain black, not WebKit's broken-image outline. */
+img:not([src]),
+img[src=""] {
+  content: url("data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==");
+  background-color: #000;
+}

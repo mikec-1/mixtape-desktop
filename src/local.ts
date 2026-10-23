@@ -1,33 +1,53 @@
 import { useMemo } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { fetch } from "@tauri-apps/plugin-http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { files, idb, notify, plural } from "./store";
-import type { Track } from "./yt";
+import { files, idb, notify, plural, useStore } from "./store";
+import { searchKind, type Track } from "./yt";
 
 // Your own music: folders on this computer, read by src-tauri/src/local.rs. What a scan found is kept,
 // so Local Files is there at once on launch; a scan in the background then picks up what changed.
 // Only in the app: a browser can't read your folders.
 export const canHaveFiles = "__TAURI_INTERNALS__" in window;
 type LocalFile = { path: string; mtime: number; title: string; artist: string; album: string; albumArtist: string; track: number; disc: number; duration: number; cover?: string };
-type Local = { folders: string[]; files: Record<string, LocalFile>; scanning: boolean };
+// What you typed over a song's own tags when it was dropped in (SongImport in views.tsx). cover: a picture URL.
+export type SongEdit = { title: string; artist: string; feat: string; album: string; year?: string; genre?: string; cover?: string };
+type Local = { folders: string[]; files: Record<string, LocalFile>; edits: Record<string, SongEdit>; skip: string[]; scanning: boolean };
 export const useLocal = create<Local>()(
-  persist((): Local => ({ folders: [], files: {}, scanning: false }), { name: "local", storage: createJSONStorage(() => idb), partialize: ({ folders, files }) => ({ folders, files }) }),
+  persist((): Local => ({ folders: [], files: {}, edits: {}, skip: [], scanning: false }), { name: "local", storage: createJSONStorage(() => idb), partialize: ({ folders, files, edits, skip }) => ({ folders, files, edits, skip }) }),
 );
 
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 // "A; B" and "A / B" are two artists; "A, B" may be one band, so it stays one.
 const artists = (s: string) => (s ? s.split(/\s*;\s*|\s+\/\s+/).filter(Boolean).map((name) => ({ name })) : []);
-const fileTrack = (f: LocalFile): Track => ({
-  id: `file:${f.path}`,
-  file: f.path,
-  title: f.title,
-  artists: artists(f.artist || f.albumArtist),
-  album: f.album || undefined,
-  thumb: f.cover && convertFileSrc(f.cover),
-  duration: clock(f.duration),
-});
+export const fileTrack = (f: LocalFile): Track => {
+  const e = useLocal.getState().edits?.[f.path];
+  return {
+    id: `file:${f.path}`,
+    file: f.path,
+    title: e?.title || f.title,
+    artists: e ? [e.artist, ...e.feat.split(/\s*[,&]\s*/)].filter(Boolean).map((name) => ({ name })) : artists(f.artist || f.albumArtist),
+    album: (e ? e.album : f.album) || undefined,
+    thumb: e?.cover ?? (f.cover && convertFileSrc(f.cover)),
+    duration: clock(f.duration),
+  };
+};
+
+// A song's tags read the way you'd write them: "Artist - Song (feat. X) [Official Audio]" from a bare
+// file name split up, the feature taken out of either field, the upload junk dropped.
+const FEAT = /(?<=\S)\s+[([]?\s*\b(?:feat|ft|featuring)\b\.?\s+([^)\]]+?)\s*[)\]]?\s*$/i;
+export function guessTags(f: Pick<LocalFile, "title" | "artist" | "album">): SongEdit {
+  let title = f.title.replace(/_/g, " ").replace(/\s*[([](?:official\s*)?(?:music\s*)?(?:audio|video|lyrics?|visuali[sz]er|hq|hd)[^)\]]*[)\]]/gi, "").trim();
+  let artist = f.artist;
+  if (!artist && title.includes(" - ")) [artist, title] = [title.slice(0, title.indexOf(" - ")), title.slice(title.indexOf(" - ") + 3)];
+  const feats: string[] = [];
+  const take = (s: string) => s.replace(FEAT, (_, who: string) => (feats.push(who.trim()), ""));
+  title = take(title).trim();
+  artist = take(artist).trim();
+  return { title, artist, feat: feats.join(", "), album: f.album };
+}
 // Songs with no artist go last.
 const by = (a: LocalFile, b: LocalFile) =>
   (a.albumArtist || a.artist || "\uffff").localeCompare(b.albumArtist || b.artist || "\uffff", undefined, { sensitivity: "base" }) ||
@@ -38,7 +58,8 @@ const by = (a: LocalFile, b: LocalFile) =>
 // Your files as songs, by artist, album and track number.
 export function useLocalTracks() {
   const files = useLocal((s) => s.files);
-  return useMemo(() => Object.values(files).sort(by).map(fileTrack), [files]);
+  const edits = useLocal((s) => s.edits);
+  return useMemo(() => Object.values(files).sort(by).map(fileTrack), [files, edits]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 export const localTracks = () => Object.values(useLocal.getState().files).sort(by).map(fileTrack);
 files.has = (path) => !!useLocal.getState().files[path];
@@ -50,6 +71,62 @@ export async function addFolder() {
   useLocal.setState((s) => ({ folders: [...s.folders, ...add] }));
   await rescan();
   notify({ text: "Folder Added", detail: `${plural(localTracks().length, "song")} in your Local Files` });
+}
+// Songs dropped on the window: kept in Local Files like a folder of one.
+export async function addFiles(paths: string[]) {
+  useLocal.setState((s) => ({ folders: [...s.folders, ...paths.filter((p) => !s.folders.includes(p))], skip: s.skip.filter((p) => !paths.includes(p)) }));
+  await rescan();
+  const songs = paths.filter((p) => useLocal.getState().files[p]);
+  // A folder goes straight in; songs on their own get a look over first.
+  if (songs.length) useStore.setState({ dialog: { kind: "songs", paths: songs } });
+}
+// The song an edit is of, from Apple's catalogue (as Mixtape does it): searched without "slowed", "sped up"
+// and the like, then kept only when the title's words are all in the result's and either artist's name
+// holds the other's. The title stays as yours ("ОТПУСТИ МЕНЯ slowed"); artist, album, year, genre and
+// cover come from the original, so the edit sits with that artist.
+const VERSION = /[([]?\s*\b(?:slowed(?:\s*(?:\+|&|and)?\s*(?:reverb|down))?|sped\s*up|speed\s*up|reverb|nightcore|lo-?fi|bass\s*boost(?:ed)?|8d(?:\s*audio)?|chopped(?:\s*(?:and|&)\s*screwed)?|super\s*slowed|ultra\s*slowed|tik\s*tok(?:\s*(?:edit|remix|version))?|(?:hardstyle|phonk|jersey|drill|techno)(?:\s*(?:edit|remix|version))?|(?:extended|radio|official)?\s*(?:edit|remix|version|mix)|remaster(?:ed)?|acoustic|instrumental)\b\s*[)\]]?/gi;
+export const stripVersion = (t: string) => t.replace(VERSION, " ").replace(/\s*[-–|]\s*$|\(\s*\)|\[\s*\]/g, "").replace(/\s+/g, " ").trim() || t;
+const words = (s: string) => new Set(s.toLowerCase().replace(/\(\s*(?:feat|ft|with)\b[^)]*\)/g, "").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1));
+const within = (a: Set<string>, b: Set<string>) => a.size > 0 && [...a].every((w) => b.has(w));
+const jaccard = (a: Set<string>, b: Set<string>) => [...a].filter((w) => b.has(w)).length / (new Set([...a, ...b]).size || 1);
+type Apple = { trackName: string; artistName: string; collectionName: string; releaseDate?: string; primaryGenreName?: string; artworkUrl100?: string };
+export type Found = { edit: SongEdit; source: "Apple Music" | "YouTube Music"; sure: boolean };
+export async function lookUp(e: SongEdit): Promise<Found | undefined> {
+  const title = stripVersion(e.title);
+  const t = words(title), a = words(e.artist);
+  const r = await fetch(`https://itunes.apple.com/search?${new URLSearchParams({ term: `${e.artist} ${title}`.trim(), entity: "song", limit: "25" })}`)
+    .then((r) => r.json() as Promise<{ results: Apple[] }>)
+    .catch(() => ({ results: [] }));
+  const best = r.results
+    .filter((x) => !/karaoke|tribute|made famous|instrumental/i.test(x.trackName) && within(t, words(stripVersion(x.trackName))) && (!a.size || within(a, words(x.artistName)) || within(words(x.artistName), a)))
+    .map((x) => ({ x, score: jaccard(t, words(stripVersion(x.trackName))) * 0.65 + (a.size ? jaccard(a, words(x.artistName)) : 0.5) * 0.35 }))
+    .sort((p, q) => q.score - p.score)[0];
+  if (best && best.score >= 0.25) {
+    const x = best.x;
+    const [artist, ...feat] = x.artistName.split(/\s*(?:,|&|\bfeat\.?|\bft\.?)\s*/i).filter(Boolean);
+    return {
+      edit: { ...e, artist, feat: e.feat || feat.join(", "), album: x.collectionName.replace(/\s*-\s*(Single|EP)$/i, ""), year: x.releaseDate?.slice(0, 4), genre: x.primaryGenreName, cover: x.artworkUrl100?.replace("100x100bb", "1000x1000bb") },
+      source: "Apple Music",
+      sure: best.score >= 0.6,
+    };
+  }
+  // Not in Apple's catalogue (a lot of edits only live on YouTube): artwork from YouTube Music, if anything.
+  const [y] = await searchKind(`${e.artist} ${title}`, "song").catch(() => []);
+  return y && within(t, words(y.title)) ? { edit: { ...e, album: e.album || y.album || "", cover: y.thumb }, source: "YouTube Music", sure: false } : undefined;
+}
+export const addedFiles = (paths: string[]) => {
+  const t = fileTrack(useLocal.getState().files[paths[0]]);
+  notify({ text: paths.length > 1 ? `Added ${paths.length} Songs` : `Added ${t.title}`, detail: "In your Local Files", thumb: t.thumb });
+};
+// Takes a song out of Sleeve, not off the disk: a song dropped on its own goes, one in a folder is passed
+// over by later scans.
+export function removeFile(path: string) {
+  const { folders, skip } = useLocal.getState();
+  if (folders.includes(path)) return removeFolder(path);
+  useLocal.setState((s) => {
+    const { [path]: _, ...files } = s.files;
+    return { files, skip: [...skip, path] };
+  });
 }
 const inside = (path: string, folder: string) => path === folder || path.startsWith(`${folder}/`) || path.startsWith(`${folder}\\`);
 export const removeFolder = (folder: string) =>
@@ -70,6 +147,7 @@ export const rescan = () =>
       const next: Record<string, LocalFile> = {};
       for (const p of r.unchanged) if (files[p]) next[p] = files[p];
       for (const f of r.files) next[f.path] = f;
+      for (const p of useLocal.getState().skip ?? []) delete next[p];
       useLocal.setState({ files: next });
     } catch (e) {
       notify({ text: "Couldn’t Read Your Music", detail: String(e) });

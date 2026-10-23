@@ -44,7 +44,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Settings → Startup. Opened at login it starts hidden; main.tsx shows it unless you chose otherwise.
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--login"])))
-        .invoke_handler(tauri::generate_handler![float_mini, local::scan_music, local::allow_music, local::local_lyrics, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
+        .invoke_handler(tauri::generate_handler![float_mini, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.
@@ -56,6 +56,10 @@ pub fn run() {
             // the config): only the webview's view redraws, so only its inset survives resizes.
             #[cfg(target_os = "macos")]
             let main = main.traffic_light_position(tauri::LogicalPosition::new(15.0, 18.0));
+            // Files dropped on the window come to the page with their paths (App.tsx). Windows can't
+            // have that and the page's own drag and drop together, so there it keeps the page's.
+            #[cfg(windows)]
+            let main = main.disable_drag_drop_handler();
             main.build()?;
             // YouTube's BotGuard only issues real integrity tokens on www.youtube.com, so PO tokens are
             // minted in a hidden window there; robots.txt is the lightest page on that origin.

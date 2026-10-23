@@ -44,6 +44,9 @@
           "url": "https://lrclib.net/*"
         },
         {
+          "url": "https://itunes.apple.com/*"
+        },
+        {
           "url": "https://music.163.com/*"
         },
         {

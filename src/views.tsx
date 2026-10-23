@@ -1,24 +1,25 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ArrowDownToLine, ArrowUpDown, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { ArrowDownToLine, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
-  copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
-  shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
+  copyPlaylist, fixImport, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
+  shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
   useRecentSearches, addRecentSearch,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
-import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
+import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { albumByName, art, artist, artistByName, charts, collection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
-import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
+import { addFolder, canHaveFiles, guessTags, localTracks, lookUp, addedFiles, removeFile, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
 import { SignIn } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
-import { importPlaylistFile } from "./import";
+import { importPlaylistFile, rematch } from "./import";
 
 // Runs fn whenever deps change; responses for superseded deps are dropped. Keeps old data while reloading.
 function useAsync<T>(fn: () => Promise<T> | undefined, deps: unknown[]) {
@@ -229,6 +230,12 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
           { text: "Remove from Queue", action: () => removeFromQueue(q) },
         ]),
     ...(t.file ? [] : [{ text: "Start Radio", action: () => startRadio(t) }]),
+    ...(t.file
+      ? [
+          { text: "Edit Song Info…", action: () => useStore.setState({ dialog: { kind: "songs", paths: [t.file!], editing: true } }) },
+          { text: "Remove from Sleeve", action: () => removeFile(t.file!) },
+        ]
+      : []),
     { text: "Edit Lyrics…", action: () => editLyrics(t) },
     { item: "Separator" as const },
     { text: liked.some((x) => x.id === t.id) ? "Remove from Liked Songs" : "Add to Liked Songs", action: () => toggleLike(t) },
@@ -287,11 +294,15 @@ function Masthead({ cover, bg, fill = "bg-neutral-800", title, sub, meta, childr
 
 const pill = "press flex h-10 items-center gap-2 rounded-full px-5 font-semibold";
 // radio false: no Radio button (Local Files: radio comes from YouTube Music, which doesn't have them).
+// Play turns to Pause only on the list that started the queue, not on every list holding the song.
 function PlayButtons({ tracks, from, radio = true }: { tracks: Track[]; from?: string; radio?: boolean }) {
+  const here = useStore((s) => !!from && s.source === from && s.index >= 0);
+  const { paused } = useAudio();
+  const pausing = here && !paused;
   return (
     <>
-      <button onClick={() => play(tracks, firstPlayable(tracks), from)} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
-        <Play size={16} className="fill-current" /> Play
+      <button onClick={() => (here ? toggle() : play(tracks, firstPlayable(tracks), from))} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
+        {pausing ? <Pause size={16} className="fill-current" /> : <Play size={16} className="fill-current" />} {pausing ? "Pause" : "Play"}
       </button>
       <button onClick={() => shufflePlay(tracks, from)} disabled={!tracks.length} className={`${pill} bg-white/20 hover:bg-white/30 disabled:opacity-50`}>
         <Shuffle size={16} /> Shuffle
@@ -1397,6 +1408,9 @@ export function Artist({ id }: { id: string }) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const following = useLibrary((s) => s.followed.some((a) => a.id === id));
   const blocked = useLibrary((s) => !!data && s.blocked.some((b) => b.id === id || b.name.toLowerCase() === data.name.toLowerCase()));
+  // Your own files credited to them: edits, remixes, songs that aren't on YouTube.
+  const files = useLocalTracks();
+  const yours = data ? files.filter((t) => t.artists.some((a) => a.name.toLowerCase() === data.name.toLowerCase())) : [];
   if (error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t load this artist. Go back and try again.</p>;
   if (!data) return <Skeleton className="h-[min(60vh,540px)] bg-ink/[0.03]" />;
   const from = libraryKey("artist", id);
@@ -1455,6 +1469,11 @@ export function Artist({ id }: { id: string }) {
         {data.songs.length > 0 && (
           <Section title="Popular Songs" action={data.songs.length > 5 && <button onClick={() => setAll(!all)} className={LINK}>{all ? "Show Less" : "Show More"}</button>}>
             <TrackList tracks={all ? data.songs : data.songs.slice(0, 5)} numbered header={false} onPlay={(i) => play(data.songs, i, from)} />
+          </Section>
+        )}
+        {yours.length > 0 && (
+          <Section title="In Your Files">
+            <TrackList tracks={yours} header={false} from="local" />
           </Section>
         )}
         {([["Albums", data.albums, data.albumsMore], ["Singles & EPs", data.singles, data.singlesMore], ["Featured On", data.featured], ["Appears On", data.appearsOn]] as const).map(
@@ -1747,9 +1766,23 @@ function LyricOptions({ extras: { can, on, to, loading, failed, retry } }: { ext
 
 // Edit a song's lyrics (yours then beat every source), and make a lyric card from them.
 function LyricTools({ track, lyrics }: { track?: Track; lyrics?: Lyrics | null }) {
+  const by = useTiming((s) => (track ? s.songs[songKey(track)] ?? 0 : 0));
   if (!track) return null;
   return (
     <>
+      {lyrics?.synced && (
+        <span className="flex items-center rounded-full bg-white/15 text-sm font-semibold">
+          <button onClick={() => nudgeLyrics(track, -0.25)} aria-label="Lyrics Earlier" title="Lyrics Earlier" className="press grid size-8 place-items-center rounded-full hover:bg-white/15">
+            <Minus size={14} />
+          </button>
+          <button onClick={() => nudgeLyrics(track, null)} title={by ? "Reset Timing" : "Lyrics Timing"} className="min-w-10 tabular-nums">
+            {by ? `${by > 0 ? "+" : ""}${by.toFixed(2)}s` : "0s"}
+          </button>
+          <button onClick={() => nudgeLyrics(track, 0.25)} aria-label="Lyrics Later" title="Lyrics Later" className="press grid size-8 place-items-center rounded-full hover:bg-white/15">
+            <Plus size={14} />
+          </button>
+        </span>
+      )}
       <button onClick={() => editLyrics(track)} aria-label="Edit Lyrics" title="Edit Lyrics" className={round}>
         <PencilLine size={15} />
       </button>
@@ -1765,7 +1798,7 @@ function LyricTools({ track, lyrics }: { track?: Track; lyrics?: Lyrics | null }
 // The editor opens on your own lyrics, or else the song's current ones (as LRC when synced) to fix.
 function editLyrics(t: Track) {
   const key = songKey(t);
-  const now = lyricsNow(t);
+  const now = lyricsNow(t, true);
   const text = useMine.getState().songs[key]?.text ?? (now ? asText(now) : "");
   useStore.setState({ dialog: { kind: "edit", key, title: titleOf(t), artist: t.artists[0]?.name ?? "", text, track: t } });
 }
@@ -2130,30 +2163,194 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "unmatched" ? <UnmatchedDialog d={dialog} /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "import" ? <ImportReview d={dialog} /> : dialog?.kind === "songs" ? <SongImport d={dialog} /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
 
-function UnmatchedDialog({ d }: { d: Extract<Dialog, { kind: "unmatched" }> }) {
+// Songs dropped on the window, one at a time before they go into Local Files: what the file says, read
+// sensibly (local.ts guessTags), then the original song looked up (lookUp) for its artist, album, year,
+// genre and cover. Everything stays editable; Skip keeps the file's own tags. editing: opened again from a
+// song's menu, starting from what you saved, with no lookup.
+function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
+  const files = useLocal((s) => s.files);
+  const [at, setAt] = useState(0);
+  const pickCover = useRef<HTMLInputElement>(null);
+  const touched = useRef(new Set<keyof SongEdit>()); // what you've changed; the lookup leaves those alone
+  const path = d.paths[at];
+  const file = files[path];
+  const saved = d.editing ? useLocal.getState().edits[path] : undefined;
+  const [edit, setEdit] = useState<SongEdit>(() => saved ?? guessTags(file));
+  const [found, setFound] = useState<Awaited<ReturnType<typeof lookUp>> | null>(null);
+  useEffect(() => {
+    const own = saved ?? guessTags(files[path]);
+    setEdit(own), setFound(null), touched.current.clear();
+    if (saved) return setFound(undefined);
+    let live = true;
+    lookUp(own).then(
+      (f) =>
+        live &&
+        (setFound(f),
+        f &&
+          setEdit((e) => {
+            const mine = Object.fromEntries([...touched.current].map((k) => [k, e[k]]));
+            return { ...f.edit, title: e.title, cover: files[path].cover ? undefined : f.edit.cover, ...mine };
+          })),
+    );
+    return () => void (live = false);
+  }, [path]); // eslint-disable-line react-hooks/exhaustive-deps
+  const next = (save: boolean) => {
+    if (save) useLocal.setState((s) => ({ edits: { ...s.edits, [path]: edit } }));
+    if (at < d.paths.length - 1) return setAt(at + 1);
+    if (!d.editing) addedFiles(d.paths);
+    closeDialog();
+  };
+  const cover = edit.cover ?? (file.cover && convertFileSrc(file.cover));
+  const looking = found === null;
+  const rows: [keyof SongEdit, string, string?][] = [["title", "Title"], ["artist", "Artist"], ["feat", "Featuring", "Other artists"], ["album", "Album"], ["year", "Year"], ["genre", "Genre"]];
   return (
-    <Modal label={d.title} onClose={closeDialog} className="w-[min(520px,94vw)] p-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold tracking-tight">{d.title}</h2>
+    <Modal label={d.editing ? "Edit Song Info" : "Review Song"} onClose={closeDialog} className="w-[min(600px,94vw)]">
+      <header className="flex items-start gap-4 px-6 pt-5">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-2xl font-bold tracking-tight">{d.editing ? "Edit Song Info" : "Review Song"}{d.paths.length > 1 && <span className="ml-2 text-base font-semibold text-muted">{at + 1} of {d.paths.length}</span>}</h2>
+          <p className="mt-0.5 text-muted">{d.editing ? "Fix anything that’s off. Only Sleeve changes, not the file." : "Check what we found before it’s added to your library."}</p>
+        </div>
+        <button onClick={closeDialog} aria-label="Close" className="press grid size-8 shrink-0 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14]">
+          <X size={16} />
+        </button>
+      </header>
+      <div className="min-h-0 overflow-y-auto px-6 pt-5 pb-2">
+        <div key={path} className="flex animate-enter items-center gap-5">
+          <div className="relative size-40 shrink-0 overflow-hidden rounded-xl bg-ink/[0.06] shadow-xl shadow-black/25">
+            {cover ? <img key={cover} src={art(cover, 400)} alt="" className="size-full animate-[fade_0.4s] object-cover" /> : <Music size={44} className={`absolute inset-0 m-auto text-muted ${looking ? "animate-pulse" : ""}`} />}
+            {/* "" is no cover at all, the file's own included. */}
+            {cover && (
+              <button onClick={() => (touched.current.add("cover"), setEdit({ ...edit, cover: "" }))} aria-label="Remove Cover" title="Remove Cover" className="press absolute bottom-2 left-2 grid size-9 place-items-center rounded-full bg-red-500 text-white shadow-lg">
+                <Trash2 size={16} />
+              </button>
+            )}
+            <button onClick={() => pickCover.current?.click()} aria-label="Change Cover" title="Change Cover" className="press absolute right-2 bottom-2 grid size-9 place-items-center rounded-full bg-black/60 text-white shadow-lg backdrop-blur">
+              <PencilLine size={16} />
+            </button>
+            <input
+              ref={pickCover}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                const r = new FileReader();
+                r.onload = () => (touched.current.add("cover"), setEdit((x) => ({ ...x, cover: String(r.result) })));
+                r.readAsDataURL(f);
+              }}
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="line-clamp-2 text-xl font-bold leading-tight">{edit.title || "Untitled"}</div>
+            <div className="mt-1 truncate text-lg font-semibold text-accent">{[edit.artist, edit.feat].filter(Boolean).join(", ") || "Unknown Artist"}</div>
+            {edit.album && <div className="mt-1 truncate text-ink/70">{edit.album}</div>}
+            {edit.year && <div className="text-sm text-muted">{edit.year}</div>}
+            <div className="mt-3 truncate text-xs text-muted" title={path}>{path.split(/[\\/]/).pop()}</div>
+          </div>
+        </div>
+        <div className="mt-4">
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold ${looking ? "bg-ink/[0.06] text-muted" : found?.sure ? "bg-green-500/15 text-green-500" : found ? "bg-amber-500/15 text-amber-500" : "bg-ink/[0.06] text-muted"}`}>
+            {looking ? <><LoaderCircle size={14} className="animate-spin" /> Looking it up…</> : found ? <><Music size={14} /> {found.source} · {found.sure ? "High confidence" : "Best guess"}</> : "Not found online · from the file"}
+          </span>
+        </div>
+        <div className="mt-4 divide-y divide-ink/10 overflow-hidden rounded-xl bg-ink/[0.04]">
+          {rows.map(([key, label, hint]) => (
+            <label key={key} className="flex items-center gap-4 px-4 focus-within:bg-ink/[0.03]">
+              <span className="w-24 shrink-0 text-muted">{label}</span>
+              <input value={edit[key] ?? ""} onChange={(e) => (touched.current.add(key), setEdit({ ...edit, [key]: e.target.value }))} placeholder={hint ?? "—"} spellCheck={false} inputMode={key === "year" ? "numeric" : undefined} className="min-w-0 flex-1 bg-transparent py-3 outline-none placeholder:text-muted/60" />
+            </label>
+          ))}
+        </div>
       </div>
-      <p className="mt-1 text-sm text-muted">These songs weren’t found on YouTube Music, so they were left out.</p>
-      <ul className="mt-4 max-h-80 divide-y divide-ink/10 overflow-y-auto">
-        {d.items.map((item, i) => (
-          <li key={i} className="py-2.5 select-text">
-            <div className="truncate font-semibold">{item.title}</div>
-            <div className="truncate text-sm text-muted">{item.artist}</div>
+      <footer className="flex items-center justify-end gap-2 px-6 pt-3 pb-5">
+        <button onClick={() => (d.editing ? closeDialog() : next(false))} className="press rounded-full px-5 py-2.5 font-semibold hover:bg-ink/[0.06]">{d.editing ? "Cancel" : "Skip"}</button>
+        <button onClick={() => next(true)} className="press rounded-full bg-accent px-6 py-2.5 font-semibold text-paper">{d.editing ? "Save" : at < d.paths.length - 1 ? "Apply & Next" : "Apply Changes"}</button>
+      </footer>
+    </Modal>
+  );
+}
+
+// After an import: the songs it guessed at or couldn't find, each with up to three results to choose
+// from (play one to check it). Nothing changes until Done.
+function ImportReview({ d }: { d: Extract<Dialog, { kind: "import" }> }) {
+  const [items, setItems] = useState(d.items);
+  const [chosen, setChosen] = useState(() => new Map(d.items.map((r, i) => [i, r.pick])));
+  const [busy, setBusy] = useState(false);
+  const missing = items.filter((r) => !r.pick).length;
+  const choose = (i: number, t?: Track) => setChosen((m) => new Map(m).set(i, m.get(i)?.id === t?.id ? undefined : t));
+  // Found ones come back as choices, the find already chosen; the playlist only changes on Done.
+  const searchAgain = async () => {
+    setBusy(true);
+    const lost = items.flatMap((r, i) => (r.pick ? [] : [i]));
+    const got = await rematch(lost.map((i) => items[i]));
+    setItems((all) => all.map((r, i) => (lost.includes(i) ? got[lost.indexOf(i)] : r)));
+    setChosen((m) => new Map([...m, ...lost.flatMap((i, k) => (got[k].options[0] && got[k].found ? [[i, got[k].options[0]] as const] : []))]));
+    setBusy(false);
+  };
+  const done = () => {
+    const swap = new Map<string, Track | undefined>(), add: Track[] = [];
+    items.forEach((r, i) => {
+      const t = chosen.get(i);
+      if (r.pick) t?.id !== r.pick.id && swap.set(r.pick.id, t);
+      else if (t) add.push(t);
+    });
+    if (swap.size || add.length) fixImport(d.playlist, swap, add);
+    closeDialog();
+  };
+  return (
+    <Modal label="Review Import" onClose={closeDialog} className="flex max-h-[86vh] w-[min(680px,94vw)] flex-col">
+      <header className="px-6 pt-5">
+        <h2 className="text-xl font-bold tracking-tight">Review Import</h2>
+        <p className="text-sm text-muted">
+          {d.added} added to {d.name}. {items.length - missing > 0 && `${items.length - missing} to check. `}
+          {missing > 0 && `${missing} not found.`}
+          {!items.length && "Every song was found."}
+        </p>
+      </header>
+      <ol className="mt-3 min-h-0 flex-1 divide-y divide-ink/10 overflow-y-auto px-6">
+        {items.map((r, i) => (
+          <li key={i} className="py-3">
+            <div className="flex items-baseline gap-2">
+              <span className="truncate font-semibold select-text">{r.row.title}</span>
+              <span className="truncate text-sm text-muted select-text">{r.row.artist}</span>
+              <span className="ml-auto shrink-0 text-xs font-semibold text-muted">{r.pick ? "Best Guess" : "Not Found"}</span>
+            </div>
+            <div className="mt-2 grid gap-1.5 @xl:grid-cols-3">
+              {[...(r.pick ? [r.pick] : []), ...r.options].map((t) => {
+                const on = chosen.get(i)?.id === t.id;
+                return (
+                  <div key={t.id} className={`group relative flex items-center gap-2.5 rounded-xl p-1.5 ${on ? "bg-accent/15 ring-1 ring-accent" : "bg-ink/[0.05] hover:bg-ink/[0.09]"}`}>
+                    <button onClick={() => choose(i, t)} aria-pressed={on} aria-label={`Use ${t.title} by ${t.artists[0]?.name}`} className="hit" />
+                    <button onClick={() => play([t], 0)} aria-label={`Play ${t.title}`} className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
+                      <img src={art(t.thumb, 80)} alt="" className="absolute inset-0 size-full object-cover" />
+                      <Play size={14} className="relative fill-white text-white opacity-0 drop-shadow group-hover:opacity-100" />
+                    </button>
+                    <div className="pointer-events-none min-w-0 flex-1 text-sm">
+                      <div className="truncate font-semibold">{t.title}</div>
+                      <div className="truncate text-muted">{[t.artists.map((a) => a.name).join(", "), t.duration].filter(Boolean).join(" · ")}</div>
+                    </div>
+                    {on && <Check size={16} className="pointer-events-none mr-1 shrink-0 text-accent" />}
+                  </div>
+                );
+              })}
+              {!r.pick && !r.options.length && <p className="text-sm text-muted">No results.</p>}
+            </div>
           </li>
         ))}
-      </ul>
-      <div className="mt-6 flex justify-end">
-        <button onClick={closeDialog} className={solid}>
-          Done
-        </button>
-      </div>
+      </ol>
+      <footer className="flex items-center gap-2 px-6 py-4">
+        {missing > 0 && <button onClick={searchAgain} disabled={busy} className={quiet}>{busy ? "Searching…" : "Search Again"}</button>}
+        <div className="ml-auto flex gap-2">
+          <button onClick={closeDialog} className={quiet}>Cancel</button>
+          <button onClick={done} className={solid}>Done</button>
+        </div>
+      </footer>
     </Modal>
   );
 }
@@ -3025,7 +3222,7 @@ function Privacy() {
   return (
     <>
       <div className="divide-y divide-ink/10">
-        <Row label="Private Session" detail={priv ? "What you play now isn’t kept, until Sleeve quits" : "Plays nothing into your history until Sleeve quits"}>
+        <Row label="Private Session" detail={priv ? "What you play now isn’t kept, for 6 hours or until Sleeve quits" : "Plays nothing into your history until Sleeve quits"}>
           <Switch label="Private Session" on={priv} onChange={(on) => usePrivate.setState({ on })} />
         </Row>
         <Row label="Listening History" detail={history ? "Songs you play for 30 s are kept, on this computer only" : "Nothing you play is kept"}>

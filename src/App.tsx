@@ -1,11 +1,15 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, type LucideIcon } from "lucide-react";
+import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, X, type LucideIcon } from "lucide-react";
 import { audio, back, cycleRepeat, go, next, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { actionFor, comboFrom, findSearch, recording } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
 import { useAccount } from "./account";
 import { Welcome } from "./welcome";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { addFiles, canHaveFiles } from "./local";
+import { importPlaylistFile } from "./import";
 import { art, type Track } from "./yt";
 
 // A picture that can't load (offline, say) leaves its grey tile rather than WebKit's broken-image mark;
@@ -50,6 +54,31 @@ export default function App() {
     return () => removeEventListener("keydown", onKey);
   }, []);
 
+  // Files dropped on the window: a playlist (.csv) imports, songs play from Local Files.
+  // While they're held over it, a sheet says what dropping them will do.
+  const [dragging, setDragging] = useState<string>();
+  useEffect(() => {
+    if (!canHaveFiles) return;
+    const sort = (paths: string[]) => ({
+      csv: paths.filter((p) => /\.csv$/i.test(p)),
+      // Folders (no extension) are added whole, like Settings → Add Folder.
+      songs: paths.filter((p) => /\.(mp3|m4a|aac|flac|wav|aiff?|ogg|oga|opus)$|\/[^./]+$/i.test(p)),
+    });
+    const off = getCurrentWebview().onDragDropEvent(async ({ payload: e }) => {
+      if (e.type === "over") return;
+      if (e.type === "enter") {
+        const { csv, songs } = sort(e.paths);
+        return setDragging(csv.length ? (csv.length > 1 ? `Import ${csv.length} Playlists` : "Import Playlist") : songs.length ? (songs.length > 1 ? `Play ${songs.length} Songs` : "Play Song") : "Can’t Open These");
+      }
+      setDragging(undefined);
+      if (e.type !== "drop") return;
+      const { csv, songs } = sort(e.paths);
+      if (songs.length) void addFiles(songs);
+      for (const p of csv) await importPlaylistFile(new File([await invoke<string>("read_text", { path: p })], p.split(/[\\/]/).pop()!));
+    });
+    return () => void off.then((f) => f());
+  }, []);
+
   return (
     // The sidebar, one big page card and the queue side by side, the player under all three. The gaps drag the window.
     // --sidebar and --panel centre the toasts on the page card. The welcome goes over all of it.
@@ -82,6 +111,16 @@ export default function App() {
       <Toast />
       <Offline />
     </div>
+    {dragging && (
+      <div className="pointer-events-none fixed inset-2 z-50 grid animate-[fade_0.15s_ease-out] place-items-center rounded-2xl bg-black/40 ring-4 ring-accent backdrop-blur-sm ring-inset">
+        <div className="flex animate-enter flex-col items-center gap-3 text-white">
+          <div className="grid size-20 animate-bounce place-items-center rounded-full bg-accent shadow-2xl shadow-black/40">
+            {dragging.startsWith("Import") ? <ListMusic size={36} /> : dragging.startsWith("Play") ? <Music size={36} /> : <X size={36} />}
+          </div>
+          <div className="text-2xl font-bold tracking-tight drop-shadow">{dragging}</div>
+        </div>
+      </div>
+    )}
     {welcome && <Welcome preview={welcome === "preview"} onDone={() => setWelcome(false)} />}
     </>
   );

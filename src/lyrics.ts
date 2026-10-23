@@ -440,16 +440,37 @@ function useResult<T>(key: string | undefined, fn: () => Promise<T>) {
   return { ...r, loading: !!key && !r?.failed && r?.value === undefined, retry: () => key && fetchOnce(key, fn) };
 }
 
+// Each song's own timing nudge (s; positive shows the lyrics later), kept by song like your lyrics.
+export const useTiming = create<{ songs: Record<string, number> }>()(persist(() => ({ songs: {} }), { name: "lyrics-timing", storage: createJSONStorage(() => idb) }));
+export function nudgeLyrics(t: Track, by: number | null) {
+  const key = songKey(t);
+  useTiming.setState((s) => {
+    const next = by === null ? 0 : Math.round(((s.songs[key] ?? 0) + by) * 100) / 100;
+    const { [key]: _, ...rest } = s.songs;
+    return { songs: next ? { ...rest, [key]: next } : rest };
+  });
+}
+const shifted = new WeakMap<Lyrics, { by: number; l: Lyrics }>();
+function timed<L extends Lyrics | null | undefined>(l: L, by = 0): L {
+  if (!l || !by || !l.synced) return l;
+  let hit = shifted.get(l);
+  if (hit?.by !== by) shifted.set(l, (hit = { by, l: { ...l, lines: l.lines.map((x) => shift(x, by)) } }));
+  return hit.l as L;
+}
+
 // A song's lyrics: your own if you wrote some, otherwise what the sources have.
 export function useLyrics(t?: Track) {
   const mine = useMine((s) => (t ? s.songs[songKey(t)] : undefined));
+  const by = useTiming((s) => (t ? s.songs[songKey(t)] : undefined));
   const fetched = useResult(t && !mine ? `lyrics:${t.id}` : undefined, () => stored(t!));
-  return mine ? { value: fromMine(mine), loading: false, retry: () => {} } : fetched;
+  return mine ? { value: timed(fromMine(mine), by), loading: false, retry: () => {} } : { ...fetched, value: timed(fetched.value, by) };
 }
 // Without a hook: what's known now, for the mini player and the editor.
-export const lyricsNow = (t: Track) => {
+// raw: without the song's timing nudge (the editor, so saving doesn't bake it in twice).
+export const lyricsNow = (t: Track, raw = false) => {
   const mine = useMine.getState().songs[songKey(t)];
-  return mine ? fromMine(mine) : (results.get(`lyrics:${t.id}`)?.value as Lyrics | null | undefined);
+  const l = mine ? fromMine(mine) : (results.get(`lyrics:${t.id}`)?.value as Lyrics | null | undefined);
+  return raw ? l : timed(l, useTiming.getState().songs[songKey(t)]);
 };
 
 // The next song's lyrics load while this one plays, so they're there the moment it starts.

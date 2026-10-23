@@ -1,6 +1,9 @@
 import { searchKind, searchYouTube, parseSecs, SEP, type Track } from "./yt";
 import { newPlaylist, notify, useStore } from "./store";
 
+// A song the import wasn't sure of (pick: the guess it added) or didn't find, with the next best results to choose from.
+export type Review = { row: CsvTrack; pick?: Track; options: Track[] };
+
 export type CsvTrack = { title: string; artist: string; album?: string; secs?: number; isrc?: string };
 
 // RFC 4180: quoted fields, "" escapes, CRLF or LF.
@@ -147,11 +150,55 @@ async function find(row: CsvTrack, cache: Map<string, Promise<Track[]>>) {
   };
   // The ISRC and the plain song search go out together, as one or the other almost always hits.
   if (row.isrc) void get(steps[1]);
+  const seen = new Map<string, Track>();
+  let guess: Track | undefined;
   for (const step of steps) {
     if (!step[1]) continue;
-    const hit = best(row, await get(step));
-    if (hit) return toTrack(row, hit);
+    const results = await get(step);
+    for (const c of results) seen.set(c.id, c);
+    const hit = best(row, results);
+    // Found by its artist: done. Found by a long title alone: keep it, but look on for the artist's own.
+    if (hit && byArtist(row, hit)) return { hit: toTrack(row, hit), sure: true, options: [] };
+    guess ??= hit;
   }
+  const options = [...seen.values()]
+    .filter((c) => c.id !== guess?.id)
+    .map((c, i) => [c, score(row, c, i) + (matches(row, c) ? 0 : 200)] as const)
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, 3)
+    .map(([c]) => toTrack(row, c));
+  return { hit: guess && toTrack(row, guess), sure: false, options };
+}
+const byArtist = (row: CsvTrack, c: Track) => {
+  const hay = squash(norm(`${c.title} ${c.artists.map((a) => a.name).join(" ")}`));
+  return rowArtists(row.artist).some((a) => words(a).every((w) => hay.includes(w)));
+};
+
+// Matches rows a few at a time; throttled searches are retried in find, so a miss is a real miss.
+async function matchAll(rows: CsvTrack[], each: (done: number) => void, stopped = () => false) {
+  const out: Awaited<ReturnType<typeof find>>[] = [];
+  const cache = new Map<string, Promise<Track[]>>();
+  let next = 0, done = 0;
+  // ponytail: 6 songs at once; at 12 YouTube started refusing searches.
+  await Promise.all(
+    Array.from({ length: Math.min(6, rows.length) }, async () => {
+      while (next < rows.length && !stopped()) {
+        const i = next++;
+        out[i] = await find(rows[i], cache).catch(() => ({ hit: undefined, sure: false, options: [] }));
+        each(++done);
+      }
+    }),
+  );
+  return out;
+}
+
+// Search again for the ones still not found, e.g. after YouTube stopped throttling.
+export async function rematch(items: Review[]): Promise<(Review & { found: boolean })[]> {
+  const got = await matchAll(items.map((r) => r.row), () => {});
+  return items.map((r, i) => {
+    const { hit, options = [] } = got[i] ?? {};
+    return { row: r.row, found: !!hit, options: hit ? [hit, ...options].slice(0, 3) : options.length ? options : r.options };
+  });
 }
 
 let cancel: (() => void) | undefined;
@@ -164,37 +211,18 @@ export async function importPlaylistFile(file: File) {
   const rows = parsePlaylistCsv(await file.text());
   if (!rows.length) return notify({ text: "Couldn’t Import Playlist", detail: `${file.name} has no title and artist columns` });
 
-  const found: (Track | undefined)[] = [];
-  const cache = new Map<string, Promise<Track[]>>();
   const action = { label: "Cancel", run: stop };
-  let next = 0, done = 0, shown = 0;
-  const progress = () => notify({ text: `Importing ${name}…`, detail: `${done} of ${rows.length} songs`, action, sticky: true });
-  progress();
-  // ponytail: 6 songs at once; at 12 YouTube started refusing searches. Throttled ones are retried above.
-  await Promise.all(
-    Array.from({ length: Math.min(6, rows.length) }, async () => {
-      while (next < rows.length && !stopped) {
-        const i = next++;
-        found[i] = await find(rows[i], cache).catch(() => undefined);
-        done++;
-        if (!stopped && Date.now() - shown > 250) (shown = Date.now()), progress();
-      }
-    }),
-  );
+  let shown = 0;
+  const progress = (done: number) => Date.now() - shown > 250 && !stopped && ((shown = Date.now()), notify({ text: `Importing ${name}…`, detail: `${done} of ${rows.length} songs`, action, sticky: true }));
+  progress(0);
+  const found = await matchAll(rows, progress, () => stopped);
   if (cancel === stop) cancel = undefined;
 
-  const tracks = found.filter((t): t is Track => !!t);
-  const missed = rows.filter((_, i) => i < next && !found[i]);
-  if (tracks.length) newPlaylist(tracks, undefined, name);
+  const tracks = found.flatMap((f) => (f?.hit ? [f.hit] : []));
+  const review: Review[] = found.flatMap((f, i) => (f && !f.sure ? [{ row: rows[i], pick: f.hit, options: f.options }] : []));
+  const id = tracks.length ? newPlaylist(tracks, undefined, name) : undefined;
   if (stopped) return notify({ text: "Import Cancelled", detail: tracks.length ? `Saved ${tracks.length} songs to ${name}` : "No songs were imported", thumb: tracks[0]?.thumb });
-  notify({
-    text: missed.length ? `Imported ${tracks.length} of ${rows.length} songs` : `Imported ${tracks.length} songs`,
-    detail: `Added to ${name}`,
-    thumb: tracks[0]?.thumb,
-    action: missed.length
-      ? { label: "Review", run: () => useStore.setState({ toast: undefined, dialog: { kind: "unmatched", title: `${missed.length} Songs Not Found`, items: missed.map(({ title, artist }) => ({ title, artist })) } }) }
-      : undefined,
-  });
+  useStore.setState({ toast: undefined, dialog: { kind: "import", playlist: id ?? newPlaylist([], undefined, name), name, added: tracks.length, items: review } });
 }
 
 export function demo() {

@@ -5,6 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { art, details, fetchAudio, playAudio, radio, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
+import type { Review } from "./import";
 import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
 
 type Root = "home" | "search" | "library" | "settings";
@@ -26,6 +27,7 @@ type State = {
   index: number;
   added: number; // how many after the current track you queued yourself; Add to Queue goes after them
   original?: Track[]; // the queue's order before Shuffle, to put back
+  source?: string; // the library key of the list the queue was started from, whose Play turns to Pause
   shuffle: boolean | "smart"; // Smart Shuffle mixes recommended tracks (rec) into Up Next
   repeat: "off" | "all" | "one";
   sleep?: number | "track"; // when the sleep timer pauses: a time, or the end of this track
@@ -38,7 +40,8 @@ type State = {
 export type Dialog =
   | { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track }
   | { kind: "card"; track: Track; pick: number[] }
-  | { kind: "unmatched"; title: string; items: { title: string; artist: string }[] };
+  | { kind: "import"; playlist: string; name: string; added: number; items: Review[] }
+  | { kind: "songs"; paths: string[]; editing?: boolean };
 // Feedback for a library change: what happened, to what, and a way back.
 export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean };
 
@@ -46,7 +49,7 @@ export type Toast = { id: number; text: string; detail?: string; thumb?: string;
 export const useStore = create<State>()(
   persist(
     (): State => ({ stack: [{ name: "home" }], ahead: [], query: "", queue: [], index: -1, added: 0, shuffle: false, repeat: "off", loading: false, error: "" }),
-    { name: "player", partialize: ({ queue, index, added, original, shuffle, repeat }) => ({ queue, index, added, original, shuffle, repeat }) },
+    { name: "player", partialize: ({ queue, index, added, original, source, shuffle, repeat }) => ({ queue, index, added, original, source, shuffle, repeat }) },
   ),
 );
 const { setState: set, getState: get } = useStore;
@@ -148,6 +151,9 @@ export const toggleFollow = (a: Followed) =>
   change(has(useLibrary.getState().followed, a.id) ? "Unfollowed" : "Following", { title: a.name, thumb: a.thumb }, (s) => ({ followed: toggleIn(s.followed, a) }));
 export const addToPlaylist = (id: string, tracks: Track[]) =>
   change(`Added to ${playlist(id)?.name}`, tracks[0], edit(id, (p) => ({ tracks: [...p.tracks, ...tracks.map(entry)] })));
+// The import review's choices: each guess swapped for the chosen song (or dropped), then the found ones added.
+export const fixImport = (id: string, swap: Map<string, Track | undefined>, add: Track[]) =>
+  change(`Updated ${playlist(id)?.name}`, add[0], edit(id, (p) => ({ tracks: [...p.tracks.flatMap((t) => (!swap.has(t.id) ? [t] : swap.get(t.id) ? [entry(swap.get(t.id)!)] : [])), ...add.map(entry)] })));
 export const removeFromPlaylist = (id: string, index: number) =>
   change(`Removed from ${playlist(id)?.name}`, playlist(id)?.tracks[index], edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => i !== index) })));
 export const movePlaylistTrack = (id: string, from: number, to: number) =>
@@ -290,8 +296,13 @@ void (async () => {
   await plays((p) => (seen.length < RECENT && !seen.some((x) => x.id === p.t.id) && seen.push(p.t), seen.length < RECENT)).catch(() => {});
   useHistory.setState((s) => ({ recent: [...s.recent, ...seen.filter((t) => !s.recent.some((x) => x.id === t.id))].slice(0, RECENT) }));
 })();
-// A private session (Settings → Privacy, until Sleeve quits) or history switched off: plays aren't kept.
+// A private session (Settings → Privacy, until Sleeve quits or 6 hours pass) or history switched off: plays aren't kept.
 export const usePrivate = create<{ on: boolean }>()(() => ({ on: false }));
+let privateEnds: ReturnType<typeof setTimeout> | undefined;
+usePrivate.subscribe((s) => {
+  clearTimeout(privateEnds);
+  if (s.on) privateEnds = setTimeout(() => usePrivate.setState({ on: false }), 6 * 3600_000);
+});
 function logPlay(t: Track) {
   if (usePrivate.getState().on || !useSettings.getState().history) return;
   const { rec: _, at: __, ...track } = t;
@@ -413,7 +424,7 @@ export function play(queue: Track[], index: number, from?: string) {
   if (from) touch(from);
   const original = get().shuffle ? queue : undefined;
   if (original) (queue = [queue[index], ...shuffled(queue.filter((_, i) => i !== index))]), (index = 0);
-  set({ queue, original, added: 0 });
+  set({ queue, original, added: 0, source: from });
   const loading = load(index); // sets index before its first await, which recommend() reads
   if (get().shuffle === "smart") void recommend();
   return loading;

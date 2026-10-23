@@ -6,11 +6,11 @@ import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
   shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, togglePin, toggleSave, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
-  useRecentSearches, addRecentSearch, recordRecentQuery, removeRecentSearch, clearRecentSearches,
+  useRecentSearches, addRecentSearch,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
-import { albumByName, art, artist, artistByName, charts, collection, discography, newReleases, topSongs, home, lastHome, search, searchKind, SEP, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
+import { albumByName, art, artist, artistByName, charts, collection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
 import { addFolder, canHaveFiles, localTracks, removeFolder, rescan, useLocal, useLocalTracks } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
@@ -56,186 +56,51 @@ const genres = [
   ["Latin", "#1e3264"],
 ] as const;
 
-type SearchTab = "all" | "songs" | "albums" | "artists" | "playlists" | "videos";
-const SEARCH_TABS: { id: SearchTab; label: string }[] = [
-  { id: "all", label: "All" },
-  { id: "songs", label: "Songs" },
-  { id: "albums", label: "Albums" },
-  { id: "artists", label: "Artists" },
-  { id: "playlists", label: "Playlists" },
-  { id: "videos", label: "Videos" },
-];
+const TABS = { all: "All", songs: "Songs", videos: "Videos", albums: "Albums", artists: "Artists", playlists: "Playlists" };
+const KINDS = { songs: "song", videos: "video", albums: "album", artists: "artist", playlists: "playlist" } as const;
+const rememberTrack = (t: Track) => addRecentSearch({ id: t.id, kind: "track", title: t.title, subtitle: t.artists.map((a) => a.name).join(", "), thumb: t.thumb, track: t });
 
 export function Search() {
   const query = useStore((s) => s.query);
   const [term, setTerm] = useState("");
-  const [tab, setTab] = useState<SearchTab>("all");
-  const [sugs, setSugs] = useState<string[]>([]);
-  const [sugOpen, setSugOpen] = useState(false);
-  const [sugIndex, setSugIndex] = useState(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
+  const [tab, setTab] = useState<keyof typeof TABS>("all");
+  const [pick, setPick] = useState(-1);
+  const [typing, setTyping] = useState(false);
   const recents = useRecentSearches((s) => s.items);
-
-  // Debounce search term by 250 ms.
   useEffect(() => {
     const t = setTimeout(() => setTerm(query.trim()), 250);
     return () => clearTimeout(t);
   }, [query]);
-
-  // Suggestions debounced by 150 ms.
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) {
-      setSugs([]);
-      setSugOpen(false);
-      return;
-    }
-    let active = true;
-    const t = setTimeout(async () => {
-      try {
-        const list = await suggestions(q);
-        if (active) {
-          setSugs(list);
-          setSugIndex(-1);
-          setSugOpen(list.length > 0);
-        }
-      } catch {
-        if (active) setSugs([]);
-      }
-    }, 150);
-    return () => {
-      active = false;
-      clearTimeout(t);
-    };
-  }, [query]);
-
-  // Close suggestions when clicking outside or scrolling anywhere in the app.
-  useEffect(() => {
-    if (!sugOpen) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setSugOpen(false);
-      }
-    };
-    const onScroll = () => {
-      setSugOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("scroll", onScroll, true);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("scroll", onScroll, true);
-    };
-  }, [sugOpen]);
-
   const online = useOnline(); // a search that failed offline runs again on reconnect
-  const { data, error, loading } = useAsync(() => (term && !fromLink(term) ? search(term) : undefined), [term, online]);
-
-  // Cache per-tab results for the current search term: only fetched when opened.
-  const [tabData, setTabData] = useState<Partial<{ songs: Track[]; albums: Album[]; artists: SearchArtist[]; playlists: Album[]; videos: Track[] }>>({});
-  const [tabLoading, setTabLoading] = useState(false);
-  const [tabError, setTabError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setTabData({});
-  }, [term]);
-
-  useEffect(() => {
-    if (!term || tab === "all") return;
-    if (tab === "songs" && data?.songs) return;
-    if (tabData[tab]) return;
-
-    let active = true;
-    setTabLoading(true);
-    setTabError(null);
-
-    const kind = tab === "songs" ? "song" : tab === "albums" ? "album" : tab === "artists" ? "artist" : tab === "playlists" ? "playlist" : "video";
-    const promise = kind === "song" ? Promise.resolve(data?.songs ?? []) : searchKind(term, kind as any);
-
-    promise
-      .then((res) => {
-        if (active) {
-          setTabData((prev) => ({ ...prev, [tab]: res }));
-          setTabLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (active) {
-          setTabError(String(err));
-          setTabLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [term, tab, data]);
-
+  const ok = term && !fromLink(term);
+  const found = useAsync(() => (ok && tab === "all" ? search(term) : undefined), [term, tab, online]);
+  const kind = useAsync<(Track & Album & SearchArtist)[] | undefined>(() => (ok && tab !== "all" ? (searchKind(term, KINDS[tab]) as Promise<(Track & Album & SearchArtist)[]>) : undefined), [term, tab, online]);
+  const { error, loading } = tab === "all" ? found : kind;
+  const sugs = useAsync(() => (typing && query.trim() ? suggestions(query) : undefined), [typing && query]).data ?? [];
   // A Sleeve link pasted in opens what it's for.
   useEffect(() => {
     const view = fromLink(query);
     if (view) useStore.setState({ query: "" }), open(view);
   }, [query]);
-
-  const commitQuery = (q: string) => {
-    const clean = q.trim();
-    if (!clean) return;
-    useStore.setState({ query: clean });
-    setTerm(clean);
-    recordRecentQuery(clean);
-    setSugOpen(false);
-  };
-
-  const top = data?.top;
+  const go = (q: string) => (useStore.setState({ query: q }), setTerm(q), setTyping(false), addRecentSearch({ id: q.toLowerCase(), kind: "query", title: q }));
+  const playFrom = (list: Track[]) => (i: number) => (rememberTrack(list[i]), play(list, i));
+  const all = tab === "all" ? found.data : undefined;
+  const list = tab === "all" ? undefined : kind.data;
+  const top = all?.top;
 
   return (
     <div className="animate-enter px-8 pt-14">
-      <div ref={containerRef} className="relative">
+      <div className="relative" onBlur={() => setTyping(false)}>
         {/* The placeholder doubles as the page title. */}
         <input
-          ref={inputRef}
           autoFocus
           value={query}
-          onChange={(e) => {
-            useStore.setState({ query: e.target.value });
-            setSugOpen(true);
-          }}
-          onFocus={() => {
-            if (query.trim() && sugs.length > 0) setSugOpen(true);
-          }}
+          onChange={(e) => (useStore.setState({ query: e.target.value }), setTyping(true), setPick(-1))}
           onKeyDown={(e) => {
-            if (sugOpen && sugs.length > 0) {
-              if (e.key === "ArrowDown") {
-                e.preventDefault();
-                setSugIndex((i) => (i < sugs.length - 1 ? i + 1 : 0));
-                return;
-              }
-              if (e.key === "ArrowUp") {
-                e.preventDefault();
-                setSugIndex((i) => (i > 0 ? i - 1 : sugs.length - 1));
-                return;
-              }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                e.stopPropagation();
-                setSugOpen(false);
-                return;
-              }
-              if (e.key === "Enter") {
-                e.preventDefault();
-                if (sugIndex >= 0 && sugIndex < sugs.length) {
-                  commitQuery(sugs[sugIndex]);
-                } else if (query.trim()) {
-                  commitQuery(query);
-                }
-                return;
-              }
-            }
-            if (e.key === "Enter" && query.trim()) {
-              commitQuery(query);
-            }
+            const n = typing ? sugs.length : 0;
+            if (n && (e.key === "ArrowDown" || e.key === "ArrowUp")) e.preventDefault(), setPick((i) => (i + (e.key === "ArrowDown" ? 1 : n - 1 + (i < 0 ? 1 : 0))) % n);
+            else if (n && e.key === "Escape") e.stopPropagation(), setTyping(false);
+            else if (e.key === "Enter" && query.trim()) go(sugs[pick] && typing ? sugs[pick] : query.trim());
           }}
           placeholder="Search"
           aria-label="Search"
@@ -244,306 +109,94 @@ export function Search() {
           spellCheck={false}
           className="room w-full bg-transparent text-display outline-none placeholder:text-ink"
         />
-
-        {/* Suggestions dropdown: solid opaque elevated card with fast dismissal */}
-        {sugOpen && sugs.length > 0 && (
-          <div className="absolute top-full left-0 z-50 mt-2 w-full max-w-xl overflow-hidden rounded-2xl border border-ink/[0.12] bg-paper shadow-2xl [scrollbar-width:none]">
-            <div className="max-h-72 overflow-y-auto py-1.5 [scrollbar-width:none]">
-              {sugs.map((s, i) => (
-                <button
-                  key={s}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    commitQuery(s);
-                  }}
-                  onMouseEnter={() => setSugIndex(i)}
-                  className={`flex w-full items-center gap-3.5 px-4 py-2.5 text-left text-sm font-medium transition-colors ${
-                    i === sugIndex ? "bg-ink/[0.08] text-ink font-semibold" : "text-muted hover:bg-ink/[0.05] hover:text-ink"
-                  }`}
-                >
-                  <SearchIcon size={15} className="shrink-0 text-muted" />
-                  <span className="truncate">{s}</span>
-                </button>
-              ))}
-            </div>
+        {typing && sugs.length > 0 && (
+          <div role="listbox" className="absolute top-full left-0 z-50 mt-2 w-full max-w-xl overflow-hidden rounded-2xl bg-paper py-1.5 shadow-2xl ring-1 ring-ink/10">
+            {sugs.slice(0, 8).map((s, i) => (
+              <button key={s} role="option" aria-selected={i === pick} onMouseDown={(e) => (e.preventDefault(), go(s))} onMouseEnter={() => setPick(i)} className={`flex w-full items-center gap-3.5 px-4 py-2.5 text-left font-medium ${i === pick ? "bg-ink/[0.07]" : ""}`}>
+                <SearchIcon size={15} className="shrink-0 text-muted" />
+                <span className="truncate">{s}</span>
+              </button>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Tabs */}
-      {(query.trim() || term) && (
-        <div className="mt-4 flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
-          {SEARCH_TABS.map((t) => {
-            const active = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => {
-                  setTab(t.id);
-                  setSugOpen(false);
-                }}
-                className={`press h-8 shrink-0 rounded-full px-4 text-sm font-semibold transition-colors ${
-                  active ? "bg-ink text-paper" : "bg-ink/[0.07] text-ink hover:bg-ink/[0.12]"
-                }`}
-              >
-                {t.label}
-              </button>
-            );
-          })}
+      {query ? (
+        <div className="mt-4 flex gap-2 overflow-x-auto [scrollbar-width:none]">
+          {Object.entries(TABS).map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id as keyof typeof TABS)} className={`press h-8 shrink-0 rounded-full px-4 text-sm font-semibold ${tab === id ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`}>
+              {label}
+            </button>
+          ))}
         </div>
-      )}
-
-      {/* When box is empty: Recent searches + Browse All */}
-      {!query && (
+      ) : (
         <>
           {recents.length > 0 && (
-            <div className="mt-8">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-bold tracking-tight">Recent Searches</h2>
-                <button
-                  onClick={clearRecentSearches}
-                  className="press text-sm font-semibold text-muted hover:text-ink transition-colors"
-                >
-                  Clear All
-                </button>
-              </div>
-              <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-4">
-                {recents.map((item) => (
-                  <div key={item.id} className="group relative rounded-2xl bg-ink/[0.03] p-3 hover:bg-ink/[0.06] transition-colors">
+            <Section title="Recent Searches" action={<button onClick={() => useRecentSearches.setState({ items: [] })} className="press text-sm font-semibold text-muted hover:text-ink">Clear</button>}>
+              <div className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:none]">
+                {recents.map((r) => (
+                  <div key={r.id} className="group relative w-36 shrink-0">
                     <button
-                      onClick={() => {
-                        if (item.kind === "query") {
-                          commitQuery(item.title);
-                        } else if (item.kind === "artist") {
-                          open({ name: "artist", id: item.id });
-                        } else if (item.kind === "album") {
-                          open({ name: "collection", id: item.id });
-                        } else if (item.kind === "track" && item.track) {
-                          play([item.track], 0);
-                        }
-                      }}
+                      onClick={() => (r.kind === "query" ? go(r.title) : r.kind === "artist" ? open({ name: "artist", id: r.id }) : r.kind === "album" ? open({ name: "collection", id: r.id }) : r.track && play([r.track], 0))}
                       className="press block w-full text-left"
                     >
-                      <div className={`aspect-square w-full overflow-hidden bg-ink/[0.06] ${item.kind === "artist" ? "rounded-full" : "rounded-xl"}`}>
-                        {item.thumb ? (
-                          <img src={art(item.thumb, 300)} alt="" className="size-full object-cover" />
-                        ) : (
-                          <div className="grid size-full place-items-center text-muted">
-                            <SearchIcon size={28} />
-                          </div>
-                        )}
+                      <div className={`grid aspect-square place-items-center overflow-hidden bg-ink/[0.06] text-muted ${r.kind === "artist" ? "rounded-full" : "rounded-xl"}`}>
+                        {r.thumb ? <img src={art(r.thumb, 300)} alt="" className="size-full object-cover" /> : <SearchIcon size={28} />}
                       </div>
-                      <div className="mt-3 truncate font-semibold leading-tight">{item.title}</div>
-                      <div className="mt-1 truncate text-xs text-muted capitalize">{item.subtitle ?? (item.kind === "query" ? "Search" : item.kind)}</div>
+                      <div className="mt-2 truncate font-semibold">{r.title}</div>
+                      <div className="truncate text-sm text-muted">{r.subtitle ?? { query: "Search", artist: "Artist", album: "Album", track: "Song" }[r.kind]}</div>
                     </button>
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeRecentSearch(item.id);
-                      }}
-                      title="Remove"
-                      aria-label={`Remove ${item.title}`}
-                      className="press absolute top-2 right-2 grid size-7 place-items-center rounded-full bg-surface/90 text-muted shadow-sm backdrop-blur-sm opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-ink transition-opacity"
+                      onClick={() => useRecentSearches.setState((s) => ({ items: s.items.filter((x) => x.id !== r.id) }))}
+                      aria-label={`Remove ${r.title}`}
+                      className="press absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                     >
                       <X size={14} />
                     </button>
                   </div>
                 ))}
               </div>
-            </div>
+            </Section>
           )}
-
-          <h2 className={`${recents.length > 0 ? "mt-10" : "mt-8"} text-xl font-bold tracking-tight`}>Browse All</h2>
-          <div className="mt-4 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
-            <button
-              onClick={() => open({ name: "charts" })}
-              className="press relative aspect-[16/10] overflow-hidden rounded-2xl p-4 text-left text-xl font-extrabold tracking-tight text-white bg-linear-to-br from-[#0a84ff] to-[#5e5ce6] hover:brightness-110 shadow-sm"
-            >
-              Charts
-            </button>
-            <button
-              onClick={() => open({ name: "releases" })}
-              className="press relative aspect-[16/10] overflow-hidden rounded-2xl p-4 text-left text-xl font-extrabold tracking-tight text-white bg-linear-to-br from-[#ff375f] to-[#ff9f0a] hover:brightness-110 shadow-sm"
-            >
-              New Releases
-            </button>
-            {genres.map(([name, colour]) => (
-              <button
-                key={name}
-                onClick={() => commitQuery(`${name} hits`)}
-                style={{ background: colour }}
-                className="press relative aspect-[16/10] overflow-hidden rounded-2xl p-4 text-left text-xl font-extrabold tracking-tight text-white hover:brightness-110"
-              >
-                {name}
-              </button>
-            ))}
-          </div>
+          <Section title="Browse All">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+              {([["Charts", "#0d73ec", () => open({ name: "charts" })], ["New Releases", "#e8115b", () => open({ name: "releases" })], ...genres.map(([name, colour]) => [name, colour, () => go(`${name} hits`)] as const)] as const).map(([name, colour, run]) => (
+                <button key={name} onClick={run} style={{ background: colour }} className="press relative aspect-[16/10] overflow-hidden rounded-2xl p-4 text-left text-xl font-extrabold tracking-tight text-white hover:brightness-110">
+                  {name}
+                </button>
+              ))}
+            </div>
+          </Section>
         </>
       )}
+      {error && <p title={error} className="mt-6 text-muted">Search didn’t go through. Check your connection and try again.</p>}
 
-      {error && tab === "all" && <p title={error} className="mt-6 text-muted">Search didn’t go through. Check your connection and try again.</p>}
-      {tabError && <p title={tabError} className="mt-6 text-muted">Couldn’t load {tab}. Check your connection and try again.</p>}
-
-      {term && (
-        <div aria-busy={loading || tabLoading} className={`transition-opacity duration-200 ${(loading && tab === "all") || tabLoading ? "opacity-40" : ""}`}>
-          {/* Tab: All */}
-          {tab === "all" && (
+      {term && (all || list) && (
+        <div aria-busy={loading} className={`transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>
+          {all ? (
             <>
-              {loading && !data && (
-                <div className="mt-8 space-y-6 animate-pulse">
-                  <div className="flex items-center gap-6">
-                    <div className="size-28 rounded-full bg-ink/[0.06]" />
-                    <div className="space-y-3">
-                      <div className="h-8 w-48 rounded-lg bg-ink/[0.06]" />
-                      <div className="h-4 w-32 rounded-lg bg-ink/[0.04]" />
-                    </div>
+              {top && (
+                <button onClick={() => (addRecentSearch({ id: top.id, kind: "artist", title: top.name, thumb: top.thumb }), open({ name: "artist", id: top.id }))} className="group mt-10 flex items-center gap-6 text-left">
+                  <div className="size-32 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
+                    <img src={art(top.thumb, 400)} alt="" className="size-full object-cover" />
                   </div>
-                  <div className="space-y-3 pt-4">
-                    <div className="h-5 w-24 rounded bg-ink/[0.06]" />
-                    {[...Array(4)].map((_, i) => (
-                      <div key={i} className="h-12 rounded-xl bg-ink/[0.04]" />
-                    ))}
+                  <div>
+                    <div className="text-5xl font-extrabold tracking-[-0.04em]">{top.name}</div>
+                    <div className="mt-2 text-muted">{top.about}</div>
                   </div>
-                </div>
+                </button>
               )}
-              {data && (
-                <>
-                  {top && (
-                    <button
-                      onClick={() => {
-                        addRecentSearch({ id: top.id, kind: "artist", title: top.name, thumb: top.thumb });
-                        open({ name: "artist", id: top.id });
-                      }}
-                      className="group mt-8 flex items-center gap-6 text-left"
-                    >
-                      <div className="size-32 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
-                        <img src={art(top.thumb, 400)} alt="" className="size-full object-cover" />
-                      </div>
-                      <div>
-                        <div className="text-5xl font-extrabold tracking-[-0.04em]">{top.name}</div>
-                        <div className="mt-2 text-muted">{top.about}</div>
-                      </div>
-                    </button>
-                  )}
-                  {data.songs.length > 0 && (
-                    <Section title="Songs">
-                      <TrackList
-                        tracks={data.songs}
-                        onPlay={(i) => {
-                          const t = data.songs[i];
-                          if (t) addRecentSearch({ id: t.id, kind: "track", title: t.title, subtitle: t.artists?.map((a) => a.name).join(", "), thumb: t.thumb, track: t });
-                          play(data.songs, i);
-                        }}
-                      />
-                    </Section>
-                  )}
-                  {data.albums && data.albums.length > 0 && (
-                    <Section title="Albums">
-                      <Albums items={data.albums} remember />
-                    </Section>
-                  )}
-                  {data.artists && data.artists.length > 0 && (
-                    <Section title="Artists">
-                      <ArtistCards items={data.artists} remember />
-                    </Section>
-                  )}
-                </>
-              )}
+              <Section title="Songs">
+                <TrackList tracks={all.songs} onPlay={playFrom(all.songs)} />
+              </Section>
+              {all.albums.length > 0 && <Section title="Albums"><Albums items={all.albums} remember /></Section>}
+              {all.artists.length > 0 && <Section title="Artists"><ArtistCards items={all.artists} remember /></Section>}
             </>
-          )}
-
-          {/* Tab: Songs */}
-          {tab === "songs" && (
+          ) : !list?.length ? (
+            <p className="mt-8 text-muted">No {TABS[tab].toLowerCase()} found for “{term}”.</p>
+          ) : (
             <div className="mt-6">
-              {(tabData.songs ?? data?.songs)?.length ? (
-                <TrackList
-                  tracks={tabData.songs ?? data!.songs}
-                  onPlay={(i) => {
-                    const list = tabData.songs ?? data!.songs;
-                    const t = list[i];
-                    if (t) addRecentSearch({ id: t.id, kind: "track", title: t.title, subtitle: t.artists?.map((a) => a.name).join(", "), thumb: t.thumb, track: t });
-                    play(list, i);
-                  }}
-                />
-              ) : !loading && !tabLoading ? (
-                <p className="mt-8 text-muted">No songs found for “{term}”.</p>
-              ) : null}
-            </div>
-          )}
-
-          {/* Tab: Albums */}
-          {tab === "albums" && (
-            <div className="mt-6">
-              {tabLoading ? (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-5 animate-pulse">
-                  {[...Array(6)].map((_, i) => (
-                    <div key={i} className="aspect-square rounded-xl bg-ink/[0.05]" />
-                  ))}
-                </div>
-              ) : tabData.albums?.length ? (
-                <Albums items={tabData.albums} grid remember />
-              ) : (
-                <p className="mt-8 text-muted">No albums found for “{term}”.</p>
-              )}
-            </div>
-          )}
-
-          {/* Tab: Artists */}
-          {tab === "artists" && (
-            <div className="mt-6">
-              {tabLoading ? (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-6 animate-pulse">
-                  {[...Array(6)].map((_, i) => (
-                    <div key={i} className="aspect-square rounded-full bg-ink/[0.05]" />
-                  ))}
-                </div>
-              ) : tabData.artists?.length ? (
-                <ArtistCards items={tabData.artists} grid remember />
-              ) : (
-                <p className="mt-8 text-muted">No artists found for “{term}”.</p>
-              )}
-            </div>
-          )}
-
-          {/* Tab: Playlists */}
-          {tab === "playlists" && (
-            <div className="mt-6">
-              {tabLoading ? (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-5 animate-pulse">
-                  {[...Array(6)].map((_, i) => (
-                    <div key={i} className="aspect-square rounded-xl bg-ink/[0.05]" />
-                  ))}
-                </div>
-              ) : tabData.playlists?.length ? (
-                <Albums items={tabData.playlists} grid remember />
-              ) : (
-                <p className="mt-8 text-muted">No playlists found for “{term}”.</p>
-              )}
-            </div>
-          )}
-
-          {/* Tab: Videos */}
-          {tab === "videos" && (
-            <div className="mt-6">
-              {tabLoading ? (
-                <div className="space-y-3 animate-pulse">
-                  {[...Array(5)].map((_, i) => (
-                    <div key={i} className="h-12 rounded-xl bg-ink/[0.05]" />
-                  ))}
-                </div>
-              ) : tabData.videos?.length ? (
-                <TrackList
-                  tracks={tabData.videos}
-                  onPlay={(i) => {
-                    const t = tabData.videos![i];
-                    if (t) addRecentSearch({ id: t.id, kind: "track", title: t.title, subtitle: t.artists?.map((a) => a.name).join(", "), thumb: t.thumb, track: t });
-                    play(tabData.videos!, i);
-                  }}
-                />
-              ) : (
-                <p className="mt-8 text-muted">No videos found for “{term}”.</p>
-              )}
+              {tab === "songs" || tab === "videos" ? <TrackList tracks={list} onPlay={playFrom(list)} /> : tab === "artists" ? <ArtistCards items={list} grid remember /> : <Albums items={list} grid remember />}
             </div>
           )}
         </div>
@@ -1686,699 +1339,126 @@ const dayName = (at: number) => {
   return days === 0 ? "Today" : days === 1 ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: days < 7 ? "long" : undefined, day: "numeric", month: "long", year: d.getFullYear() === today.getFullYear() ? undefined : "numeric" });
 };
 
-// Parses a duration string ("3:45" or "1:02:15") into total seconds.
-function parseDuration(d?: string): number {
-  if (!d) return 0;
-  const parts = d.trim().split(":").map((s) => Number(s.trim()));
-  if (parts.some((n) => isNaN(n) || n < 0)) return 0;
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  return 0;
-}
-
-type WrappedRange = "week" | "month" | "year" | "all";
-const WRAPPED_RANGES: [WrappedRange, string][] = [
-  ["week", "This Week"],
-  ["month", "This Month"],
-  ["year", "This Year"],
-  ["all", "All Time"],
-];
-
-function getRangeStart(range: WrappedRange): number {
-  const now = new Date();
-  if (range === "all") return 0;
-  if (range === "year") return new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0).getTime();
-  if (range === "month") return new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime();
-  const day = now.getDay();
-  const diff = (day + 6) % 7; // Monday is start of the week
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff, 0, 0, 0, 0).getTime();
-}
-
-type WrappedStats = {
-  minutes: number;
-  totalPlays: number;
-  topSongs: { track: Track; count: number }[];
-  topArtists: { name: string; count: number; thumb?: string }[];
-  topAlbum?: { title: string; id?: string; artist?: string; thumb?: string; count: number };
-  peakDate?: { date: Date; count: number };
-  dayOfWeekCounts: { day: string; count: number }[];
-  peakDayOfWeek: { day: string; count: number };
+// Your listening over a stretch of time: minutes, top songs, artists and album, busiest day.
+type Span = "week" | "month" | "year" | "all";
+const SPANS: [Span, string][] = [["week", "This Week"], ["month", "This Month"], ["year", "This Year"], ["all", "All Time"]];
+const spanStart = (s: Span, d = new Date()) =>
+  s === "all" ? 0 : new Date(d.getFullYear(), s === "year" ? 0 : d.getMonth(), s === "week" ? d.getDate() - ((d.getDay() + 6) % 7) : 1).getTime();
+const top = <T,>(m: Map<string, { v: T; n: number }>, k = 10) => [...m.values()].sort((a, b) => b.n - a.n).slice(0, k);
+const tally = <T,>(m: Map<string, { v: T; n: number }>, key: string, v: T) => {
+  const e = m.get(key) ?? m.set(key, { v, n: 0 }).get(key)!;
+  e.n++;
 };
-
-function computeWrappedStats(list: PlayRow[]): WrappedStats {
-  let totalSecs = 0;
-  const songMap = new Map<string, { track: Track; count: number }>();
-  const artistMap = new Map<string, { name: string; count: number; thumb?: string }>();
-  const albumMap = new Map<string, { title: string; id?: string; artist?: string; thumb?: string; count: number }>();
-  const dateMap = new Map<string, { date: Date; count: number }>();
-  const dayOfWeekCounts = [
-    { day: "Mon", count: 0 },
-    { day: "Tue", count: 0 },
-    { day: "Wed", count: 0 },
-    { day: "Thu", count: 0 },
-    { day: "Fri", count: 0 },
-    { day: "Sat", count: 0 },
-    { day: "Sun", count: 0 },
-  ];
-
-  for (const p of list) {
-    totalSecs += parseDuration(p.t.duration);
-
-    // Top Songs
-    const songEntry = songMap.get(p.t.id);
-    if (songEntry) songEntry.count++;
-    else songMap.set(p.t.id, { track: p.t, count: 1 });
-
-    // Top Artists (split with SEP from yt.ts)
-    const seenArtists = new Set<string>();
-    for (const a of p.t.artists) {
-      const parts = a.name.split(SEP).map((s) => s.trim()).filter(Boolean);
-      for (const name of parts) {
-        const key = name.toLowerCase();
-        if (seenArtists.has(key)) continue;
-        seenArtists.add(key);
-        const artEntry = artistMap.get(key);
-        if (artEntry) {
-          artEntry.count++;
-          if (!artEntry.thumb && p.t.thumb) artEntry.thumb = p.t.thumb;
-        } else {
-          artistMap.set(key, { name, count: 1, thumb: p.t.thumb });
-        }
-      }
-    }
-
-    // Top Album
-    const albumTitle = p.t.album?.trim();
-    if (albumTitle) {
-      const albumKey = (p.t.albumId || albumTitle).toLowerCase();
-      const albEntry = albumMap.get(albumKey);
-      if (albEntry) albEntry.count++;
-      else albumMap.set(albumKey, { title: albumTitle, id: p.t.albumId, artist: p.t.artists[0]?.name, thumb: p.t.thumb, count: 1 });
-    }
-
-    // Day of week & busiest date
-    const d = new Date(p.at);
-    const dow = (d.getDay() + 6) % 7;
-    dayOfWeekCounts[dow].count++;
-
-    const dateKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-    const dateEntry = dateMap.get(dateKey);
-    if (dateEntry) dateEntry.count++;
-    else dateMap.set(dateKey, { date: d, count: 1 });
+const WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+function replay(list: PlayRow[]) {
+  const songs = new Map<string, { v: Track; n: number }>(), artists = new Map<string, { v: Artist; n: number }>(), albums = new Map<string, { v: Track; n: number }>();
+  const days = WEEK.map(() => 0);
+  let secs = 0;
+  for (const { t, at } of list) {
+    secs += parseSecs(t.duration) ?? 0;
+    tally(songs, t.id, t);
+    for (const a of t.artists) tally(artists, a.name, a);
+    if (t.album) tally(albums, t.albumId ?? t.album, t);
+    days[(new Date(at).getDay() + 6) % 7]++;
   }
-
-  const minutes = totalSecs > 0 ? Math.max(1, Math.round(totalSecs / 60)) : 0;
-  const topSongs = [...songMap.values()].sort((a, b) => b.count - a.count).slice(0, 5);
-  const topArtists = [...artistMap.values()].sort((a, b) => b.count - a.count).slice(0, 5);
-  const topAlbum = [...albumMap.values()].sort((a, b) => b.count - a.count)[0];
-
-  let peakDate: { date: Date; count: number } | undefined;
-  for (const item of dateMap.values()) {
-    if (!peakDate || item.count > peakDate.count) peakDate = item;
-  }
-
-  let peakDayOfWeek = dayOfWeekCounts[0];
-  for (const item of dayOfWeekCounts) {
-    if (item.count > peakDayOfWeek.count) peakDayOfWeek = item;
-  }
-
-  return {
-    minutes,
-    totalPlays: list.length,
-    topSongs,
-    topArtists,
-    topAlbum,
-    peakDate,
-    dayOfWeekCounts,
-    peakDayOfWeek,
-  };
+  return { minutes: Math.round(secs / 60), plays: list.length, songs: top(songs), artists: top(artists, 5), album: top(albums, 1)[0], days };
 }
 
-const cardArtUrl = (thumb?: string) =>
-  new Promise<HTMLImageElement | undefined>((ok) => {
-    if (!thumb) return ok(undefined);
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => ok(img);
-    img.onerror = () => ok(undefined);
-    img.src = art(thumb, 600) ?? "";
-  });
-
-type WrappedCardKind = "summary" | "songs" | "artists" | "busiest" | "album";
-
-async function drawWrappedCard(
-  c: HTMLCanvasElement,
-  kind: WrappedCardKind,
-  rangeLabel: string,
-  stats: WrappedStats,
-) {
-  const W = 1080, H = 1350, pad = 84;
-  c.width = W;
-  c.height = H;
-  const ctx = c.getContext("2d")!;
-  const font = (weight: number, px: number) =>
-    `${weight} ${px}px -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", system-ui, sans-serif`;
-
-  const thumb =
-    kind === "album" ? stats.topAlbum?.thumb
-    : kind === "artists" ? (stats.topArtists[0]?.thumb || stats.topSongs[0]?.track.thumb)
-    : stats.topSongs[0]?.track.thumb;
-
-  const cover = await cardArtUrl(thumb);
-
-  // Background
-  ctx.fillStyle = "#0c0a14";
-  ctx.fillRect(0, 0, W, H);
-  if (cover) {
-    const tiny = document.createElement("canvas");
-    tiny.width = 12;
-    tiny.height = 15;
-    tiny.getContext("2d")!.drawImage(cover, 0, 0, 12, 15);
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(tiny, 0, 0, W, H);
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, "rgba(0, 0, 0, 0.45)");
-    grad.addColorStop(0.5, "rgba(0, 0, 0, 0.65)");
-    grad.addColorStop(1, "rgba(0, 0, 0, 0.88)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-  } else {
-    const grad = ctx.createLinearGradient(0, 0, W, H);
-    grad.addColorStop(0, "#2d124d");
-    grad.addColorStop(0.5, "#160f2e");
-    grad.addColorStop(1, "#0a0814");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-  }
-
-  // Header pill badge
-  ctx.fillStyle = "#ff375f";
-  ctx.font = font(800, 24);
-  ctx.fillText("SLEEVE WRAPPED", pad, pad + 20);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.65)";
-  ctx.font = font(700, 22);
-  ctx.fillText(" •  " + rangeLabel.toUpperCase(), pad + 235, pad + 20);
-
-  if (kind === "summary") {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = font(900, 68);
-    ctx.fillText("YOUR WRAPPED", pad, pad + 110);
-
-    ctx.fillStyle = "#ff375f";
-    ctx.font = font(900, 110);
-    ctx.fillText(stats.minutes.toLocaleString(), pad, pad + 240);
-    ctx.fillStyle = "rgba(255, 255, 255, 0.65)";
-    ctx.font = font(700, 24);
-    ctx.fillText("MINUTES LISTENED", pad, pad + 285);
-
-    let curY = pad + 380;
-    if (stats.topSongs[0]) {
-      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
-      ctx.font = font(700, 22);
-      ctx.fillText("TOP SONG", pad, curY);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = font(800, 44);
-      ctx.fillText(fit(ctx, stats.topSongs[0].track.title, W - pad * 2), pad, curY + 48);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-      ctx.font = font(600, 30);
-      ctx.fillText(fit(ctx, stats.topSongs[0].track.artists.map((a) => a.name).join(", "), W - pad * 2), pad, curY + 88);
-      curY += 150;
-    }
-
-    if (stats.topArtists[0]) {
-      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
-      ctx.font = font(700, 22);
-      ctx.fillText("TOP ARTIST", pad, curY);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = font(800, 44);
-      ctx.fillText(fit(ctx, stats.topArtists[0].name, W - pad * 2), pad, curY + 48);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-      ctx.font = font(600, 30);
-      ctx.fillText(`${stats.topArtists[0].count} plays`, pad, curY + 88);
-      curY += 150;
-    }
-
-    if (stats.topAlbum) {
-      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
-      ctx.font = font(700, 22);
-      ctx.fillText("TOP ALBUM", pad, curY);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = font(800, 40);
-      ctx.fillText(fit(ctx, stats.topAlbum.title, W - pad * 2), pad, curY + 44);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-      ctx.font = font(600, 28);
-      ctx.fillText(fit(ctx, stats.topAlbum.artist ?? "", W - pad * 2), pad, curY + 82);
-      curY += 140;
-    }
-
-    if (stats.peakDate) {
-      const dateStr = stats.peakDate.date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
-      ctx.font = font(700, 22);
-      ctx.fillText("BUSIEST DAY", pad, curY);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = font(800, 38);
-      ctx.fillText(`${dateStr} • ${stats.peakDate.count} plays`, pad, curY + 44);
-    }
-  } else if (kind === "songs") {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = font(900, 68);
-    ctx.fillText("TOP SONGS", pad, pad + 110);
-
-    let curY = pad + 200;
-    for (let i = 0; i < stats.topSongs.length; i++) {
-      const item = stats.topSongs[i];
-      ctx.fillStyle = i === 0 ? "#ff375f" : "rgba(255, 255, 255, 0.4)";
-      ctx.font = font(900, 46);
-      ctx.fillText(`${i + 1}`, pad, curY + 46);
-
-      const textX = pad + 70;
-      ctx.fillStyle = "#ffffff";
-      ctx.font = font(800, 38);
-      ctx.fillText(fit(ctx, item.track.title, W - pad - textX - 160), textX, curY + 36);
-
-      ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
-      ctx.font = font(600, 26);
-      ctx.fillText(fit(ctx, item.track.artists.map((a) => a.name).join(", "), W - pad - textX - 160), textX, curY + 72);
-
-      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
-      ctx.font = font(700, 26);
-      const countText = `${item.count} ${item.count === 1 ? "play" : "plays"}`;
-      ctx.fillText(countText, W - pad - ctx.measureText(countText).width, curY + 46);
-
-      curY += 130;
-    }
-  } else if (kind === "artists") {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = font(900, 68);
-    ctx.fillText("TOP ARTISTS", pad, pad + 110);
-
-    let curY = pad + 210;
-    for (let i = 0; i < stats.topArtists.length; i++) {
-      const item = stats.topArtists[i];
-      ctx.fillStyle = i === 0 ? "#ff375f" : "rgba(255, 255, 255, 0.4)";
-      ctx.font = font(900, 48);
-      ctx.fillText(`${i + 1}`, pad, curY + 48);
-
-      const textX = pad + 70;
-      ctx.fillStyle = "#ffffff";
-      ctx.font = font(800, 42);
-      ctx.fillText(fit(ctx, item.name, W - pad - textX - 160), textX, curY + 42);
-
-      ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
-      ctx.font = font(700, 26);
-      const countText = `${item.count} ${item.count === 1 ? "play" : "plays"}`;
-      ctx.fillText(countText, W - pad - ctx.measureText(countText).width, curY + 42);
-
-      curY += 135;
-    }
-  } else if (kind === "busiest") {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = font(900, 68);
-    ctx.fillText("BUSIEST DAY", pad, pad + 110);
-
-    if (stats.peakDate) {
-      const dateStr = stats.peakDate.date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
-      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-      ctx.font = font(700, 36);
-      ctx.fillText("Your peak listening was on", pad, pad + 190);
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = font(900, 50);
-      ctx.fillText(fit(ctx, dateStr, W - pad * 2), pad, pad + 255);
-
-      ctx.fillStyle = "#ff375f";
-      ctx.font = font(800, 40);
-      ctx.fillText(`${stats.peakDate.count} songs played`, pad, pad + 315);
-    }
-
-    const chartTop = pad + 440;
-    const chartHeight = 380;
-    const chartWidth = W - pad * 2;
-    const maxBar = Math.max(...stats.dayOfWeekCounts.map((d) => d.count), 1);
-    const barW = 88;
-    const gap = (chartWidth - 7 * barW) / 6;
-
-    for (let i = 0; i < 7; i++) {
-      const item = stats.dayOfWeekCounts[i];
-      const x = pad + i * (barW + gap);
-      const barH = Math.max(16, (item.count / maxBar) * (chartHeight - 80));
-      const y = chartTop + chartHeight - barH;
-      const isPeak = item.day === stats.peakDayOfWeek.day && item.count > 0;
-
-      ctx.fillStyle = isPeak ? "#ff375f" : "rgba(255, 255, 255, 0.3)";
-      ctx.beginPath();
-      if (ctx.roundRect) ctx.roundRect(x, y, barW, barH, 14);
-      else ctx.rect(x, y, barW, barH);
-      ctx.fill();
-
-      if (item.count > 0) {
-        ctx.fillStyle = isPeak ? "#ffffff" : "rgba(255, 255, 255, 0.7)";
-        ctx.font = font(800, 24);
-        const cStr = String(item.count);
-        ctx.fillText(cStr, x + (barW - ctx.measureText(cStr).width) / 2, y - 12);
-      }
-
-      ctx.fillStyle = isPeak ? "#ff375f" : "rgba(255, 255, 255, 0.8)";
-      ctx.font = font(800, 26);
-      ctx.fillText(item.day, x + (barW - ctx.measureText(item.day).width) / 2, chartTop + chartHeight + 45);
-    }
-  } else if (kind === "album" && stats.topAlbum) {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = font(900, 68);
-    ctx.fillText("TOP ALBUM", pad, pad + 110);
-
-    if (cover) {
-      ctx.save();
-      ctx.beginPath();
-      if (ctx.roundRect) ctx.roundRect(pad, pad + 180, 480, 480, 28);
-      else ctx.rect(pad, pad + 180, 480, 480);
-      ctx.clip();
-      ctx.drawImage(cover, pad, pad + 180, 480, 480);
-      ctx.restore();
-    }
-
-    const infoY = pad + 730;
-    ctx.fillStyle = "#ffffff";
-    ctx.font = font(900, 56);
-    ctx.fillText(fit(ctx, stats.topAlbum.title, W - pad * 2), pad, infoY);
-
-    ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-    ctx.font = font(700, 36);
-    ctx.fillText(fit(ctx, stats.topAlbum.artist ?? "", W - pad * 2), pad, infoY + 54);
-
-    ctx.fillStyle = "#ff375f";
-    ctx.font = font(800, 36);
-    ctx.fillText(`${stats.topAlbum.count} ${stats.topAlbum.count === 1 ? "song play" : "song plays"}`, pad, infoY + 115);
-  }
-
-  // Footer branding
-  ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-  ctx.font = font(900, 36);
-  ctx.fillText("Sleeve", pad, H - pad + 10);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
-  ctx.font = font(700, 24);
-  const yr = String(new Date().getFullYear());
-  ctx.fillText(yr, W - pad - ctx.measureText(yr).width, H - pad + 10);
-}
-
-// Wrapped Anytime: Spotify Wrapped-style stats and shareable cards for your listening history.
 export function WrappedPage() {
-  const [range, setRange] = useState<WrappedRange>("year");
-  const [playsList, setPlaysList] = useState<PlayRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [span, setSpan] = useState<Span>("year");
+  const [list, setList] = useState<PlayRow[]>();
   const recent = useHistory((s) => s.recent);
-
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    void (async () => {
-      const since = getRangeStart(range);
-      const got: PlayRow[] = [];
-      // ponytail: scanning the whole history is fine for now (ceiling ~100k plays; add a daily summary table if it gets slow)
-      await plays((p) => {
-        if (since === 0 || p.at >= since) {
-          got.push(p);
-        }
-        return since === 0 || p.at >= since - 86_400_000;
-      }).catch(() => {});
-
-      if (!cancelled) {
-        setPlaysList(got);
-        setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [range, recent]);
-
-  const stats = useMemo(() => computeWrappedStats(playsList), [playsList]);
-  const rangeLabel = WRAPPED_RANGES.find(([r]) => r === range)?.[1] ?? "All Time";
-
-  const saveCard = (title: string, kind: WrappedCardKind) => {
+    const since = spanStart(span), got: PlayRow[] = [];
+    let live = true;
+    // ponytail: reads every play in range on each visit; keep a daily summary if history gets huge
+    void plays((p) => p.at >= since && got.push(p) > 0).finally(() => live && setList(got));
+    return () => void (live = false);
+  }, [span, recent]);
+  const r = useMemo(() => replay(list ?? []), [list]);
+  const label = SPANS.find(([s]) => s === span)![1];
+  const busiest = Math.max(...r.days);
+  const card = async () => {
     const c = document.createElement("canvas");
-    void drawWrappedCard(c, kind, rangeLabel, stats).then(() => {
-      c.toBlob((blob) => {
-        if (!blob) return;
+    await drawCard(c, r.songs[0].v, [`${r.minutes.toLocaleString()} minutes listened ${label.toLowerCase()}`, `Top artist: ${r.artists[0]?.v.name}`], "Artwork");
+    return c;
+  };
+  const save = () =>
+    void card().then((c) =>
+      c.toBlob((b) => {
+        if (!b) return;
         const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = `Sleeve Wrapped - ${title} (${rangeLabel}).png`;
+        a.href = URL.createObjectURL(b);
+        a.download = `Sleeve Wrapped ${label}.png`;
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
         notify({ text: "Card Saved", detail: "Saved to your Downloads folder" });
-      }, "image/png");
-    });
-  };
-
-  const copyCard = (title: string, kind: WrappedCardKind) => {
-    const c = document.createElement("canvas");
-    void drawWrappedCard(c, kind, rangeLabel, stats).then(() => {
-      navigator.clipboard
-        .write([
-          new ClipboardItem({
-            "image/png": new Promise<Blob>((ok, fail) => c.toBlob((b) => (b ? ok(b) : fail()), "image/png")),
-          }),
-        ])
-        .then(
-          () => notify({ text: "Card Copied", detail: `${title} (${rangeLabel})` }),
-          () => notify({ text: "Couldn’t Copy the Card", detail: "Save it instead" }),
-        );
-    });
-  };
-
-  const maxBar = Math.max(...stats.dayOfWeekCounts.map((d) => d.count), 1);
-  const heroThumb = stats.topSongs[0]?.track.thumb;
-
+      }, "image/png"),
+    );
+  const copy = () =>
+    navigator.clipboard
+      .write([new ClipboardItem({ "image/png": card().then((c) => new Promise<Blob>((ok, fail) => c.toBlob((b) => (b ? ok(b) : fail()), "image/png"))) })])
+      .then(() => notify({ text: "Card Copied" }), () => notify({ text: "Couldn’t Copy the Card", detail: "Save it instead" }));
+  const hero = r.songs[0]?.v;
   return (
-    <div className="animate-enter px-8 pt-14 pb-20">
-      <div className="flex flex-wrap items-end justify-between gap-6">
-        <div>
-          <div className="flex items-center gap-2 text-accent">
-            <Sparkle size={18} className="fill-current" />
-            <span className="text-xs font-bold tracking-wider uppercase">Your Listening Story</span>
-          </div>
-          <h1 className="text-display mt-1">Wrapped</h1>
-        </div>
-        <Segments label="Range" value={range} options={WRAPPED_RANGES} onPick={setRange} />
+    <div className="animate-enter px-8 pt-14 pb-10">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <h1 className="text-display">Wrapped</h1>
+        <Segments label="Time range" value={span} options={SPANS} onPick={setSpan} />
       </div>
-
-      {loading ? (
-        <div className="mt-12 grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <div className="h-80 animate-pulse rounded-3xl bg-ink/[0.05]" />
-          <div className="h-80 animate-pulse rounded-3xl bg-ink/[0.05]" />
-        </div>
-      ) : !playsList.length ? (
-        <div className="mt-16 flex flex-col items-center justify-center text-center">
-          <div className="grid size-16 place-items-center rounded-2xl bg-ink/[0.06] text-muted">
-            <Sparkle size={32} />
-          </div>
-          <h2 className="mt-4 text-xl font-bold tracking-tight">No listening history for {rangeLabel.toLowerCase()}</h2>
-          <p className="mt-2 max-w-md text-sm text-muted">
-            Songs you play for 30 seconds or more land in your history. Play some music or switch to another range to explore your stats!
-          </p>
-          {range !== "all" && (
-            <button onClick={() => setRange("all")} className={`${solid} mt-6`}>
-              Show All Time
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="mt-10 grid grid-cols-1 gap-6 lg:grid-cols-2">
-          {/* 1. Overview Card */}
-          <div className="relative isolate flex min-h-[380px] flex-col justify-between overflow-hidden rounded-3xl bg-linear-to-br from-[#2a134d]/90 via-[#160d30]/90 to-[#0a0718]/95 p-7 text-white shadow-xl shadow-black/25">
-            {heroThumb && <img src={art(heroThumb, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover opacity-45 blur-3xl saturate-150" />}
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold tracking-wider text-accent uppercase">Summary • {rangeLabel}</span>
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => copyCard("Summary", "summary")} title="Copy Image" className="press flex size-8 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20">
-                  <Copy size={14} />
-                </button>
-                <button onClick={() => saveCard("Summary", "summary")} title="Save PNG" className="press flex h-8 items-center gap-1.5 rounded-full bg-white/15 px-3.5 text-xs font-bold text-white backdrop-blur-md transition-colors hover:bg-white/25">
-                  <ImageDown size={14} /> Share
-                </button>
-              </div>
+      {list && !hero && <p className="mt-6 text-muted">Nothing played {label.toLowerCase()} yet. Songs you listen to for 30 seconds or more count.</p>}
+      {hero && (
+        <>
+          <div className="relative isolate mt-6 flex flex-wrap items-end justify-between gap-6 overflow-hidden rounded-2xl p-8 text-white">
+            <img src={art(hero.thumb, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-125 object-cover blur-3xl brightness-50 saturate-150" />
+            <div>
+              <div className="text-sm font-semibold text-white/70">{label}</div>
+              <div className="text-6xl font-black tabular-nums">{r.minutes.toLocaleString()}</div>
+              <div className="font-semibold text-white/80">minutes · {plural(r.plays, "play")}</div>
             </div>
-
-            <div className="my-6">
-              <div className="text-[clamp(44px,6cqw,72px)] leading-none font-black tracking-tight text-[#ff375f]">
-                {stats.minutes.toLocaleString()}
-              </div>
-              <div className="mt-1 text-xs font-bold tracking-wider text-white/60 uppercase">Minutes Listened</div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 border-t border-white/15 pt-5 text-sm">
-              <div>
-                <div className="text-[11px] font-bold tracking-wider text-white/50 uppercase">Top Song</div>
-                <div className="mt-1 truncate font-bold text-white">{stats.topSongs[0]?.track.title ?? "—"}</div>
-                <div className="truncate text-xs text-white/70">{stats.topSongs[0]?.track.artists[0]?.name ?? ""}</div>
-              </div>
-              <div>
-                <div className="text-[11px] font-bold tracking-wider text-white/50 uppercase">Top Artist</div>
-                <div className="mt-1 truncate font-bold text-white">{stats.topArtists[0]?.name ?? "—"}</div>
-                <div className="text-xs text-white/70">{stats.topArtists[0] ? `${stats.topArtists[0].count} plays` : ""}</div>
-              </div>
+            <div className="flex gap-2">
+              <button onClick={copy} aria-label="Copy Card" title="Copy Card" className={`${pill} bg-white/15 px-3 hover:bg-white/25`}><Copy size={16} /></button>
+              <button onClick={save} className={`${pill} bg-white text-black hover:bg-white/85`}><ImageDown size={16} /> Share Card</button>
             </div>
           </div>
-
-          {/* 2. Top Songs Card */}
-          <div className="relative isolate flex min-h-[380px] flex-col justify-between overflow-hidden rounded-3xl bg-linear-to-br from-[#4a1236]/90 via-[#230c2c]/90 to-[#0d0716]/95 p-7 text-white shadow-xl shadow-black/25">
-            {heroThumb && <img src={art(heroThumb, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover opacity-40 blur-3xl saturate-150" />}
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold tracking-wider text-accent uppercase">Top Songs • {rangeLabel}</span>
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => copyCard("Top Songs", "songs")} title="Copy Image" className="press flex size-8 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20">
-                  <Copy size={14} />
-                </button>
-                <button onClick={() => saveCard("Top Songs", "songs")} title="Save PNG" className="press flex h-8 items-center gap-1.5 rounded-full bg-white/15 px-3.5 text-xs font-bold text-white backdrop-blur-md transition-colors hover:bg-white/25">
-                  <ImageDown size={14} /> Share
-                </button>
-              </div>
-            </div>
-
-            <ol className="my-4 divide-y divide-white/10">
-              {stats.topSongs.map((item, i) => (
-                <li key={item.track.id + i} className="group flex items-center gap-3 py-2.5">
-                  <span className={`w-5 text-center text-sm font-black tabular-nums ${i === 0 ? "text-[#ff375f]" : "text-white/40"}`}>{i + 1}</span>
-                  <img src={art(item.track.thumb, 96)} alt="" className="size-10 shrink-0 rounded-lg object-cover shadow-sm" />
-                  <div className="min-w-0 flex-1">
-                    <button onClick={() => play(stats.topSongs.map((s) => s.track), i)} className="truncate text-left font-bold text-white transition-colors hover:text-accent">
-                      {item.track.title}
-                    </button>
-                    <div className="truncate text-xs text-white/70">{item.track.artists.map((a) => a.name).join(", ")}</div>
-                  </div>
-                  <span className="text-xs font-bold tabular-nums text-white/50">{item.count} {item.count === 1 ? "play" : "plays"}</span>
+          <Section title="Top Songs">
+            <TrackList tracks={r.songs.map((s) => s.v)} numbered />
+          </Section>
+          <Section title="Top Artists">
+            <ol className="grid gap-1">
+              {r.artists.map(({ v, n }, i) => (
+                <li key={v.name} className="flex items-center gap-4 py-1.5">
+                  <span className="w-5 text-right text-muted tabular-nums">{i + 1}</span>
+                  {v.id ? <button onClick={() => open({ name: "artist", id: v.id! })} className="font-semibold hover:underline">{v.name}</button> : <span className="font-semibold">{v.name}</span>}
+                  <span className="ml-auto text-sm text-muted">{plural(n, "play")}</span>
                 </li>
               ))}
             </ol>
-
-            <div className="text-[11px] font-semibold text-white/40">Tap any song to play it</div>
-          </div>
-
-          {/* 3. Top Artists Card */}
-          <div className="relative isolate flex min-h-[380px] flex-col justify-between overflow-hidden rounded-3xl bg-linear-to-br from-[#12384a]/90 via-[#0c1f2e]/90 to-[#070e16]/95 p-7 text-white shadow-xl shadow-black/25">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold tracking-wider text-accent uppercase">Top Artists • {rangeLabel}</span>
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => copyCard("Top Artists", "artists")} title="Copy Image" className="press flex size-8 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20">
-                  <Copy size={14} />
+          </Section>
+          <div className="grid gap-6 @2xl:grid-cols-2">
+            {r.album && (
+              <Section title="Top Album">
+                <button onClick={() => r.album.v.albumId && open({ name: "collection", id: r.album.v.albumId })} className="flex items-center gap-4 text-left">
+                  <img src={art(r.album.v.thumb, 160)} alt="" className="size-20 rounded-lg object-cover" />
+                  <span>
+                    <span className="block font-semibold">{r.album.v.album}</span>
+                    <span className="block text-sm text-muted">{r.album.v.artists[0]?.name} · {plural(r.album.n, "play")}</span>
+                  </span>
                 </button>
-                <button onClick={() => saveCard("Top Artists", "artists")} title="Save PNG" className="press flex h-8 items-center gap-1.5 rounded-full bg-white/15 px-3.5 text-xs font-bold text-white backdrop-blur-md transition-colors hover:bg-white/25">
-                  <ImageDown size={14} /> Share
-                </button>
-              </div>
-            </div>
-
-            <ol className="my-4 divide-y divide-white/10">
-              {stats.topArtists.map((item, i) => (
-                <li key={item.name + i} className="flex items-center gap-3 py-3">
-                  <span className={`w-5 text-center text-sm font-black tabular-nums ${i === 0 ? "text-[#ff375f]" : "text-white/40"}`}>{i + 1}</span>
-                  <div className="grid size-10 shrink-0 place-items-center rounded-full bg-white/15 font-bold text-white">
-                    {item.thumb ? <img src={art(item.thumb, 96)} alt="" className="size-full rounded-full object-cover" /> : item.name.slice(0, 1).toUpperCase()}
+              </Section>
+            )}
+            <Section title="By Day">
+              <div className="flex h-28 items-end gap-2">
+                {r.days.map((n, i) => (
+                  <div key={i} className="flex flex-1 flex-col items-center gap-1.5" title={plural(n, "play")}>
+                    <div style={{ height: `${busiest ? (n / busiest) * 100 : 0}%` }} className={`min-h-1 w-full max-w-8 rounded-md ${n === busiest ? "bg-accent" : "bg-ink/15"}`} />
+                    <span className="text-xs text-muted">{WEEK[i]}</span>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-bold text-white">{item.name}</div>
-                  </div>
-                  <span className="text-xs font-bold tabular-nums text-white/50">{item.count} {item.count === 1 ? "play" : "plays"}</span>
-                </li>
-              ))}
-            </ol>
-
-            <div className="text-[11px] font-semibold text-white/40">Artists split from collaborative tracks</div>
+                ))}
+              </div>
+            </Section>
           </div>
-
-          {/* 4. Busiest Day Card */}
-          <div className="relative isolate flex min-h-[380px] flex-col justify-between overflow-hidden rounded-3xl bg-linear-to-br from-[#3b2710]/90 via-[#21160a]/90 to-[#0d0905]/95 p-7 text-white shadow-xl shadow-black/25">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold tracking-wider text-accent uppercase">Listening Habits • {rangeLabel}</span>
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => copyCard("Busiest Day", "busiest")} title="Copy Image" className="press flex size-8 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20">
-                  <Copy size={14} />
-                </button>
-                <button onClick={() => saveCard("Busiest Day", "busiest")} title="Save PNG" className="press flex h-8 items-center gap-1.5 rounded-full bg-white/15 px-3.5 text-xs font-bold text-white backdrop-blur-md transition-colors hover:bg-white/25">
-                  <ImageDown size={14} /> Share
-                </button>
-              </div>
-            </div>
-
-            <div className="my-3">
-              <div className="text-xs font-bold tracking-wider text-white/60 uppercase">Peak Listening Day</div>
-              <div className="mt-1 text-2xl font-black text-white">
-                {stats.peakDate ? stats.peakDate.date.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" }) : stats.peakDayOfWeek.day}
-              </div>
-              <div className="text-sm font-semibold text-[#ff375f]">
-                {stats.peakDate ? `${stats.peakDate.count} songs played` : `${stats.peakDayOfWeek.count} plays`}
-              </div>
-            </div>
-
-            {/* 7-Bar Chart */}
-            <div className="mt-4">
-              <div className="flex h-36 items-end justify-between gap-2">
-                {stats.dayOfWeekCounts.map((d) => {
-                  const isPeak = d.day === stats.peakDayOfWeek.day && d.count > 0;
-                  const pct = maxBar > 0 ? (d.count / maxBar) * 100 : 0;
-                  return (
-                    <div key={d.day} className="flex flex-1 flex-col items-center gap-1.5">
-                      <span className={`text-[11px] font-bold tabular-nums ${isPeak ? "text-accent" : "text-white/60"}`}>
-                        {d.count > 0 ? d.count : ""}
-                      </span>
-                      <div className="relative flex h-24 w-full max-w-8 items-end justify-center rounded-lg bg-white/10 p-1">
-                        <div
-                          style={{ height: `${Math.max(pct, d.count > 0 ? 15 : 4)}%` }}
-                          className={`w-full rounded-md transition-all duration-300 ${
-                            isPeak
-                              ? "bg-linear-to-t from-accent to-[#ff7b90] shadow-[0_0_12px_var(--color-accent)]"
-                              : "bg-white/35 hover:bg-white/50"
-                          }`}
-                        />
-                      </div>
-                      <span className={`text-xs font-semibold ${isPeak ? "font-bold text-white" : "text-white/60"}`}>
-                        {d.day}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* 5. Top Album Card (if available) */}
-          {stats.topAlbum && (
-            <div className="relative isolate flex min-h-[380px] flex-col justify-between overflow-hidden rounded-3xl bg-linear-to-br from-[#1b3a28]/90 via-[#0e2116]/90 to-[#06100a]/95 p-7 text-white shadow-xl shadow-black/25 lg:col-span-2">
-              {stats.topAlbum.thumb && <img src={art(stats.topAlbum.thumb, 120)} alt="" className="absolute inset-0 -z-10 size-full scale-150 object-cover opacity-35 blur-3xl saturate-150" />}
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold tracking-wider text-accent uppercase">Top Album • {rangeLabel}</span>
-                <div className="flex items-center gap-1.5">
-                  <button onClick={() => copyCard("Top Album", "album")} title="Copy Image" className="press flex size-8 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20">
-                    <Copy size={14} />
-                  </button>
-                  <button onClick={() => saveCard("Top Album", "album")} title="Save PNG" className="press flex h-8 items-center gap-1.5 rounded-full bg-white/15 px-3.5 text-xs font-bold text-white backdrop-blur-md transition-colors hover:bg-white/25">
-                    <ImageDown size={14} /> Share
-                  </button>
-                </div>
-              </div>
-
-              <div className="my-6 flex flex-wrap items-center gap-6">
-                {stats.topAlbum.thumb && (
-                  <img src={art(stats.topAlbum.thumb, 300)} alt="" className="size-28 shrink-0 rounded-2xl object-cover shadow-2xl shadow-black/40 @2xl:size-36" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-bold tracking-wider text-white/60 uppercase">Most Played Album</div>
-                  <h3 className="mt-1 text-2xl font-black text-white @2xl:text-3xl">{stats.topAlbum.title}</h3>
-                  <div className="mt-1 text-base text-white/80">{stats.topAlbum.artist}</div>
-                  <div className="mt-2 text-sm font-bold text-[#ff375f]">{stats.topAlbum.count} {stats.topAlbum.count === 1 ? "song play" : "song plays"}</div>
-                </div>
-                {stats.topAlbum.id && (
-                  <button onClick={() => stats.topAlbum?.id && open({ name: "collection", id: stats.topAlbum.id })} className={`${pill} bg-white text-black hover:bg-white/85`}>
-                    <Play size={16} className="fill-current" /> Open Album
-                  </button>
-                )}
-              </div>
-
-              <div className="text-[11px] font-semibold text-white/40">Calculated from plays across all tracks on this album</div>
-            </div>
-          )}
-        </div>
+        </>
       )}
     </div>
   );
@@ -2625,170 +1705,57 @@ export function DiscographyPage({ id, params, artist }: { id: string; params?: s
   );
 }
 
-const COUNTRIES = [
-  { code: "ZZ", name: "Global" },
-  { code: "US", name: "United States" },
-  { code: "GB", name: "United Kingdom" },
-  { code: "AU", name: "Australia" },
-  { code: "BR", name: "Brazil" },
-  { code: "CA", name: "Canada" },
-  { code: "DE", name: "Germany" },
-  { code: "ES", name: "Spain" },
-  { code: "FR", name: "France" },
-  { code: "IN", name: "India" },
-  { code: "IT", name: "Italy" },
-  { code: "JP", name: "Japan" },
-  { code: "KR", name: "South Korea" },
-  { code: "MX", name: "Mexico" },
-  { code: "NL", name: "Netherlands" },
-  { code: "NZ", name: "New Zealand" },
-  { code: "NO", name: "Norway" },
-  { code: "PL", name: "Poland" },
-  { code: "SE", name: "Sweden" },
-];
+const COUNTRIES = ["ZZ", "US", "GB", "AU", "BR", "CA", "DE", "ES", "FR", "IN", "IT", "JP", "KR", "MX", "NL", "NZ", "NO", "PL", "SE"];
+const region = new Intl.DisplayNames(undefined, { type: "region" });
+const countryName = (code: string) => (code === "ZZ" ? "Global" : (region.of(code) ?? code));
 
 export function ChartsPage() {
   const country = useSettings((s) => s.country);
-  const { data: shelfList, error, loading } = useAsync(() => charts(country), [country]);
-
-  const countryList = COUNTRIES.some((c) => c.code === country)
-    ? COUNTRIES
-    : [{ code: country, name: country }, ...COUNTRIES];
-
+  const { data, error } = useAsync(() => charts(country), [country]);
   return (
     <div className="animate-enter px-8 pt-14">
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-display">Charts</h1>
-          <p className="mt-1 font-semibold text-muted">The most played music right now</p>
-        </div>
-        <div className="relative">
-          <select
-            value={country}
-            onChange={(e) => useSettings.setState({ country: e.target.value })}
-            aria-label="Country"
-            className="press h-9 appearance-none rounded-full bg-ink/[0.07] pr-9 pl-4 text-sm font-semibold outline-none hover:bg-ink/[0.12] focus-visible:outline-2 focus-visible:outline-accent"
-          >
-            {countryList.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.name}
-              </option>
-            ))}
+        <h1 className="text-display">Charts</h1>
+        <label className="relative">
+          <select value={country} onChange={(e) => useSettings.setState({ country: e.target.value })} aria-label="Country" className={`${pill} appearance-none bg-ink/[0.07] pr-9 hover:bg-ink/[0.12]`}>
+            {(COUNTRIES.includes(country) ? COUNTRIES : [country, ...COUNTRIES]).map((c) => <option key={c} value={c}>{countryName(c)}</option>)}
           </select>
           <ChevronDown size={15} aria-hidden className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-muted" />
-        </div>
+        </label>
       </div>
-
-      {error && <p className="mt-8 text-muted">Couldn’t load charts for {country}. Check your connection and try again.</p>}
-
-      {loading && !shelfList && (
-        <div className="mt-8 space-y-8 animate-pulse">
-          <div className="h-6 w-48 rounded bg-ink/[0.06]" />
-          <div className="h-44 rounded-2xl bg-ink/[0.04]" />
-          <div className="h-6 w-48 rounded bg-ink/[0.06]" />
-          <div className="h-44 rounded-2xl bg-ink/[0.04]" />
-        </div>
-      )}
-
-      {shelfList && (
-        <div className="mt-4">
-          {shelfList.map((shelf, i) => (
-            <Section key={i} title={shelf.title}>
-              {shelf.tracks.length > 0 && <TrackGrid tracks={shelf.tracks} numbered={/trend|chart|top/i.test(shelf.title)} />}
-              {shelf.albums.length > 0 && <Albums items={shelf.albums} />}
-              {shelf.artists && shelf.artists.length > 0 && (
-                <ArtistCards items={shelf.artists} />
-              )}
-            </Section>
-          ))}
-        </div>
+      {error ? (
+        <p title={error} className="mt-8 text-muted">Couldn’t load the charts. Check your connection and try again.</p>
+      ) : !data ? (
+        <Skeleton className="mt-10 h-64 rounded-2xl" />
+      ) : (
+        data.map((shelf) => (
+          <Section key={shelf.title} title={shelf.title}>
+            {shelf.tracks.length > 0 && <TrackGrid tracks={shelf.tracks} numbered />}
+            {shelf.albums.length > 0 && <Albums items={shelf.albums} />}
+            {shelf.artists?.length ? <ArtistCards items={shelf.artists} /> : null}
+          </Section>
+        ))
       )}
     </div>
   );
 }
 
-// New releases grid: fresh albums and singles from YouTube Music.
+const RELEASES = { All: () => true, Albums: (a: Album) => a.kind === "Album", "Singles & EPs": (a: Album) => a.kind === "Single" || a.kind === "EP" };
+
 export function ReleasesPage() {
-  const { data: items, error, loading } = useAsync(newReleases, []);
-  const [filter, setFilter] = useState<"all" | "albums" | "singles">("all");
-
-  const chips: { id: "all" | "albums" | "singles"; label: string }[] = [
-    { id: "all", label: "All" },
-    { id: "albums", label: "Albums" },
-    { id: "singles", label: "Singles & EPs" },
-  ];
-
-  const filtered = useMemo(() => {
-    if (!items) return [];
-    if (filter === "albums") return items.filter((a) => /album/i.test(a.kind ?? ""));
-    if (filter === "singles") return items.filter((a) => /single|ep/i.test(a.kind ?? ""));
-    return items;
-  }, [items, filter]);
-
+  const { data, error } = useAsync(newReleases, []);
+  const [filter, setFilter] = useState<keyof typeof RELEASES>("All");
   return (
     <div className="animate-enter px-8 pt-14">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-display">New Releases</h1>
-        <p className="mt-1 font-semibold text-muted">Fresh albums and singles</p>
+      <h1 className="text-display">New Releases</h1>
+      <div className="mt-6 flex gap-2">
+        {Object.keys(RELEASES).map((f) => (
+          <button key={f} onClick={() => setFilter(f as keyof typeof RELEASES)} className={`${pill} ${filter === f ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`}>{f}</button>
+        ))}
       </div>
-
-      <div className="mt-6 flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
-        {chips.map((c) => {
-          const active = filter === c.id;
-          return (
-            <button
-              key={c.id}
-              onClick={() => setFilter(c.id)}
-              className={`${pill} ${active ? "bg-ink text-paper" : "bg-ink/[0.07] text-ink hover:bg-ink/[0.12]"}`}
-            >
-              {c.label}
-            </button>
-          );
-        })}
+      <div className="mt-6">
+        {error ? <p title={error} className="text-muted">Couldn’t load new releases. Check your connection and try again.</p> : !data ? <Skeleton className="h-64 rounded-2xl" /> : <Albums items={data.filter(RELEASES[filter])} grid />}
       </div>
-
-      {error && <p className="mt-8 text-muted">Couldn’t load new releases. Check your connection and try again.</p>}
-
-      {loading && !items && (
-        <div className="mt-8 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="space-y-2.5">
-              <Skeleton className="aspect-square w-full rounded-xl" />
-              <Skeleton className="h-4 w-3/4 rounded-sm" />
-              <Skeleton className="h-3 w-1/2 rounded-sm" />
-            </div>
-          ))}
-        </div>
-      )}
-
-      {items && filtered.length === 0 && !loading && (
-        <p className="mt-8 text-muted">No releases found in this category.</p>
-      )}
-
-      {filtered.length > 0 && (
-        <div className="mt-8 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6">
-          {filtered.map((a) => (
-            <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className="group relative">
-              <button onClick={() => open({ name: "collection", id: a.id })} className="press block w-full rounded-xl text-left">
-                <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
-                  <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover transition-transform duration-300 group-hover:scale-105" />
-                </div>
-                <div className="mt-2.5 truncate font-semibold">{a.title}</div>
-                <div className="truncate text-sm text-muted">
-                  {[a.kind, a.by].filter(Boolean).join(" · ") || a.year}
-                </div>
-              </button>
-              <button
-                onClick={() => playCollection(a.id)}
-                aria-label={`Play ${a.title}`}
-                className="absolute top-[124px] right-2 grid size-11 translate-y-1 place-items-center rounded-full bg-accent text-paper opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
-              >
-                <Play size={18} className="ml-0.5 fill-current" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

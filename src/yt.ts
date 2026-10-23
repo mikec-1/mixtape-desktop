@@ -154,18 +154,8 @@ export async function searchYouTube(query: string): Promise<Track[]> {
 
 export async function suggestions(query: string): Promise<string[]> {
   if (!query.trim()) return [];
-  const music = (await yt).music;
-  const sections = await music.getSearchSuggestions(query).catch(() => []);
-  const list: string[] = [];
-  for (const s of sections ?? []) {
-    for (const c of s.contents ?? []) {
-      if (c.is?.(YTNodes.SearchSuggestion)) {
-        const text = c.suggestion?.text ?? c.suggestion?.toString();
-        if (text) list.push(text);
-      }
-    }
-  }
-  return [...new Set(list)];
+  const sections = await (await yt).music.getSearchSuggestions(query).catch(() => []);
+  return [...new Set(sections.flatMap((s) => s.contents.filterType(YTNodes.SearchSuggestion).map((c) => c.suggestion.toString())))];
 }
 
 export type Shelf = { title: string; tracks: Track[]; albums: Album[]; artists?: SearchArtist[] };
@@ -200,126 +190,41 @@ async function loadHome(): Promise<Shelf[]> {
   });
 }
 
-// YouTube Music charts for a country (e.g. "US", "GB", "ZZ" for global): top songs, videos and trending.
+const browse = async (body: Record<string, unknown>) => Parser.parseResponse((await (await yt).actions.execute("/browse", { ...body, client: "YTMUSIC" })).data);
+const titleOf = (s: YTNodes.MusicShelf | YTNodes.MusicCarouselShelf) => (s.is(YTNodes.MusicShelf) ? s.title : s.header?.title)?.toString() ?? "";
+
+// A country's charts ("ZZ" is global): its trending and top-video playlists opened up, top artists, then the other chart playlists.
 export async function charts(country = "US"): Promise<Shelf[]> {
-  const client = await yt;
-  const music = client.music;
-  const chartsReply = await client.actions.execute("/browse", {
-    browseId: "FEmusic_charts",
-    formData: { selectedValues: [country] },
-    client: "YTMUSIC",
-  }).catch(() => undefined);
-
-  if (!chartsReply) return [];
-
-  const page = Parser.parseResponse(chartsReply.data);
-  const carouselShelves = page.contents_memo?.getType(YTNodes.MusicCarouselShelf) ?? [];
-  const musicShelves = page.contents_memo?.getType(YTNodes.MusicShelf) ?? [];
-  const allSections = [...carouselShelves, ...musicShelves];
-
-  // Country-specific playlists from Video charts (Trending 20, Daily Top Music Videos, etc.)
-  const videoChartsSection = allSections.find((s) => {
-    const t = (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) ?? "";
-    return /video chart/i.test(t);
-  });
-  const videoChartItems = (videoChartsSection?.contents?.filterType(YTNodes.MusicTwoRowItem) ?? []) as YTNodes.MusicTwoRowItem[];
-
-  const trendingPlItem = videoChartItems.find((i) => /trend/i.test(i.title?.toString() ?? ""));
-  const topVideosPlItem = videoChartItems.find((i) => /daily top|top 100 music video/i.test(i.title?.toString() ?? ""));
-
-  const [trendingPl, topVideosPl] = await Promise.all([
-    trendingPlItem?.id ? music.getPlaylist(trendingPlItem.id).catch(() => undefined) : undefined,
-    topVideosPlItem?.id ? music.getPlaylist(topVideosPlItem.id).catch(() => undefined) : undefined,
-  ]);
-
-  const result: Shelf[] = [];
-
-  // 1. Trending tracks (country-specific)
-  const trendingTracks = trendingPl ? toTracks(trendingPl.items?.filterType(YTNodes.MusicResponsiveListItem)) : [];
-  if (trendingTracks.length) {
-    result.push({ title: "Trending", tracks: trendingTracks, albums: [] });
-  }
-
-  // 2. Top artists (country-specific)
-  const artistsSection = allSections.find((s) => {
-    const t = (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) ?? "";
-    return /artist/i.test(t);
-  });
-  if (artistsSection) {
-    const listItems = artistsSection.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? [];
-    const twoRowItems = artistsSection.contents?.filterType(YTNodes.MusicTwoRowItem) ?? [];
-    const artists = toArtists(listItems.length ? listItems : twoRowItems);
-    if (artists.length) {
-      result.push({ title: "Top artists", tracks: [], albums: [], artists });
-    }
-  }
-
-  // 3. Top music videos
-  const topVideoTracks = topVideosPl ? toTracks(topVideosPl.items?.filterType(YTNodes.MusicResponsiveListItem)) : [];
-  if (topVideoTracks.length) {
-    result.push({ title: "Top music videos", tracks: topVideoTracks.slice(0, 50), albums: [] });
-  }
-
-  // 4. Video charts playlists (excluding already expanded playlists)
-  const remainingPlaylists = videoChartItems.filter(
-    (i) => i.id !== trendingPlItem?.id && i.id !== topVideosPlItem?.id
-  );
-  if (remainingPlaylists.length) {
-    result.push({
-      title: "Video charts",
-      tracks: [],
-      albums: toAlbums(remainingPlaylists),
-    });
-  }
-
-  // 5. Genres (if present)
-  const genreSection = allSections.find((s) => {
-    const t = (s.is(YTNodes.MusicShelf) ? s.title?.text : s.header?.title?.text) ?? "";
-    return /genre/i.test(t);
-  });
-  if (genreSection) {
-    const genreItems = genreSection.contents?.filterType(YTNodes.MusicTwoRowItem) ?? [];
-    const albums = toAlbums(genreItems);
-    if (albums.length) {
-      result.push({ title: "Genres", tracks: [], albums });
-    }
-  }
-
-  // Fallback for global ("ZZ") or regions without a dedicated Trending playlist
-  if (!result.some((s) => /trend/i.test(s.title))) {
-    const explore = await music.getExplore().catch(() => undefined);
-    const exploreTrending = explore?.sections?.find((s: any) =>
-      s.is?.(YTNodes.MusicCarouselShelf) &&
-      /trend/i.test(s.header?.title?.text ?? "") &&
-      !/podcast|episode|show/i.test(s.header?.title?.text ?? "")
-    );
-    if (exploreTrending) {
-      const listItems = exploreTrending.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? [];
-      const tracks = toTracks(listItems);
-      if (tracks.length) {
-        result.unshift({ title: "Trending", tracks, albums: [] });
-      }
-    }
-  }
-
-  return result;
+  const page = await browse({ browseId: "FEmusic_charts", formData: { selectedValues: [country] } });
+  const shelves = [...(page.contents_memo?.getType(YTNodes.MusicCarouselShelf) ?? []), ...(page.contents_memo?.getType(YTNodes.MusicShelf) ?? [])];
+  const find = (title: RegExp) => shelves.find((s) => title.test(titleOf(s)))?.contents;
+  const lists = find(/video chart/i)?.filterType(YTNodes.MusicTwoRowItem) ?? [];
+  const trending = lists.find((i) => /trend/i.test(i.title.toString()));
+  const top = lists.find((i) => /daily top|top 100 music video/i.test(i.title.toString()));
+  const music = (await yt).music;
+  const open = (i?: YTNodes.MusicTwoRowItem) => (i?.id ? music.getPlaylist(i.id).then((p) => toTracks(p.items.filterType(YTNodes.MusicResponsiveListItem)), () => []) : Promise.resolve([]));
+  const artists = find(/artist/i);
+  const shelf = (title: string, tracks: Track[], albums: Album[] = [], artistList?: SearchArtist[]) => ({ title, tracks, albums, artists: artistList });
+  return [
+    shelf("Trending", trending ? await open(trending) : await exploreTrending()),
+    shelf("Top Artists", [], [], toArtists([...(artists?.filterType(YTNodes.MusicResponsiveListItem) ?? []), ...(artists?.filterType(YTNodes.MusicTwoRowItem) ?? [])])),
+    shelf("Top Music Videos", (await open(top)).slice(0, 50)),
+    shelf("Video Charts", [], toAlbums(lists.filter((i) => i !== trending && i !== top))),
+    shelf("Genres", [], toAlbums(find(/genre/i)?.filterType(YTNodes.MusicTwoRowItem))),
+  ].filter((s) => s.tracks.length || s.albums.length || s.artists?.length);
 }
 
-// New album and single releases from YouTube Music.
-export async function newReleases(): Promise<Album[]> {
-  const client = await yt;
-  const reply = await client.actions.execute("/browse", {
-    browseId: "FEmusic_new_releases",
-    client: "YTMUSIC",
-  });
-  const page = Parser.parseResponse(reply.data);
-  const items = [
-    ...(page.contents_memo?.getType(YTNodes.MusicTwoRowItem) ?? []),
-    ...(page.contents_memo?.getType(YTNodes.MusicResponsiveListItem) ?? []),
-  ];
-  const seen = new Set<string>();
-  return toAlbums(items).filter((a) => (seen.has(a.id) ? false : (seen.add(a.id), true)));
-}
+// Global charts have no trending playlist; Explore's trending shelf stands in.
+const exploreTrending = async () => {
+  const explore = await (await yt).music.getExplore().catch(() => undefined);
+  const s = explore?.sections?.filterType(YTNodes.MusicCarouselShelf).find((s) => /trend/i.test(titleOf(s)) && !/podcast|episode|show/i.test(titleOf(s)));
+  return toTracks(s?.contents.filterType(YTNodes.MusicResponsiveListItem));
+};
+
+export const newReleases = async () => {
+  const page = await browse({ browseId: "FEmusic_new_releases" });
+  return unique(toAlbums([...(page.contents_memo?.getType(YTNodes.MusicTwoRowItem) ?? []), ...(page.contents_memo?.getType(YTNodes.MusicResponsiveListItem) ?? [])]));
+};
 
 // The counts YouTube Music shows under an artist's name, from its reply as sent (youtubei.js drops
 // them): monthly audience ("75.1M monthly audience") and subscribers ("36.1M"). An artist with their own

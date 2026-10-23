@@ -113,6 +113,7 @@ const empty = (): Library => ({ liked: [], saved: [], playlists: [], followed: [
 export const useLibrary = create<Library>()(persist(empty, { name: "library", storage: createJSONStorage(() => idb) }));
 const lib = useLibrary.setState;
 let toasts = 0;
+// A sticky toast stays until replaced; one with the same text updates in place (import progress).
 export const notify = (t: Omit<Toast, "id">) => {
   const current = get().toast;
   const id = current?.sticky && t.sticky && current.text === t.text ? current.id : ++toasts;

@@ -359,57 +359,22 @@ function RecentlyPlayed() {
   );
 }
 
-// Time Machine: what you played on this date one year ago (allow ±3 days if empty, min 5 plays).
+// What you played on this day a year ago, or that week if the day itself was quiet; five songs or more.
 function OnThisDay() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const recent = useHistory((s) => s.recent);
-
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const now = new Date();
-      const target = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
-      const dayStart = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 0, 0, 0, 0).getTime();
-      const dayEnd = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 23, 59, 59, 999).getTime();
-      const windowStart = new Date(target.getFullYear(), target.getMonth(), target.getDate() - 3, 0, 0, 0, 0).getTime();
-      const windowEnd = new Date(target.getFullYear(), target.getMonth(), target.getDate() + 3, 23, 59, 59, 999).getTime();
-
-      const exactPlays: PlayRow[] = [];
-      const windowPlays: PlayRow[] = [];
-
-      // ponytail: scanning the whole history is fine for now (ceiling ~100k plays; add a daily summary table if it gets slow)
-      await plays((p) => {
-        if (p.at >= windowStart && p.at <= windowEnd) {
-          windowPlays.push(p);
-          if (p.at >= dayStart && p.at <= dayEnd) exactPlays.push(p);
-        }
-        return p.at >= windowStart - 86_400_000;
-      }).catch(() => {});
-
-      if (cancelled) return;
-
-      const chosen = exactPlays.length >= 5 ? exactPlays : exactPlays.length === 0 && windowPlays.length >= 5 ? windowPlays : windowPlays.length >= 5 ? windowPlays : [];
-      if (chosen.length >= 5) {
-        const seen = new Set<string>();
-        const list: Track[] = [];
-        for (const p of chosen) {
-          if (!seen.has(p.t.id)) {
-            seen.add(p.t.id);
-            list.push(p.t);
-          }
-        }
-        setTracks(list);
-      } else {
-        setTracks([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    const d = new Date(), day = (n: number) => new Date(d.getFullYear() - 1, d.getMonth(), d.getDate() + n).getTime();
+    const week: PlayRow[] = [];
+    let live = true;
+    void plays((p) => (p.at < day(4) && p.at >= day(-3) && week.push(p), p.at >= day(-3))).finally(() => {
+      const exact = week.filter((p) => p.at >= day(0) && p.at < day(1));
+      const list = [...new Map((exact.length >= 5 ? exact : week).map((p) => [p.t.id, p.t])).values()];
+      if (live) setTracks(list.length >= 5 ? list : []);
+    });
+    return () => void (live = false);
   }, [recent]);
-
   if (!tracks.length) return null;
-
   return (
     <Section title="On This Day">
       <TrackGrid tracks={tracks} />
@@ -517,12 +482,7 @@ export function CollectionPage({ id }: { id: string }) {
         {data.about && <p className="mt-6 line-clamp-2 max-w-2xl text-[15px] leading-relaxed text-ink/65">{data.about}</p>}
         {data.tracks.length > 5 && (
           <div className="mt-4 flex items-center justify-end gap-2">
-            <PlaylistSearch
-              value={query}
-              onChange={setQuery}
-              placeholder={album ? "Search in Album" : "Search in Playlist"}
-              name="collection-q"
-            />
+            <PlaylistSearch value={query} onChange={setQuery} label={album ? "Search in Album" : "Search in Playlist"} />
           </div>
         )}
         <div className="mt-2">
@@ -570,7 +530,7 @@ export function Library() {
         <div className="ml-auto flex items-center gap-1">
           <label className="flex h-8 w-44 items-center gap-2 rounded-full bg-ink/[0.07] px-3 focus-within:bg-ink/[0.1] @3xl:w-56">
             <SearchIcon size={15} className="shrink-0 text-muted" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} placeholder="Search in Library" aria-label="Search in Library" name="library-q" autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} placeholder="Search in Library" aria-label="Search in Library" data-find autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" />
           </label>
           <button onClick={() => popup(LIBRARY_SORTS.map(([s, label]) => ({ text: filter === "songs" ? SONG_SORT_LABEL[s] : label, checked: sort === s, action: () => set({ librarySort: s }) })))} aria-label={`Order: ${LIBRARY_SORTS.find(([s]) => s === sort)?.[1]}`} title="Order" className={`${round2} w-auto gap-1.5 px-3 text-sm font-semibold`}>
             <ArrowUpDown size={15} /> <span className="hidden @3xl:inline">{filter === "songs" ? SONG_SORT_LABEL[sort] : LIBRARY_SORTS.find(([s]) => s === sort)?.[1]}</span>
@@ -856,84 +816,27 @@ function SortSelect({ value, onChange, custom }: { value: TrackSort; onChange: (
   );
 }
 
-// Spotify-style search button that expands into an input next to the sort button.
-function PlaylistSearch({
-  value,
-  onChange,
-  placeholder = "Search in Playlist",
-  name = "playlist-q",
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  name?: string;
-}) {
-  const [open, setOpen] = useState(Boolean(value));
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const handleOpen = () => {
-    setOpen(true);
-    requestAnimationFrame(() => inputRef.current?.focus());
-  };
-
-  const handleClose = () => {
-    if (value) {
-      onChange("");
-      inputRef.current?.focus();
-    } else {
-      setOpen(false);
-    }
-  };
-
-  if (!open && !value) {
-    return (
-      <button
-        type="button"
-        data-playlist-search
-        onClick={handleOpen}
-        aria-label={placeholder}
-        title={placeholder}
-        className={round2}
-      >
-        <SearchIcon size={16} />
-      </button>
-    );
-  }
-
+// A search button that opens into a field, as in Spotify's playlists; Escape clears it, then closes it.
+function PlaylistSearch({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
+  const [shown, setShown] = useState(!!value);
+  if (!shown && !value)
+    return <button data-find onClick={() => setShown(true)} aria-label={label} title={label} className={round2}><SearchIcon size={16} /></button>;
   return (
-    <label className="flex h-8 w-44 animate-enter items-center gap-1.5 rounded-full bg-ink/[0.07] px-2.5 transition-all duration-200 focus-within:bg-ink/[0.1] focus-within:w-56 @3xl:focus-within:w-64">
+    <label className="flex h-8 w-56 animate-enter items-center gap-1.5 rounded-full bg-ink/[0.07] px-2.5">
       <SearchIcon size={14} className="shrink-0 text-muted" />
       <input
-        ref={inputRef}
+        data-find
+        autoFocus
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            e.stopPropagation();
-            if (value) onChange("");
-            else setOpen(false);
-          }
-        }}
-        onBlur={() => {
-          if (!value.trim()) setOpen(false);
-        }}
-        placeholder={placeholder}
-        aria-label={placeholder}
-        name={name}
+        onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), value ? onChange("") : setShown(false))}
+        onBlur={() => !value && setShown(false)}
+        placeholder={label}
+        aria-label={label}
         autoComplete="off"
         spellCheck={false}
         className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted"
       />
-      <button
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={handleClose}
-        aria-label="Close search"
-        className="press flex size-5 shrink-0 items-center justify-center rounded-full text-muted hover:bg-ink/[0.08] hover:text-ink"
-      >
-        <X size={13} />
-      </button>
     </label>
   );
 }
@@ -1047,12 +950,7 @@ export function PlaylistPage({ id }: { id: string }) {
       <div className="mt-6 px-8">
         {tracks.length > 0 && (
           <div className="mb-2 flex items-center justify-end gap-2">
-            <PlaylistSearch
-              value={query}
-              onChange={setQuery}
-              placeholder={id === "liked" ? "Search in Liked Songs" : "Search in Playlist"}
-              name="playlist-q"
-            />
+            <PlaylistSearch value={query} onChange={setQuery} label={id === "liked" ? "Search in Liked Songs" : "Search in Playlist"} />
             {tracks.length > 1 && (
               <SortSelect
                 value={sort}
@@ -1136,12 +1034,7 @@ export function SharedPage({ id }: { id: string }) {
         {p.about && <p className="mb-6 line-clamp-2 max-w-2xl text-[15px] leading-relaxed text-ink/65">{p.about}</p>}
         {p.tracks.length > 0 && (
           <div className="mb-2 flex items-center justify-end gap-2">
-            <PlaylistSearch
-              value={query}
-              onChange={setQuery}
-              placeholder="Search in Playlist"
-              name="shared-q"
-            />
+            <PlaylistSearch value={query} onChange={setQuery} label="Search in Playlist" />
           </div>
         )}
         {p.tracks.length ? (
@@ -1277,7 +1170,7 @@ export function LocalPage() {
             <div className="mb-2 flex items-center justify-end gap-2">
               <label className="flex h-8 w-56 items-center gap-2 rounded-full bg-ink/[0.07] px-3 focus-within:bg-ink/[0.1]">
                 <SearchIcon size={15} className="shrink-0 text-muted" />
-                <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} placeholder="Search in Local Files" aria-label="Search in Local Files" name="local-q" autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} placeholder="Search in Local Files" aria-label="Search in Local Files" data-find autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" />
               </label>
               <SortSelect value={sort} custom="Artist & Album" onChange={(localSort) => useSettings.setState({ localSort })} />
             </div>
@@ -1494,6 +1387,7 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
 }
 
 // The banner runs edge to edge and fades into the page; the about text floats on it.
+const LINK = "press text-sm font-semibold text-muted hover:text-ink";
 export function Artist({ id }: { id: string }) {
   const { data: page, error } = useAsync(() => artist(id), [id]);
   // Their top ten with lengths and albums, a moment after the page's own five (which have neither).
@@ -1559,132 +1453,46 @@ export function Artist({ id }: { id: string }) {
 
       <div className="px-8">
         {data.songs.length > 0 && (
-          <Section
-            title="Popular Songs"
-            action={data.songs.length > 5 && <button onClick={() => setAll(!all)} className="press text-sm font-semibold text-muted hover:text-ink">{all ? "Show less" : "Show more"}</button>}
-          >
+          <Section title="Popular Songs" action={data.songs.length > 5 && <button onClick={() => setAll(!all)} className={LINK}>{all ? "Show Less" : "Show More"}</button>}>
             <TrackList tracks={all ? data.songs : data.songs.slice(0, 5)} numbered header={false} onPlay={(i) => play(data.songs, i, from)} />
           </Section>
         )}
-        {data.albums.length > 0 && (
-          <Section
-            title="Albums"
-            action={data.albumsMore && (
-              <button
-                onClick={() => open({ name: "discography", id: data.albumsMore!.browseId, params: data.albumsMore!.params, artist: data.name })}
-                className="press text-sm font-semibold text-muted hover:text-ink"
-              >
-                Show All
-              </button>
-            )}
-          >
-            <Albums items={data.albums} />
-          </Section>
+        {([["Albums", data.albums, data.albumsMore], ["Singles & EPs", data.singles, data.singlesMore], ["Featured On", data.featured], ["Appears On", data.appearsOn]] as const).map(
+          ([title, items, more]) =>
+            !!items?.length && (
+              <Section key={title} title={title} action={more && <button onClick={() => open({ name: "discography", id: more.browseId, params: more.params, artist: data.name })} className={LINK}>Show All</button>}>
+                <Albums items={items} />
+              </Section>
+            ),
         )}
-        {data.singles.length > 0 && (
-          <Section
-            title="Singles & EPs"
-            action={data.singlesMore && (
-              <button
-                onClick={() => open({ name: "discography", id: data.singlesMore!.browseId, params: data.singlesMore!.params, artist: data.name })}
-                className="press text-sm font-semibold text-muted hover:text-ink"
-              >
-                Show All
-              </button>
-            )}
-          >
-            <Albums items={data.singles} />
-          </Section>
-        )}
-        {data.videos && data.videos.length > 0 && (
+        {!!data.videos?.length && (
           <Section title="Videos">
             <TrackGrid tracks={data.videos} />
           </Section>
         )}
-        {data.featured && data.featured.length > 0 && (
-          <Section title="Featured On">
-            <Albums items={data.featured} />
-          </Section>
-        )}
-        {data.appearsOn && data.appearsOn.length > 0 && (
-          <Section title="Appears On">
-            <Albums items={data.appearsOn} />
-          </Section>
-        )}
-        {data.fans && data.fans.length > 0 && (
+        {!!data.fans?.length && (
           <Section title="Fans Also Like">
             <ArtistCards items={data.fans} />
           </Section>
         )}
         {data.about && (
           <Section title="About">
-            <button
-              onClick={() => setAboutOpen(true)}
-              className="press group relative block w-full max-w-2xl overflow-hidden rounded-2xl p-6 text-left"
-            >
-              {data.banner && (
-                <img
-                  src={art(data.banner, 1200, 600)}
-                  alt=""
-                  className="absolute inset-0 size-full object-cover object-[50%_25%] transition-transform duration-500 group-hover:scale-105"
-                />
-              )}
-              <div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/60 to-black/30" />
-              <div className="relative z-10 flex min-h-[140px] flex-col justify-end text-white">
-                {data.listeners && (
-                  <div className="text-base font-bold text-white/95">
-                    {data.listeners} monthly listeners
-                  </div>
-                )}
-                <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-white/80">
-                  {data.about}
-                </p>
+            <button onClick={() => setAboutOpen(true)} className="press relative isolate block w-full max-w-2xl overflow-hidden rounded-2xl p-6 text-left text-white">
+              {data.banner && <img src={art(data.banner, 1200, 600)} alt="" className="absolute inset-0 -z-10 size-full object-cover object-[50%_25%]" />}
+              <div className="absolute inset-0 -z-10 bg-linear-to-t from-black/90 to-black/30" />
+              <div className="flex min-h-36 flex-col justify-end">
+                {data.listeners && <div className="font-bold">{data.listeners} monthly listeners</div>}
+                <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-white/80">{data.about}</p>
               </div>
             </button>
           </Section>
         )}
       </div>
-
-      {aboutOpen && data.about && (
-        <Modal label={`About ${data.name}`} onClose={() => setAboutOpen(false)} className="w-[min(640px,90vw)] max-h-[85vh]">
-          <div className="relative flex flex-col overflow-y-auto">
-            <button
-              onClick={() => setAboutOpen(false)}
-              aria-label="Close"
-              className="press absolute top-3 right-3 z-20 grid size-9 place-items-center rounded-full bg-black/50 text-white hover:bg-black/70"
-            >
-              <X size={18} />
-            </button>
-            {data.banner && (
-              <div className="relative h-64 w-full shrink-0 overflow-hidden bg-ink/[0.06]">
-                <img
-                  src={art(data.banner, 1200, 600)}
-                  alt=""
-                  className="size-full object-cover object-[50%_25%]"
-                />
-                <div className="absolute inset-0 bg-linear-to-t from-paper via-paper/20 to-transparent" />
-              </div>
-            )}
-            <div className="p-6">
-              <h2 className="text-2xl font-bold">{data.name}</h2>
-              {data.listeners && (
-                <p className="mt-1 font-semibold text-muted">
-                  {data.listeners} monthly listeners
-                </p>
-              )}
-              <div className="mt-4 whitespace-pre-line text-sm leading-relaxed text-ink/80">
-                {data.about}
-              </div>
-              <div className="mt-6 flex justify-end">
-                <button
-                  onClick={() => setAboutOpen(false)}
-                  className="press rounded-full bg-ink/[0.08] px-5 py-2 text-sm font-semibold hover:bg-ink/[0.14]"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
+      {aboutOpen && (
+        <Modal label={`About ${data.name}`} onClose={() => setAboutOpen(false)} className="max-h-[85vh] w-[min(640px,90vw)] overflow-y-auto p-6">
+          <h2 className="text-2xl font-bold">{data.name}</h2>
+          {data.listeners && <p className="mt-1 font-semibold text-muted">{data.listeners} monthly listeners</p>}
+          <p className="mt-4 text-sm leading-relaxed whitespace-pre-line text-ink/80 select-text">{data.about}</p>
         </Modal>
       )}
     </div>
@@ -2331,14 +2139,11 @@ function UnmatchedDialog({ d }: { d: Extract<Dialog, { kind: "unmatched" }> }) {
     <Modal label={d.title} onClose={closeDialog} className="w-[min(520px,94vw)] p-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold tracking-tight">{d.title}</h2>
-        <button onClick={closeDialog} className={round2}>
-          <X size={18} />
-        </button>
       </div>
-      <p className="mt-1 text-sm text-muted">These songs couldn’t be matched on YouTube Music:</p>
+      <p className="mt-1 text-sm text-muted">These songs weren’t found on YouTube Music, so they were left out.</p>
       <ul className="mt-4 max-h-80 divide-y divide-ink/10 overflow-y-auto">
         {d.items.map((item, i) => (
-          <li key={i} className="py-2.5">
+          <li key={i} className="py-2.5 select-text">
             <div className="truncate font-semibold">{item.title}</div>
             <div className="truncate text-sm text-muted">{item.artist}</div>
           </li>
@@ -2719,140 +2524,46 @@ function AccountPane() {
   );
 }
 
-// External accounts and services: scrobbling (Last.fm, ListenBrainz) and Discord.
+// Scrobbling to Last.fm (sign in on its site, then come back) or ListenBrainz (paste a token), and Discord.
 function LinkedAccountsPane() {
   const { listenBrainzToken, lastfmSessionKey, lastfmUsername, discordRpc } = useSettings();
   const set = useSettings.setState;
-  const [tokenInput, setTokenInput] = useState("");
-  const [lastfmAuthToken, setLastfmAuthToken] = useState<string>();
-  const [connectingLastfm, setConnectingLastfm] = useState(false);
-  const [lastfmError, setLastfmError] = useState<string>();
-
-  const startLastfm = async () => {
-    try {
-      setLastfmError(undefined);
-      setConnectingLastfm(true);
-      const token = await lastfmAuthStart();
-      setLastfmAuthToken(token);
-    } catch (e: any) {
-      setLastfmError(e?.message || "Failed to start Last.fm authorization");
-    } finally {
-      setConnectingLastfm(false);
-    }
+  const [token, setToken] = useState("");
+  const [lastfm, setLastfm] = useState<{ token?: string; busy?: boolean; error?: string }>({});
+  const step = (run: () => Promise<string | undefined>) => {
+    setLastfm((s) => ({ ...s, busy: true, error: undefined }));
+    run().then((t) => setLastfm({ token: t }), (e) => setLastfm((s) => ({ token: s.token, error: e instanceof Error ? e.message : "Couldn’t reach Last.fm" })));
   };
-
-  const finishLastfm = async () => {
-    if (!lastfmAuthToken) return;
-    try {
-      setLastfmError(undefined);
-      setConnectingLastfm(true);
-      await lastfmAuthFinish(lastfmAuthToken);
-      setLastfmAuthToken(undefined);
-    } catch (e: any) {
-      setLastfmError(e?.message || "Failed to complete Last.fm authorization. Did you authorize in the browser?");
-    } finally {
-      setConnectingLastfm(false);
-    }
-  };
-
+  const linkBrainz = () => token && (set({ listenBrainzToken: token }), setToken(""), notify({ text: "Connected to ListenBrainz" }));
   return (
-    <div>
-      <h2 className="text-3xl font-extrabold tracking-[-0.03em]">Linked Accounts</h2>
-      <p className="mt-2 mb-8 max-w-md text-muted">Connect external services to scrobble tracks and share listening activity.</p>
-
-      <div className="divide-y divide-ink/10">
-        <Row
-          label="Last.fm"
-          detail={
-            lastfmSessionKey ? (
-              <span>Connected as <strong className="text-ink">{lastfmUsername}</strong></span>
-            ) : lastfmAuthToken ? (
-              <span className="text-accent">Authorize Sleeve in your browser, then click Complete</span>
-            ) : (
-              lastfmError ? <span className="text-[#ff375f]">{lastfmError}</span> : "Scrobble your listening history to Last.fm"
-            )
-          }
-        >
-          {lastfmSessionKey ? (
-            <button onClick={lastfmSignOut} className={quiet}>Disconnect</button>
-          ) : lastfmAuthToken ? (
-            <div className="flex gap-2">
-              <button onClick={finishLastfm} disabled={connectingLastfm} className={solid}>
-                {connectingLastfm ? "Connecting…" : "Complete"}
-              </button>
-              <button onClick={() => setLastfmAuthToken(undefined)} className={quiet}>Cancel</button>
-            </div>
-          ) : (
-            <button onClick={startLastfm} disabled={connectingLastfm} className={quiet}>
-              {connectingLastfm ? "Opening…" : "Connect Last.fm"}
-            </button>
-          )}
-        </Row>
-
-        <Row
-          label="ListenBrainz"
-          detail={
-            listenBrainzToken ? (
-              <span className="text-emerald-500 font-medium">Scrobbling active</span>
-            ) : (
-              "User token from listenbrainz.org/settings"
-            )
-          }
-        >
-          {listenBrainzToken ? (
-            <button
-              onClick={() => {
-                setTokenInput("");
-                set({ listenBrainzToken: "" });
-                notify({ text: "ListenBrainz disconnected" });
-              }}
-              className={quiet}
-            >
-              Disconnect
-            </button>
-          ) : (
-            <div className="flex items-center gap-2">
-              <input
-                type="password"
-                value={tokenInput}
-                onChange={(e) => setTokenInput(e.target.value.trim())}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && tokenInput) {
-                    set({ listenBrainzToken: tokenInput });
-                    notify({ text: "Connected to ListenBrainz" });
-                  }
-                }}
-                placeholder="Paste token"
-                className="room w-56 rounded-xl bg-ink/[0.05] px-3 py-1.5 text-sm outline-none placeholder:text-muted focus:bg-ink/[0.08]"
-              />
-              <button
-                onClick={() => {
-                  if (!tokenInput) return;
-                  set({ listenBrainzToken: tokenInput });
-                  notify({ text: "Connected to ListenBrainz" });
-                }}
-                disabled={!tokenInput}
-                className={solid}
-              >
-                Connect
-              </button>
-            </div>
-          )}
-        </Row>
-
-        {canHaveFiles && (
-          <Row label="Discord Rich Presence" detail="Show what you’re listening to as your Discord status">
-            <Switch
-              label="Discord Rich Presence"
-              on={discordRpc}
-              onChange={(on) => {
-                set({ discordRpc: on });
-                if (!on) clearDiscordRpc();
-              }}
-            />
-          </Row>
+    <div className="divide-y divide-ink/10">
+      <Row label="Last.fm" detail={lastfmSessionKey ? `Scrobbling as ${lastfmUsername}` : lastfm.error ?? (lastfm.token ? "Allow Sleeve in your browser, then come back and click Done" : "Scrobble what you play to Last.fm")}>
+        {lastfmSessionKey ? (
+          <button onClick={lastfmSignOut} className={quiet}>Disconnect</button>
+        ) : lastfm.token ? (
+          <div className="flex gap-2">
+            <button onClick={() => setLastfm({})} className={quiet}>Cancel</button>
+            <button onClick={() => step(() => lastfmAuthFinish(lastfm.token!).then(() => undefined))} disabled={lastfm.busy} className={solid}>Done</button>
+          </div>
+        ) : (
+          <button onClick={() => step(lastfmAuthStart)} disabled={lastfm.busy} className={quiet}>Connect…</button>
         )}
-      </div>
+      </Row>
+      <Row label="ListenBrainz" detail={listenBrainzToken ? "Scrobbling to ListenBrainz" : "Paste your user token from listenbrainz.org/settings"}>
+        {listenBrainzToken ? (
+          <button onClick={() => set({ listenBrainzToken: "" })} className={quiet}>Disconnect</button>
+        ) : (
+          <div className="flex gap-2">
+            <input type="password" value={token} onChange={(e) => setToken(e.target.value.trim())} onKeyDown={(e) => e.key === "Enter" && linkBrainz()} placeholder="User token" aria-label="ListenBrainz user token" className="w-48 rounded-full bg-ink/[0.07] px-3.5 text-sm outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent" />
+            <button onClick={linkBrainz} disabled={!token} className={solid}>Connect</button>
+          </div>
+        )}
+      </Row>
+      {canHaveFiles && (
+        <Row label="Discord" detail="Show what you’re playing as your Discord status">
+          <Switch label="Discord status" on={discordRpc} onChange={(on) => (set({ discordRpc: on }), on || clearDiscordRpc())} />
+        </Row>
+      )}
     </div>
   );
 }

@@ -271,11 +271,7 @@ function Toast() {
   if (toast && toast !== last) setLast(toast);
   useEffect(() => {
     if (!toast || hold || toast.sticky) return;
-    const t = setTimeout(() => {
-      if (!useStore.getState().toast?.sticky) {
-        useStore.setState({ toast: undefined });
-      }
-    }, 5000);
+    const t = setTimeout(() => useStore.setState({ toast: undefined }), 5000);
     return () => clearTimeout(t);
   }, [toast, hold]);
   const t = toast ?? last;

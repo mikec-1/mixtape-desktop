@@ -2,22 +2,15 @@ import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, 
 
 // Every shortcut, in one table: App.tsx runs them, Settings → Shortcuts lists them and remaps them
 // (useSettings keymap, by id; "" is none). Combos are "mod+" (⌘, Ctrl on Windows) and the key, lowercase.
+// Find on this page if it has a search field (or its button), else the Search tab.
 export const findSearch = () => {
-  const pageInput = document.querySelector<HTMLInputElement>(
-    "input[name='playlist-q'], input[name='shared-q'], input[name='collection-q'], input[name='local-q'], input[name='library-q']"
-  );
-  if (pageInput) {
-    pageInput.focus();
-    pageInput.select();
-    return;
+  const el = document.querySelector<HTMLElement>("[data-find]");
+  if (el instanceof HTMLInputElement) el.select();
+  else if (el) el.click();
+  else {
+    go("search");
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>("input[name=q]")?.select());
   }
-  const searchBtn = document.querySelector<HTMLButtonElement>("button[data-playlist-search]");
-  if (searchBtn) {
-    searchBtn.click();
-    return;
-  }
-  go("search");
-  requestAnimationFrame(() => document.querySelector<HTMLInputElement>("input[name=q]")?.select());
 };
 const seek = (by: number) => (audio.currentTime = Math.min(audio.duration || 0, Math.max(0, audio.currentTime + by)));
 export const ZOOMS = [0.9, 1, 1.1, 1.25];

@@ -8,6 +8,7 @@ import { useAccount } from "./account";
 import { Welcome } from "./welcome";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { addFiles, canHaveFiles } from "./local";
 import { importLink, importPlaylistFile, isLink } from "./import";
 import { art, type Track } from "./yt";
@@ -94,7 +95,7 @@ export default function App() {
     // The sidebar, one big page card and the queue side by side, the player under all three. The gaps drag the window.
     // --sidebar and --panel centre the toasts on the page card. The welcome goes over all of it.
     <>
-    <div data-tauri-drag-region inert={!!welcome} className="flex h-full flex-col gap-2 p-2" style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
+    <div data-tauri-drag-region inert={!!welcome} className={`flex h-full flex-col gap-2 p-2 ${onWindows ? "pt-8" : ""}`} style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? "328px" : "0px" } as CSSProperties}>
       <div className="flex min-h-0 flex-1 gap-2">
         <Sidebar root={root} open={open} width={width} inert={covered} />
         <main inert={covered} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
@@ -133,7 +134,28 @@ export default function App() {
       </div>
     )}
     {welcome && <Welcome preview={welcome === "preview"} onDone={() => setWelcome(false)} />}
+    {onWindows && <WindowButtons />}
     </>
+  );
+}
+
+// Windows has no title bar here (lib.rs), so its three buttons sit in the strip above the cards, drawn in
+// its own icon font. They stay usable over the welcome.
+const onWindows = /Windows/.test(navigator.userAgent);
+function WindowButtons() {
+  const [win] = useState(getCurrentWindow);
+  const [max, setMax] = useState(false);
+  useEffect(() => {
+    const off = win.onResized(() => void win.isMaximized().then(setMax));
+    return () => void off.then((f) => f());
+  }, [win]);
+  const button = "grid h-8 w-[46px] place-items-center font-['Segoe_Fluent_Icons','Segoe_MDL2_Assets'] text-[10px] text-ink/80 transition-colors";
+  return (
+    <div className="fixed top-0 right-0 z-[60] flex">
+      <button aria-label="Minimise" onClick={() => win.minimize()} className={`${button} hover:bg-ink/10`}>{"\uE921"}</button>
+      <button aria-label={max ? "Restore" : "Maximise"} onClick={() => win.toggleMaximize()} className={`${button} hover:bg-ink/10`}>{max ? "\uE923" : "\uE922"}</button>
+      <button aria-label="Close" onClick={() => win.close()} className={`${button} hover:bg-[#c42b1c] hover:text-white`}>{"\uE8BB"}</button>
+    </div>
   );
 }
 
@@ -147,7 +169,7 @@ function Sidebar({ root, open, width, inert }: { root: string; open: boolean; wi
   const [dragging, setDragging] = useState(false);
   const drag = (on: boolean) => (setDragging(on), (document.documentElement.style.cursor = on ? "col-resize" : ""));
   return (
-    <nav inert={inert} data-tauri-drag-region style={{ width: open ? width : RAIL }} className={`relative flex shrink-0 flex-col gap-1 rounded-2xl bg-paper px-4 pt-12 pb-3 ${dragging ? "" : "transition-[width] duration-300 ease-drawer"}`}>
+    <nav inert={inert} data-tauri-drag-region style={{ width: open ? width : RAIL }} className={`relative flex shrink-0 flex-col gap-1 rounded-2xl bg-paper px-4 pb-3 ${onWindows ? "pt-3" : "pt-12"} ${dragging ? "" : "transition-[width] duration-300 ease-drawer"}`}>
       <SideButton icon={House} label="Home" active={root === "home"} open={open} onClick={() => go("home")} />
       <SideButton icon={SearchIcon} label="Search" active={root === "search"} open={open} onClick={findSearch} />
       <SideButton icon={LibraryIcon} label="Library" active={root === "library"} open={open} onClick={() => go("library")} />

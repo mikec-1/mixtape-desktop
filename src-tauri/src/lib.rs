@@ -75,15 +75,16 @@ pub fn run() {
             let main = WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
                 .on_download(|_, _| true)
                 .visible(!std::env::args().any(|a| a == "--login"));
-            // Apple's own buttons, centred in the 76px rail card that sits 8px in (App.tsx RAIL): the
+            // Apple's own buttons, centred in the 76px rail card that sits 8px in (App.tsx RAIL), as far from its top as its side: the
             // three span ~62pt on macOS 26. Set on the webview, not the window (trafficLightPosition in
             // the config): only the webview's view redraws, so only its inset survives resizes.
             #[cfg(target_os = "macos")]
-            let main = main.traffic_light_position(tauri::LogicalPosition::new(15.0, 18.0));
+            let main = main.traffic_light_position(tauri::LogicalPosition::new(15.0, 24.0));
             // Files dropped on the window come to the page with their paths (App.tsx). Windows can't
-            // have that and the page's own drag and drop together, so there it keeps the page's.
+            // have that and the page's own drag and drop together, so there it keeps the page's. It
+            // draws its own title bar buttons too (App.tsx WindowButtons).
             #[cfg(windows)]
-            let main = main.disable_drag_drop_handler();
+            let main = main.disable_drag_drop_handler().decorations(false);
             main.build()?;
             // YouTube's BotGuard only issues real integrity tokens on www.youtube.com, so PO tokens are
             // minted in a hidden window there; robots.txt is the lightest page on that origin.

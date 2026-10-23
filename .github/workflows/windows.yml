@@ -1,0 +1,31 @@
+# Builds the Windows installer on GitHub's Windows machines, when started from the Actions tab.
+# The keys from .env come from the repository's secrets of the same names.
+name: Windows build
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tauri build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_SHARE_URL: ${{ secrets.VITE_SHARE_URL }}
+          VITE_LASTFM_KEY: ${{ secrets.VITE_LASTFM_KEY }}
+          VITE_LASTFM_SECRET: ${{ secrets.VITE_LASTFM_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi

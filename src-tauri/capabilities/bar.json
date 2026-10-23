@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "bar",
+  "description": "The menu bar player: it only talks to the main window",
+  "windows": ["bar"],
+  "permissions": ["core:event:default", "core:window:default", "core:window:allow-hide", "core:window:allow-set-effects", "core:window:allow-set-size", "core:window:allow-set-position"]
+}

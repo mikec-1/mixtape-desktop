@@ -3,20 +3,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LoaderCircle, Music, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
-import type { MiniState } from "./store";
+import type { MiniState, Remote } from "./store";
 import { art } from "./yt";
 
 // The mini player window: borderless and transparent (store.ts toggleMini), so this card is the
 // whole window. Playback lives in the main window, which sends this its state.
 // Imports only types from store, so this window never builds a second player.
-const send = (command: "ready" | "toggle" | "next" | "prev") => void emit("mini", command);
+const send = (...command: Remote) => void emit("remote", command);
 const root = document.documentElement;
 root.dataset.theme = JSON.parse(localStorage.settings ?? "{}").state?.theme ?? "system";
 root.style.background = document.body.style.background = "transparent";
-// Always on top (store.ts toggleMini), and a panel (lib.rs float_mini) so that includes other
+// Always on top (store.ts toggleMini), and a panel (lib.rs float) so that includes other
 // apps' full-screen spaces.
 const win = getCurrentWindow();
-void invoke("float_mini");
+void invoke("float");
 const fmt = (s = NaN) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "–:––");
 
 export default function Mini() {

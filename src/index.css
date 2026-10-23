@@ -447,8 +447,14 @@ input[type="range"].knob::-webkit-slider-thumb {
       opacity: 0;
     }
   }
+  .slide {
+    white-space: normal;
+  }
 }
 /* Settings → Appearance → Reduce Motion: the same, whatever the system says. */
+:root[data-motion="reduce"] .slide {
+  white-space: normal;
+}
 :root[data-motion="reduce"] :not(.lyrics, .lyrics *),
 :root[data-motion="reduce"] :not(.lyrics *)::before,
 :root[data-motion="reduce"] :not(.lyrics *)::after {
@@ -483,9 +489,19 @@ input[type="range"].knob::-webkit-slider-thumb {
     filter: blur(10px);
   }
 }
+/* A line too long for its space slides across to show the rest, and back (bar.tsx Slide). */
+.slide {
+  white-space: nowrap;
+}
 @keyframes marquee {
-  to {
-    transform: translateX(-50%);
+  0%,
+  15%,
+  100% {
+    transform: none;
+  }
+  50%,
+  65% {
+    transform: translateX(var(--by));
   }
 }
 @keyframes eq {

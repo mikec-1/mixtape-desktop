@@ -3325,7 +3325,7 @@ function Privacy() {
 }
 
 function Startup() {
-  const { loginHidden, closeToTray } = useSettings();
+  const { loginHidden, closeToTray, menuBar } = useSettings();
   const set = useSettings.setState;
   const [login, setLogin] = useState<boolean>();
   useEffect(() => void import("@tauri-apps/plugin-autostart").then((a) => a.isEnabled()).then(setLogin, () => setLogin(false)), []);
@@ -3340,6 +3340,15 @@ function Startup() {
       <Row label="Open in the Background" detail={login ? "Opened at login, the window stays out of the way until you click Sleeve" : "Once Open at Login is on"}>
         <Switch label="Open in the Background" on={loginHidden} onChange={(loginHidden) => set({ loginHidden })} />
       </Row>
+      {isMac ? (
+        <Row label="Menu Bar Player" detail={menuBar === "off" ? "No player in the menu bar" : `Click the icon for the player and a search that plays anything${menuBar === "song" ? ", with the song beside it" : menuBar === "lyrics" ? ", with the line being sung beside it" : ""}`}>
+          <Segments label="Menu Bar Player" value={menuBar} options={[["off", "Off"], ["icon", "Icon"], ["song", "Song"], ["lyrics", "Lyrics"]]} onPick={(menuBar) => set({ menuBar })} />
+        </Row>
+      ) : (
+        <Row label="Tray Player" detail="Click the tray icon for the player and a search that plays anything">
+          <Switch label="Tray Player" on={menuBar !== "off"} onChange={(on) => set({ menuBar: on ? "icon" : "off" })} />
+        </Row>
+      )}
       <Row label={isMac ? "Keep in the Menu Bar" : "Close to Tray"} detail={closeToTray ? `Closing the window keeps Sleeve playing, with its icon in the ${isMac ? "menu bar" : "tray"}` : "Closing the window quits Sleeve"}>
         <Switch label={isMac ? "Keep in the Menu Bar" : "Close to Tray"} on={closeToTray} onChange={(closeToTray) => set({ closeToTray })} />
       </Row>
@@ -3600,8 +3609,8 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
         if (i >= 0) land(i);
       }
     };
-    addEventListener("pointerup", up), addEventListener("pointermove", sweep), addEventListener("pointerdown", away), addEventListener("keydown", keys);
-    return () => (removeEventListener("pointerup", up), removeEventListener("pointermove", sweep), removeEventListener("pointerdown", away), removeEventListener("keydown", keys));
+    addEventListener("pointerup", up), addEventListener("pointermove", sweep), addEventListener("pointerdown", away), document.addEventListener("keydown", keys); // before App's shortcuts (on window), so ↑ ↓ move a selection
+    return () => (removeEventListener("pointerup", up), removeEventListener("pointermove", sweep), removeEventListener("pointerdown", away), document.removeEventListener("keydown", keys));
   }, [sel, sweeping, tracks, onPlay]);
   // The box, kept to the page and redrawn as the pointer moves and every frame (so it follows the scroll).
   // Held past the page's top or bottom, the page scrolls, faster the further out. The rows it touches are

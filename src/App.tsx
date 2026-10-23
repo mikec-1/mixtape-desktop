@@ -39,10 +39,10 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const key = comboFrom(e);
-      if (!key || recording) return; // Settings → Shortcuts is taking this press
+      if (!key || recording || e.defaultPrevented) return; // Settings → Shortcuts, or what's focused, took this press
       const target = e.target as Element;
       // Fields keep their own keys (arrows, space, ⌘← …); ⌘ shortcuts without arrows still work in them.
-      if (target.closest?.("input, textarea") && key !== "escape" && !(key.startsWith("mod+") && !key.includes("arrow"))) return;
+      if (target.closest?.("input, textarea, select") && key !== "escape" && !(key.startsWith("mod+") && !key.includes("arrow"))) return;
       // Space on a focused button presses it.
       if (key === " " && (e.repeat || target.closest?.("button"))) return;
       const action = actionFor(key);

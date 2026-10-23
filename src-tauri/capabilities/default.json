@@ -16,6 +16,7 @@
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-is-visible",
+    "core:window:allow-set-position",
     "core:window:allow-destroy",
     "core:webview:allow-set-webview-zoom",
     "core:tray:default",

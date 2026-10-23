@@ -479,11 +479,12 @@ useStore.subscribe((s, was) => {
   if (t && (s.index !== was.index || s.queue !== was.queue)) fetchOnce(`lyrics:${t.id}`, () => stored(t));
 });
 
-// The mini player shows the line being sung (store.ts sends it along), unless Settings turned that off.
+// The mini player shows the line being sung (store.ts sends it along), unless Settings turned that off:
+// "" between lines, undefined when the song has no synced lyrics.
 setLyricLine(() => {
   const { queue, index } = useStore.getState();
   const l = queue[index] && useSettings.getState().lyricsPeek ? lyricsNow(queue[index]) : undefined;
-  return l?.synced ? l.lines[lineAt(l.lines, audio.currentTime)]?.text || undefined : undefined;
+  return l?.synced ? (l.lines[lineAt(l.lines, audio.currentTime)]?.text ?? "") : undefined;
 });
 
 const lineAt = (lines: Line[], now: number) => {

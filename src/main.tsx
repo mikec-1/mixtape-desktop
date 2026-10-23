@@ -7,9 +7,11 @@ addEventListener("error", (e) => e.target instanceof HTMLImageElement && e.targe
 
 let Root: ComponentType;
 try {
-  // One page, two windows: the mini player (store.ts toggleMini) is labelled "mini" and draws only mini.tsx.
-  const mini = "__TAURI_INTERNALS__" in window && (await import("@tauri-apps/api/window")).getCurrentWindow().label === "mini";
-  if (mini) Root = (await import("./mini")).default;
+  // One page, three windows: the mini player (store.ts toggleMini) is labelled "mini" and draws only
+  // mini.tsx, the menu bar player (startup.ts) "bar" and bar.tsx.
+  const label = "__TAURI_INTERNALS__" in window && (await import("@tauri-apps/api/window")).getCurrentWindow().label;
+  if (label === "mini") Root = (await import("./mini")).default;
+  else if (label === "bar") Root = (await import("./bar")).default;
   else {
     Root = (await import("./App")).default;
     void import("./startup").catch(console.error); // never holds the window up

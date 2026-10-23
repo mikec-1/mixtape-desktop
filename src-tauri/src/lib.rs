@@ -5,19 +5,27 @@ mod discord;
 mod local;
 mod offline;
 
-/// Lets the mini player float over other apps' full-screen spaces (a Chrome video, say). macOS only
-/// shows a regular app's windows there if they're non-activating panels, so the window is turned
-/// into one: an NSPanel subclass that can still take key (for its buttons), joins every space as a
-/// full-screen auxiliary, and stays put when Sleeve isn't frontmost. It's always on top
-/// (store.ts toggleMini).
+/// Lets the mini player and the menu bar player float over other apps' full-screen spaces (a Chrome
+/// video, say). macOS only shows a regular app's windows there if they're non-activating panels, so
+/// the window is turned into one: an NSPanel subclass that can still take key (for its buttons and
+/// search), joins every space as a full-screen auxiliary, and stays put when Sleeve isn't frontmost.
+/// Its own class is kept to put back before it closes (sink): WebKit unregisters its observers of the
+/// window as the page goes, and under another class that throws, which aborts the app.
+#[cfg(target_os = "macos")]
+static FLOATED: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
+
 #[tauri::command]
-fn float_mini(window: tauri::WebviewWindow) {
+fn float(window: tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     unsafe {
         use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
         use objc2::{sel, ClassType};
         use objc2_app_kit::{NSPanel, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask};
         let Ok(ptr) = window.ns_window() else { return };
+        let mut floated = FLOATED.lock().unwrap();
+        if floated.iter().any(|(label, _)| label == window.label()) {
+            return; // already one (the page reloaded)
+        }
         let class = AnyClass::get(c"SleeveMiniPanel").unwrap_or_else(|| {
             extern "C-unwind" fn yes(_: &AnyObject, _: Sel) -> Bool {
                 Bool::YES
@@ -26,11 +34,27 @@ fn float_mini(window: tauri::WebviewWindow) {
             panel.add_method(sel!(canBecomeKeyWindow), yes as extern "C-unwind" fn(_, _) -> _);
             panel.register()
         });
+        floated.push((window.label().into(), objc2::ffi::object_getClass(ptr.cast()) as usize));
         objc2::ffi::object_setClass(ptr.cast(), class);
         let ns = &*ptr.cast::<NSWindow>();
         ns.setStyleMask(ns.styleMask() | NSWindowStyleMask::NonactivatingPanel);
         ns.setCollectionBehavior(ns.collectionBehavior() | NSWindowCollectionBehavior::CanJoinAllSpaces | NSWindowCollectionBehavior::FullScreenAuxiliary);
         ns.setHidesOnDeactivate(false);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
+/// Undoes float's class change, as the window closes or the app quits.
+fn sink(window: &tauri::Window) {
+    #[cfg(target_os = "macos")]
+    {
+        let mut floated = FLOATED.lock().unwrap();
+        let Some(at) = floated.iter().position(|(label, _)| label == window.label()) else { return };
+        let (_, own) = floated.remove(at);
+        if let Ok(ptr) = window.ns_window() {
+            unsafe { objc2::ffi::object_setClass(ptr.cast(), own as *const objc2::runtime::AnyClass) };
+        }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = window;
@@ -44,7 +68,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Settings → Startup. Opened at login it starts hidden; main.tsx shows it unless you chose otherwise.
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--login"])))
-        .invoke_handler(tauri::generate_handler![float_mini, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
+        .invoke_handler(tauri::generate_handler![float, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.
@@ -74,6 +98,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { .. } = event {
+                sink(window);
+            }
             // The hidden window would otherwise keep the app alive after the main one closes.
             if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
                 window.app_handle().exit(0);
@@ -82,6 +109,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
+            if let RunEvent::Exit = event {
+                app.webview_windows().values().for_each(|w| sink(&w.as_ref().window()));
+            }
             // Clicking the Dock icon brings back a window that's hidden (in the tray, or opened at login).
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen { .. } = event {

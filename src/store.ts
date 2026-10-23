@@ -4,7 +4,7 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import { art, details, fetchAudio, playAudio, radio, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
+import { art, details, fetchAudio, playAudio, radio, searchKind, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
 import type { Review } from "./import";
 import { youtubeId } from "./deezer";
 import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
@@ -513,7 +513,11 @@ async function load(index: number, start = 0, fade = 0) {
   audio = buffered ? ready!.el : other();
   ready = undefined;
   clearInterval(ramp);
-  for (const p of players) if (!(fade && p === old)) p.pause(); // a crossfade lets the old track play out
+  // The other player stops and lets go of its track, so one still starting (a quick skip and back) can't
+  // play over this one. A crossfade lets the old track play out.
+  for (const p of players) if (fade && p === old) continue;
+  else if (buffered && p === audio) p.pause();
+  else p.pause(), URL.revokeObjectURL(p.src), p.removeAttribute("src"), p.load();
   fades.set(audio, fade ? 0 : 1);
   level(audio);
   emit();
@@ -535,8 +539,9 @@ async function load(index: number, start = 0, fade = 0) {
     prefetch();
     if (fade) crossfade(old, audio, fade);
   } catch (e) {
+    if (me !== latest) return; // cut short by the next load: its audio is still good for going back
     cache.delete(track.id);
-    if (me === latest) report(e);
+    report(e);
   } finally {
     if (me === latest) set({ loading: false });
   }
@@ -776,6 +781,7 @@ type Settings = {
   libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort; trackCols: [number, number, number];
   autoplay: boolean; reduceMotion: boolean; zoom: number; lyricsOff: LyricsSource[]; history: boolean;
   keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean; country: string;
+  menuBar: "off" | "icon" | "song" | "lyrics"; // the menu bar (tray) player, and what shows beside its icon (Mac only)
   listenBrainzToken: string; lastfmSessionKey: string; lastfmUsername: string; discordRpc: boolean;
 };
 export type LyricsSource = "apple" | "lrclib" | "netease";
@@ -795,7 +801,7 @@ export const useSettings = create<Settings>()(
       quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
       lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
       libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom", trackCols: TRACK_COLS,
-      autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false,
+      autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "icon",
       country: defaultCountry(),
       listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "", discordRpc: false,
     }),
@@ -875,21 +881,48 @@ if ("mediaSession" in navigator) {
 const restored = get().queue[get().index];
 if (restored) setMediaSession(restored), setAccent(art(restored.thumb, 64));
 
-// The mini player (mini.tsx) is its own always-on-top window with no audio of its own: this window
-// sends it what's playing and runs the buttons it presses.
-// line is the lyric being sung, when lyrics.ts has one (it sets lyricLine).
-export type MiniState = ReturnType<typeof read> & { track?: Track; loading: boolean; accent: string; line?: string };
+// The mini player (mini.tsx) and the menu bar player (bar.tsx) are windows of their own with no audio:
+// this window sends them what's playing and runs the buttons they press (remote).
+// line is the lyric being sung ("" between lines) when the song has synced lyrics (lyrics.ts sets lyricLine).
+export type MiniState = ReturnType<typeof read> & { track?: Track; loading: boolean; accent: string; line?: string; liked: boolean; index: number; next: Track[] } & Pick<State, "shuffle" | "repeat" | "sleep">;
 let lyricLine: () => string | undefined = () => undefined;
 export const setLyricLine = (fn: typeof lyricLine) => void (lyricLine = fn);
+export const lyricNow = () => lyricLine();
+const share = () => {
+  const { queue, index, loading, shuffle, repeat, sleep } = get();
+  const t = queue[index];
+  const state: MiniState = { ...snapshot, track: t, loading, accent: document.documentElement.style.getPropertyValue("--accent-raw"), line: lyricLine(), liked: !!t && useLibrary.getState().liked.some((l) => l.id === t.id), index, next: queue.slice(index + 1, index + 6), shuffle, repeat, sleep };
+  for (const to of ["mini", "bar"]) void emitTo(to, "player", state);
+};
+const main = () => void WebviewWindow.getByLabel("main").then((w) => w?.show().then(() => w.setFocus()));
+// The menu bar player's search: your liked songs at once (more: YouTube Music's are on the way), then theirs.
+async function find(q: string) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const mine = useLibrary.getState().liked.filter((t) => words.every((w) => `${t.title} ${t.artists.map((a) => a.name).join(" ")}`.toLowerCase().includes(w))).slice(0, 3);
+  void emitTo("bar", "found", { q, songs: mine, more: true });
+  const songs = words.length ? await searchKind(q, "song").catch(() => []) : [];
+  const ids = new Set(mine.map((t) => t.id));
+  void emitTo("bar", "found", { q, songs: [...mine, ...songs.filter((t) => !ids.has(t.id))].slice(0, 7) });
+}
+const remote = {
+  ready: share, toggle, next, prev, jump, shuffle: toggleShuffle, repeat: cycleRepeat, mini: () => void toggleMini(), find,
+  like: () => void (get().queue[get().index] && toggleLike(get().queue[get().index])),
+  seek: (s: number) => void (audio.currentTime = s),
+  volume: setVolume, mute: setMuted,
+  sleep: (m?: number | "track") => sleepIn(m),
+  // Play Now starts a radio from the song, as Start Radio does; soon puts it next instead.
+  play: ({ t, soon }: { t: Track; soon?: boolean }) => (soon ? enqueue([t], true) : startRadio(t)),
+  // To a page of the app (the song's album or artist), or just the window.
+  show: (view?: View) => (main(), view && open(view)),
+  sheet: (sheet: "playing" | "lyrics") => (main(), set({ sheet })),
+  quit: () => void WebviewWindow.getByLabel("main").then((w) => w?.destroy()), // lib.rs exits once main is gone
+};
+export type Remote = { [K in keyof typeof remote]: [K, ...Parameters<(typeof remote)[K]>] }[keyof typeof remote];
 if ("__TAURI_INTERNALS__" in window) {
-  const share = () => {
-    const { queue, index, loading } = get();
-    void emitTo("mini", "player", { ...snapshot, track: queue[index], loading, accent: document.documentElement.style.getPropertyValue("--accent-raw"), line: lyricLine() } satisfies MiniState);
-  };
   listeners.add(share);
   useStore.subscribe(share);
-  const commands: Record<string, () => unknown> = { ready: share, toggle, next, prev };
-  void listen<string>("mini", (e) => commands[e.payload]?.());
+  useLibrary.subscribe(share);
+  void listen<Remote>("remote", ({ payload: [c, arg] }) => (remote[c] as (a?: unknown) => unknown)(arg));
 }
 export async function toggleMini() {
   const mini = await WebviewWindow.getByLabel("mini");

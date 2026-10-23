@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, toggle, toggleLike, toggleShuffle, useSettings, useStore } from "./store";
 
 // Every shortcut, in one table: App.tsx runs them, Settings → Shortcuts lists them and remaps them
@@ -27,8 +28,8 @@ export const KEYS: { id: string; label: string; combo: string; run: () => unknow
   { id: "ahead5", label: "Forward 5 seconds", combo: "arrowright", run: () => seek(5) },
   { id: "prev", label: "Previous song", combo: "mod+arrowleft", run: prev },
   { id: "next", label: "Next song", combo: "mod+arrowright", run: next },
-  { id: "quieter", label: "Volume down", combo: "mod+arrowdown", run: () => nudgeVolume(-0.1) },
-  { id: "louder", label: "Volume up", combo: "mod+arrowup", run: () => nudgeVolume(0.1) },
+  { id: "quieter", label: "Volume down", combo: "arrowdown", run: () => nudgeVolume(-0.1) },
+  { id: "louder", label: "Volume up", combo: "arrowup", run: () => nudgeVolume(0.1) },
   { id: "shuffle", label: "Shuffle, then Smart Shuffle", combo: "mod+s", run: toggleShuffle },
   { id: "repeat", label: "Repeat all, one or off", combo: "mod+r", run: cycleRepeat },
   { id: "like", label: "Like the playing song", combo: "mod+l", run: () => {
@@ -70,6 +71,8 @@ export function bind(id: string, combo: string) {
   return taken?.label;
 }
 export const resetKeys = () => useSettings.setState({ keymap: {} });
+// The menu bar player (bar.tsx) sends its arrows and Space here, so they do what they do in this window.
+if ("__TAURI_INTERNALS__" in window) void listen<string>("key", (e) => actionFor(e.payload)?.run());
 // While Settings → Shortcuts waits for a new combo, presses go to it, not to the actions.
 export let recording = false;
 export const setRecording = (on: boolean) => void (recording = on);

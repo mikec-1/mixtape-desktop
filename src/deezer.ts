@@ -90,14 +90,17 @@ export const withGuests = (tracks: Track[]) =>
 const found: Record<string, string> = JSON.parse(localStorage.youtubeIds ?? "{}");
 const finding = new Map<string, Promise<string>>();
 const keep = (id: string, yt: string) => ((found[id] = yt), (localStorage.youtubeIds = JSON.stringify(found)));
+// The YouTube song an imported one was found as, if it has been.
+export const known = (id: string): string | undefined => found[id];
 export const foundWhenPlayed = (id: string) => /^(dz|sp|csv):/.test(id);
+// A song from your files is looked up the same way, for its radio.
 export function youtubeId(t: Track): Promise<string> {
-  if (!foundWhenPlayed(t.id) || found[t.id]) return Promise.resolve(found[t.id] ?? t.id);
+  if (!(foundWhenPlayed(t.id) || t.file) || found[t.id]) return Promise.resolve(found[t.id] ?? t.id);
   if (!finding.has(t.id))
     finding.set(
       t.id,
       findSong(rowOf(t))
-        .then((hit) => (hit ? (keep(t.id, hit.id), !t.thumb && hit.thumb && patch(t.id, { thumb: hit.thumb }), hit.id) : Promise.reject(new Error(`Couldn’t find “${t.title}” on YouTube`))))
+        .then((hit) => (hit ? (keep(t.id, hit.id), !t.thumb && !t.file && hit.thumb && patch(t.id, { thumb: hit.thumb }), hit.id) : Promise.reject(new Error(`Couldn’t find “${t.title}” on YouTube`))))
         .finally(() => finding.delete(t.id)),
     );
   return finding.get(t.id)!;

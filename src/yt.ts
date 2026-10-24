@@ -37,7 +37,7 @@ export type Artist = { id?: string; name: string };
 // rec: added by Smart Shuffle. at: when it was added to the list it's in (a playlist, Liked Songs).
 // file: a song on this computer (local.ts), by its path; it plays from disk and isn't on YouTube.
 // albumId opens its album; album "" means it was looked for and there's none (store.ts fill).
-export type Track = { id: string; title: string; artists: Artist[]; album?: string; albumId?: string; thumb?: string; duration?: string; explicit?: true; rec?: true; at?: number; file?: string; isrc?: string }; // isrc: a Spotify song's, to find it on YouTube by
+export type Track = { id: string; title: string; artists: Artist[]; album?: string; albumId?: string; thumb?: string; duration?: string; explicit?: true; rec?: true; auto?: true; at?: number; file?: string; isrc?: string }; // rec: a Smart Shuffle pick; auto: added by Autoplay; isrc: a Spotify song's, to find it on YouTube by
 export type Album = { id: string; title: string; year?: string; by?: string; thumb?: string; kind?: string; at?: number }; // at: when you saved it
 
 // YT Music image URLs end in a size spec (=w60-h60-l90-rj, =s120…); ask for the size we draw at. A

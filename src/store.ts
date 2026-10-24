@@ -5,7 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { art, beats, details, fetchAudio, hear, playAudio, radio, searchKind, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
-import { foundWhenPlayed, youtubeId } from "./deezer";
+import { foundWhenPlayed, known, youtubeId } from "./deezer";
 import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
 
 type Root = "home" | "search" | "library" | "settings";
@@ -28,12 +28,14 @@ type State = {
   added: number; // how many after the current track you queued yourself; Add to Queue goes after them
   original?: Track[]; // the queue's order before Shuffle, to put back
   source?: string; // the library key of the list the queue was started from, whose Play turns to Pause
+  radio?: true; // the queue is a radio: of that list, or of its first song when there isn't one
   shuffle: boolean | "smart"; // Smart Shuffle mixes recommended tracks (rec) into Up Next
   repeat: "off" | "all" | "one";
   sleep?: number | "track"; // when the sleep timer pauses: a time, or the end of this track
   loading: boolean;
   error: string;
   toast?: Toast;
+  more?: "finding" | "none"; // Autoplay looking for similar songs, or finding none
 };
 // A modal over everything: the lyrics editor (for a song, by its key in lyrics.ts useMine; track when it's
 // one Sleeve knows, to stamp times with while it plays), or a lyric card of the playing song.
@@ -52,7 +54,7 @@ export type Toast = { id: number; text: string; detail?: string; thumb?: string;
 export const useStore = create<State>()(
   persist(
     (): State => ({ stack: [{ name: "home" }], ahead: [], query: "", queue: [], index: -1, added: 0, shuffle: false, repeat: "off", loading: false, error: "" }),
-    { name: "player", partialize: ({ queue, index, added, original, source, shuffle, repeat }) => ({ queue, index, added, original, source, shuffle, repeat }) },
+    { name: "player", partialize: ({ queue, index, added, original, source, radio, shuffle, repeat }) => ({ queue, index, added, original, source, radio, shuffle, repeat }) },
   ),
 );
 const { setState: set, getState: get } = useStore;
@@ -496,7 +498,7 @@ export function play(queue: Track[], index: number, from?: string) {
   if (from) touch(from);
   const original = get().shuffle ? queue : undefined;
   if (original) (queue = [queue[index], ...shuffled(queue.filter((_, i) => i !== index))]), (index = 0);
-  set({ queue, original, added: 0, source: from });
+  set({ queue, original, added: 0, source: from, radio: undefined, more: undefined });
   const loading = load(index); // sets index before its first await, which recommend() reads
   if (get().shuffle === "smart") void recommend();
   return loading;
@@ -511,12 +513,13 @@ export const firstPlayable = (tracks: Track[]) => Math.max(0, tracks.findIndex(p
 // A song's radio: it plays now and its "watch next" mix fills Up Next.
 export function startRadio(t: Track) {
   play([t], 0);
+  set({ radio: true });
   if (get().repeat !== "off") extend(t); // load() only does it when the queue would otherwise stop
 }
 
 // An artist's or playlist's radio: the "watch next" mixes of a few of its songs, taken in turn.
 async function mix(seeds: Track[], skip = new Set<string>()) {
-  const mixes = await Promise.all(seeds.filter((t) => !t.file).map((t) => youtubeId(t).then(radio).catch(() => [])));
+  const mixes = await Promise.all(seeds.map((t) => youtubeId(t).then(radio).catch(() => [])));
   return mixes.flatMap((m) => m.map((t, i) => [i, t] as const)).sort((a, b) => a[0] - b[0]).flatMap(([, t]) => (skip.has(t.id) || skipped(t) ? [] : (skip.add(t.id), [t])));
 }
 export async function radioFrom(tracks: Track[], from?: string) {
@@ -524,6 +527,7 @@ export async function radioFrom(tracks: Track[], from?: string) {
   if (!list.length) return notify({ warn: true, text: "No radio for this one" });
   set({ shuffle: false });
   play(list, 0, from);
+  set({ radio: true });
 }
 
 // The next song a queue moves on to by itself, passing over hidden songs, blocked artists, and offline
@@ -629,15 +633,27 @@ on("durationchange", () => {
   if (t && !t.duration && Number.isFinite(audio.duration) && audio.duration > 0) patch(t.id, { duration: `${Math.floor(audio.duration / 60)}:${String(Math.floor(audio.duration % 60)).padStart(2, "0")}` });
 });
 
-// The queue ran out: carry on with the last track's radio, minus anything already in it.
+// The queue ran out: carry on with the last track's radio, minus anything already in it. If that finds
+// nothing (a song not on YouTube, a hiccup), the radio of the few songs before it.
 async function extend(seed: Track) {
-  if (seed.file) return; // not on YouTube, so no radio
-  const more = await youtubeId(seed).then(radio).catch(() => []);
+  set({ more: "finding" });
+  const before = get().queue;
+  let more = await mix([seed]);
+  if (!more.length) more = await mix(before.slice(Math.max(0, before.length - 4), -1).reverse());
   const { queue } = get();
-  if (queue.at(-1)?.id !== seed.id) return; // you queued or played something else meanwhile
-  const ids = new Set(queue.map((t) => t.id));
-  set({ queue: [...queue, ...more.filter((t) => !ids.has(t.id) && !skipped(t))] });
+  if (queue.at(-1)?.id !== seed.id) return set({ more: undefined }); // you queued or played something else meanwhile
+  const ids = inQueue(queue), add = more.filter((t) => !ids.has(t.id)).map((t) => ({ ...t, auto: true as const }));
+  set({ queue: [...queue, ...add], more: add.length ? undefined : "none" });
   prefetch();
+}
+// The ids a queue holds, with the YouTube ones its imported songs were found as, so a radio doesn't
+// bring back the song it started from.
+const inQueue = (queue: Track[]) => new Set(queue.flatMap((t) => [t.id, known(t.id) ?? t.id]));
+
+// Reopened on the last song: fill Next Up now, not when you press Play. Only the main window calls it (startup.ts).
+export function fillUpNext() {
+  const { queue, index, repeat } = get();
+  if (queue[index] && nextIndex(index, false) === queue.length && repeat === "off" && useSettings.getState().autoplay) void extend(queue[index]);
 }
 
 export const jump = (index: number) => load(index);
@@ -712,7 +728,7 @@ addEventListener("pagehide", save);
 async function recommend() {
   const { queue, index } = get();
   const seed = queue[index];
-  const recs = seed ? await mix([seed, ...shuffled(queue.slice(index + 1).filter((t) => !skipped(t))).slice(0, 2)], new Set(queue.map((t) => t.id))) : [];
+  const recs = seed ? await mix([seed, ...shuffled(queue.slice(index + 1).filter((t) => !skipped(t))).slice(0, 2)], inQueue(queue)) : [];
   if (!recs.length) return notify({ text: "No recommendations for this queue" });
   const now = get();
   if (now.shuffle !== "smart" || now.queue[now.index]?.id !== seed?.id) return; // you moved on meanwhile

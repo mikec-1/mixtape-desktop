@@ -3654,10 +3654,19 @@ export function QueuePanel() {
   const queue = useStore((s) => s.queue);
   const index = useStore((s) => s.index);
   const added = useStore((s) => s.added);
+  const more = useStore((s) => s.more), repeat = useStore((s) => s.repeat), autoplay = useSettings((s) => s.autoplay);
+  const ends = more === "finding" ? "Finding similar songs…" : more === "none" ? "Nothing similar found. Music stops after this." : repeat === "one" ? "This song repeats." : repeat === "all" ? "The queue starts over when it ends." : autoplay ? "When the queue ends, similar songs play." : "Music stops when the queue ends.";
   const [drag, setDrag] = useState<number>();
   const [over, setOver] = useState<number>();
   const mine = queue.slice(index + 1, index + 1 + added);
   const rest = queue.slice(index + 1 + added);
+  // What the queue was started from, named as in Spotify's "Next from": a list in your library by its name, an album or artist that isn't by its songs'.
+  const from = useStore((s) => s.source), l = useLibrary(), id = from?.slice(from.indexOf(":") + 1);
+  const fromName = !from ? undefined : from === "liked" ? "Liked Songs" : from === "local" ? "Local Files" : from.startsWith("playlist:") ? l.playlists.find((p) => p.id === id)?.name
+    : from.startsWith("folder:") ? l.folders.find((f) => f.id === id)?.name : from.startsWith("album:") ? l.saved.find((a) => a.id === id)?.title ?? queue[0]?.album
+    : from.startsWith("artist:") ? l.followed.find((a) => a.id === id)?.name ?? queue[0]?.artists[0]?.name : undefined;
+  const isRadio = useStore((s) => s.radio), title = isRadio ? `${fromName ?? queue[0]?.title} Radio` : fromName; // as Spotify says "Next from: … Radio"
+  const cut = isRadio ? -1 : rest.findIndex((t) => t.auto), next = cut < 0 ? rest : rest.slice(0, cut), auto = cut < 0 ? [] : rest.slice(cut); // what Autoplay added goes under its own heading, as in Spotify
 
   const row = (t: Track, i: number) => (
     <li
@@ -3745,10 +3754,16 @@ export function QueuePanel() {
             <ol>{mine.map((t, i) => row(t, index + 1 + i))}</ol>
           </>
         )}
-        <h3 className={heading}>Next Up</h3>
+        {(next.length > 0 || !auto.length) && <h3 className={`${heading} truncate`}>{title && next.length ? `Next from: ${title}` : "Next Up"}</h3>}
         {/* The next hundred, so a queue of thousands opens at once. */}
-        {rest.length ? <ol>{rest.slice(0, 100).map((t, i) => row(t, index + 1 + added + i))}</ol> : <p className="px-3 text-sm text-muted">When the queue ends, similar songs play.</p>}
-        {rest.length > 100 && <p className="px-3 pt-2 text-sm text-muted">{plural(rest.length - 100, "more song")}</p>}
+        {next.length ? <ol>{next.slice(0, 100).map((t, i) => row(t, index + 1 + added + i))}</ol> : !auto.length && <p className="px-3 text-sm text-muted">{ends}</p>}
+        {next.length > 100 && <p className="px-3 pt-2 text-sm text-muted">{plural(next.length - 100, "more song")}</p>}
+        {auto.length > 0 && next.length <= 100 && (
+          <>
+            <h3 className={`${heading} flex items-baseline gap-2`}>Autoplay<span className="text-xs font-medium text-muted">Similar songs, after your queue</span></h3>
+            <ol>{auto.slice(0, 100 - next.length).map((t, i) => row(t, index + 1 + added + next.length + i))}</ol>
+          </>
+        )}
       </div>
     </aside>
   );

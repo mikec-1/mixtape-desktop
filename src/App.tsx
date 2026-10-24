@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, X, type LucideIcon } from "lucide-react";
+import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, TriangleAlert, Volume2, VolumeX, WifiOff, X, type LucideIcon } from "lucide-react";
 import { audio, back, cycleRepeat, go, next, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { actionFor, comboFrom, findSearch, recording } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
@@ -35,7 +35,6 @@ export default function App() {
   const open = useSettings((s) => s.sidebar);
   const width = useSettings((s) => s.sidebarWidth);
   const queue = useSettings((s) => s.queue);
-  const queueWidth = useSettings((s) => s.queueWidth);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -90,9 +89,9 @@ export default function App() {
 
   return (
     // The sidebar, one big page card and the queue side by side, the player under all three. The gaps drag the window.
-    // --sidebar and --panel centre the toasts on the page card. The welcome goes over all of it.
+    // The toasts centre on the window, over the play button, whatever's open. The welcome goes over all of it.
     <>
-    <div data-tauri-drag-region inert={!!welcome} className={`flex h-full flex-col gap-2 p-2 ${onWindows ? "pt-8" : ""}`} style={{ "--sidebar": `${open ? width : RAIL}px`, "--panel": queue ? `${queueWidth + 8}px` : "0px" } as CSSProperties}>
+    <div data-tauri-drag-region inert={!!welcome} className={`flex h-full flex-col gap-2 p-2 ${onWindows ? "pt-8" : ""}`}>
       <div className="flex min-h-0 flex-1 gap-2">
         <Sidebar root={root} open={open} width={width} inert={covered} />
         <main inert={covered} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
@@ -241,7 +240,7 @@ function PlayerBar() {
           </button>
           <div className="min-w-0">
             <div className="truncate font-semibold">{track?.title ?? "Not playing"}</div>
-            <div aria-live="polite" className="truncate text-sm text-muted">{error ? <span title={error} className="text-ink">Couldn’t play this track. Try it again or pick another.</span> : track && <>{track.explicit && <Explicit />}<Artists list={track.artists} /></>}</div>
+            <div aria-live="polite" className="truncate text-sm text-muted">{track && <>{error && <span title={error} className="font-semibold text-[#ff453a]">Unavailable · </span>}{track.explicit && <Explicit />}<Artists list={track.artists} /></>}</div>
             {track && !error && <Peek track={track} />}
           </div>
           {track && (
@@ -325,7 +324,7 @@ const sleepMenu = () =>
 function Offline() {
   if (useOnline()) return null;
   return (
-    <div role="status" className="glass fixed top-3 left-[calc(50%+var(--sidebar)/2-var(--panel)/2+4px)] z-50 flex -translate-x-1/2 animate-enter items-center gap-2.5 rounded-full py-2 pr-5 pl-4 text-sm font-semibold">
+    <div role="status" className="glass fixed top-3 left-1/2 z-50 flex -translate-x-1/2 animate-enter items-center gap-2.5 rounded-full py-2 pr-5 pl-4 text-sm font-semibold">
       <WifiOff size={16} /> You’re offline. Your library is still here.
     </div>
   );
@@ -346,7 +345,7 @@ function Toast() {
   const t = toast ?? last;
 
   return (
-    <div role="status" className="pointer-events-none fixed bottom-[110px] left-[calc(50%+var(--sidebar)/2-var(--panel)/2+4px)] z-40 -translate-x-1/2">
+    <div role="status" className="pointer-events-none fixed bottom-[110px] left-1/2 z-40 -translate-x-1/2">
       {t && (
         <div
           inert={!toast}
@@ -354,7 +353,7 @@ function Toast() {
           onPointerLeave={() => setHold(false)}
           onFocus={() => setHold(true)}
           onBlur={() => setHold(false)}
-          className={`flex w-[min(460px,calc(100vw-var(--sidebar)-var(--panel)-56px))] items-center gap-4 rounded-[22px] bg-neutral-900 p-3 text-white ${t.thumb || t.sticky ? "" : "pl-5"} shadow-2xl ring-1 shadow-black/30 ring-white/10 ${
+          className={`flex w-[min(460px,calc(100vw-32px))] items-center gap-4 rounded-[22px] bg-neutral-900 p-3 text-white ${t.thumb || t.sticky || t.warn ? "" : "pl-5"} shadow-2xl ring-1 shadow-black/30 ${t.warn ? "ring-[#ff453a]/60" : "ring-white/10"} ${
             toast
               ? "pointer-events-auto translate-y-0 scale-100 opacity-100 transition-[opacity,translate,scale] duration-400 ease-(--ease-out)"
               : "translate-y-4 scale-95 opacity-0 transition-[opacity,translate,scale] duration-200 ease-in"
@@ -363,7 +362,8 @@ function Toast() {
           {/* A new toast over a showing one swaps its contents in place. */}
           <div key={t.id} className="flex min-w-0 flex-1 animate-enter items-center gap-4">
             {/* Ones still working keep a black square for the cover they're about to get. */}
-            {(t.thumb || t.sticky) && <div className="size-14 shrink-0 overflow-hidden rounded-[10px]"><img src={art(t.thumb, 120)} alt="" className="size-full rounded-[10px] object-cover" /></div>}
+            {/* Something went wrong: a red warning where the cover would be. */}
+            {t.warn ? <div className="grid size-14 shrink-0 place-items-center rounded-[10px] bg-[#ff453a]/15 text-[#ff453a]"><TriangleAlert size={26} /></div> : (t.thumb || t.sticky) && <div className="size-14 shrink-0 overflow-hidden rounded-[10px]"><img src={art(t.thumb, 120)} alt="" className="size-full rounded-[10px] object-cover" /></div>}
             <div className="min-w-0 flex-1">
               <div className="truncate text-[17px] font-bold tracking-tight">{t.text}</div>
               {t.detail && <div className="truncate text-sm text-white/60">{t.detail}</div>}

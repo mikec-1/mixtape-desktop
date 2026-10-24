@@ -46,7 +46,7 @@ export type Dialog =
   | { kind: "link" }
   | { kind: "spotify" };
 // Feedback for a library change: what happened, to what, and a way back.
-export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean };
+export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean; warn?: boolean };
 
 // The queue and modes survive a relaunch; where you were in the track is in localStorage.resume.
 export const useStore = create<State>()(
@@ -521,7 +521,7 @@ async function mix(seeds: Track[], skip = new Set<string>()) {
 }
 export async function radioFrom(tracks: Track[], from?: string) {
   const list = await mix(shuffled(tracks.filter((t) => !skipped(t))).slice(0, 3));
-  if (!list.length) return report(new Error("No radio for this one"));
+  if (!list.length) return notify({ warn: true, text: "No radio for this one" });
   set({ shuffle: false });
   play(list, 0, from);
 }
@@ -579,6 +579,11 @@ async function load(index: number, start = 0, fade = 0) {
     if (me !== latest) return; // cut short by the next load: its audio is still good for going back
     cache.delete(track.id);
     report(e);
+    // Say so where it can't be missed, and move on to the next song, never wrapping round, so a queue of
+    // songs that won't play can't loop forever.
+    const after = nextIndex(index, false), by = track.artists.map((a) => a.name).join(", ");
+    notify({ warn: true, text: navigator.onLine ? `Couldn’t find “${track.title}”` : "You’re offline", detail: after < get().queue.length ? `Skipped · ${by}` : by, action: { label: "Try Again", run: () => (set({ toast: undefined }), void load(index)) } });
+    if (after < get().queue.length) return void load(after);
   } finally {
     if (me === latest) set({ loading: false });
   }

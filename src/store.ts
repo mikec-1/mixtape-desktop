@@ -4,7 +4,7 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import { art, details, fetchAudio, playAudio, radio, searchKind, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
+import { art, beats, details, fetchAudio, hear, playAudio, radio, searchKind, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
 import { foundWhenPlayed, youtubeId } from "./deezer";
 import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
 
@@ -467,6 +467,12 @@ const prefetch = () => {
   const t = get().queue[nextIndex(get().index)];
   if (t && !t.file) fetchCached(t).catch(() => {});
 };
+// How loud the bass, low mids, high mids and treble are right now, 0 to 1 (the menu-bar bars, startup.ts).
+export function spectrum() {
+  const l = beats.get(audio), f = Math.floor(audio.currentTime * 30);
+  return l?.src === audio.src ? l.bands.map((b) => b[f] ?? 0) : [0, 0, 0, 0];
+}
+
 // A song file on this computer plays from disk through the asset protocol: no stream to fetch, and it
 // seeks like any file. A webview that won't stream that into a player (WebKitGTK, on Linux) gets the file
 // read whole and played from memory instead. start resumes partway in; autoplay false only loads it.
@@ -478,6 +484,7 @@ async function playFile(el: HTMLAudioElement, path: string, start = 0, autoplay 
     el.addEventListener("loadedmetadata", done), el.addEventListener("error", done);
   });
   if (!loads) el.src = URL.createObjectURL(await (await fetch(convertFileSrc(path))).blob());
+  void fetch(el.src).then((r) => r.arrayBuffer()).then((b) => hear(el, b)).catch(() => {});
   if (start) el.currentTime = start;
   if (autoplay) await el.play();
 }

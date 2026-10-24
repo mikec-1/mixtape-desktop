@@ -69,6 +69,27 @@ async fn popup(webview: tauri::Webview, window: tauri::Window, rid: tauri::Resou
     tauri::menu::ContextMenu::popup(&*menu, window)
 }
 
+/// One frame of the menu-bar icon's bars while a song plays (startup.ts draws them, up to 30 a second). Tauri's
+/// set_icon re-encodes the picture and resets the icon's click area each time, which made the bars stutter and
+/// lost clicks on the icon.
+#[tauri::command]
+async fn dance(app: tauri::AppHandle, id: String, frame: Vec<u8>) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::AnyThread;
+        use objc2_app_kit::NSImage;
+        let Some(tray) = app.tray_by_id(&id) else { return };
+        let _ = tray.with_inner_tray_icon(move |t| {
+            let (Some(item), Some(image)) = (t.ns_status_item(), NSImage::initWithData(NSImage::alloc(), &objc2_foundation::NSData::with_bytes(&frame))) else { return };
+            image.setSize(objc2_foundation::NSSize::new(18.0, 18.0));
+            image.setTemplate(true);
+            if let Some(button) = objc2::MainThreadMarker::new().and_then(|m| item.button(m)) { button.setImage(Some(&image)) }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, id, frame);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -77,7 +98,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Settings → Startup. Opened at login it starts hidden; main.tsx shows it unless you chose otherwise.
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--login"])))
-        .invoke_handler(tauri::generate_handler![float, popup, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
+        // WebKit holds pages to 60 frames a second; let go of that so every window moves at 120 on ProMotion screens.
+        .on_page_load(|webview, _| {
+            #[cfg(target_os = "macos")]
+            let _ = webview.with_webview(|w| unsafe {
+                use objc2::{msg_send, runtime::AnyObject, sel};
+                let view = &*(w.inner() as *const AnyObject);
+                let config: &AnyObject = msg_send![view, configuration];
+                let prefs: &AnyObject = msg_send![config, preferences];
+                let set = sel!(_setPreferPageRenderingUpdatesNear60FPSEnabled:);
+                if msg_send![prefs, respondsToSelector: set] { let _: () = msg_send![prefs, _setPreferPageRenderingUpdatesNear60FPSEnabled: false]; }
+            });
+            #[cfg(not(target_os = "macos"))]
+            let _ = webview;
+        })
+        .invoke_handler(tauri::generate_handler![float, popup, dance, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.

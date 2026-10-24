@@ -28,7 +28,10 @@ const ytFetch: typeof globalThis.fetch = (input, init) => {
   });
 };
 
-const yt = Innertube.create({ fetch: ytFetch, retrieve_player: true });
+// Made on first use, so the mini and menu bar players, which only borrow helpers from here and can't fetch,
+// never try to reach YouTube.
+let made: ReturnType<typeof Innertube.create> | undefined;
+const yt = { then: (ok, no) => (made ??= Innertube.create({ fetch: ytFetch, retrieve_player: true })).then(ok, no) } as PromiseLike<Innertube>;
 
 export type Artist = { id?: string; name: string };
 // rec: added by Smart Shuffle. at: when it was added to the list it's in (a playlist, Liked Songs).

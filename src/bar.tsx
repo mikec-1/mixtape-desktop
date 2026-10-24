@@ -19,7 +19,7 @@ void invoke("float"); // a panel (lib.rs float), so it opens over full-screen ap
 const hide = () => void win.hide();
 // Liquid Glass (frosted glass on Macs before Tahoe, acrylic on Windows), tinted with the artwork's colour.
 function glass(accent = "") {
-  const [r, g, b] = accent.match(/[\d.]+/g)?.map(Number) ?? [];
+  const [r, g, b] = accent.match(/[\d.]+/g)?.map((n) => Math.round(+n)) ?? [];
   void win.setEffects({ effects: [Effect.LiquidGlassRegular, Effect.Popover, Effect.Acrylic], state: EffectState.Active, radius: 18, ...(b !== undefined && { color: [r, g, b, 40] }) });
 }
 const fmt = (s = NaN) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "–:––");

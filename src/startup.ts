@@ -1,11 +1,12 @@
 import { defaultWindowIcon } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { Image } from "@tauri-apps/api/image";
 import { Menu } from "@tauri-apps/api/menu";
 import { resolveResource } from "@tauri-apps/api/path";
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, monitorFromPoint, PhysicalPosition, type PhysicalSize } from "@tauri-apps/api/window";
-import { audio, cycleRepeat, lyricNow, next, prev, subscribeAudio, toggle, toggleLike, toggleMini, toggleShuffle, useLibrary, useSettings, useStore } from "./store";
+import { audio, cycleRepeat, lyricNow, next, prev, spectrum, subscribeAudio, toggle, toggleLike, toggleMini, toggleShuffle, useLibrary, useSettings, useStore } from "./store";
 
 // Settings → Startup, for the main window. Opened at login the window starts hidden (lib.rs), and shows
 // unless you'd rather it stayed in the background. Close to Tray hides the window on close, and keeps
@@ -49,22 +50,17 @@ function menu({ t, liked, shuffle, repeat, paused }: ReturnType<typeof now>) {
   });
 }
 
-// While something plays, the menu-bar icon is four bars that bounce (a 2 s loop, drawn once), or hold still
-// with Reduce Motion. A template image, like the logo, so the menu bar colours it.
-// 60 frames a loop, shown 30 a second, so the bars move smoothly.
-const FRAMES = 60;
-const frames = isMac
-  ? Promise.all(
-      Array.from({ length: FRAMES }, (_, f) => {
-        const c = new OffscreenCanvas(44, 44), g = c.getContext("2d")!;
-        [2, 3, 1, 2].forEach((n, i) => {
-          const h = 10 + 26 * Math.abs(Math.sin((Math.PI * n * f) / FRAMES + i * 1.1));
-          g.beginPath(), g.roundRect(5 + i * 9.5, 22 - h / 2, 5.5, h, 2.75), g.fill();
-        });
-        return Image.new(g.getImageData(0, 0, 44, 44).data.buffer, 44, 44);
-      }),
-    )
-  : undefined;
+// While something plays, the menu-bar icon is four bars that move with the music (bass on the left, treble on
+// the right, as on iOS), or hold still with Reduce Motion. A template image, like the logo, so the menu bar colours it.
+const draw = (levels: number[]) => {
+  const c = new OffscreenCanvas(44, 44), g = c.getContext("2d")!;
+  levels.forEach((v, i) => {
+    const h = 10 + 26 * v;
+    g.beginPath(), g.roundRect(5 + i * 9.5, 22 - h / 2, 5.5, h, 2.75), g.fill();
+  });
+  return c;
+};
+const still = isMac ? Image.new(draw([0.4, 0.8, 0.2, 0.5]).getContext("2d")!.getImageData(0, 0, 44, 44).data.buffer, 44, 44) : undefined;
 
 // What shows beside the icon (Mac only): the song, or the line being sung, while it plays.
 function title() {
@@ -105,7 +101,17 @@ async function makeTray(player: boolean) {
   });
   if (player) bar = new WebviewWindow("bar", { title: "Sleeve", url: "/", visible: false, focus: false, width: 340, height: 548, resizable: false, decorations: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, shadow: true });
   const offBlur = bar?.onFocusChanged(({ payload }) => !payload && ((hid = Date.now()), void bar?.hide()));
-  let said = "", frame = 0, dance: number | undefined;
+  // Up to 30 a second, each frame drawn here and shown by lib.rs's dance (Tauri's set_icon stuttered and lost
+  // clicks), and only when a bar moves a pixel, so the icon is left alone to take clicks as much as it can.
+  let said = "", dance: ReturnType<typeof setInterval> | undefined, busy = false, levels = [0, 0, 0, 0], drawn = "";
+  const beat = () => {
+    levels = spectrum().map((v, i) => levels[i] + (v - levels[i]) * (v > levels[i] ? 0.7 : 0.3)); // up fast, down gently
+    const key = levels.map((v) => Math.round(v * 26)).join();
+    if (busy || key === drawn) return;
+    (busy = true), (drawn = key);
+    void draw(levels).convertToBlob().then((b) => b.arrayBuffer()).then((b) => dance && invoke("dance", { id: made.id, frame: [...new Uint8Array(b)] })).finally(() => (busy = false));
+  };
+  const hold = () => (clearInterval(dance), (dance = undefined), (drawn = ""));
   const update = () => {
     const was = state;
     state = now();
@@ -113,16 +119,16 @@ async function makeTray(player: boolean) {
     if (text !== said) void made.setTitle((said = text) && ` ${text}`);
     // Bars while playing, the logo when not.
     const moving = isMac && !state.paused && !useSettings.getState().reduceMotion;
-    if (moving && !dance) dance = window.setInterval(() => void frames!.then((f) => made.setIconWithAsTemplate(f[(frame = (frame + 1) % FRAMES)], true)), 1000 / 30);
-    if (!moving && dance) (clearInterval(dance), (dance = undefined));
+    if (moving && !dance) dance = setInterval(beat, 1000 / 30);
+    if (!moving && dance) hold();
     if (state.key === was.key) return;
-    if (isMac && !moving) void (state.paused ? Promise.resolve(icon!) : frames!.then((f) => f[11])).then((i) => made.setIconWithAsTemplate(i, true));
+    if (isMac && !moving) void (state.paused ? Promise.resolve(icon!) : still!).then((i) => made.setIconWithAsTemplate(i, true));
     void menu(state).then(async (m) => (await made.setMenu(m), void shown.close(), (shown = m)));
     void made.setTooltip(state.t ? `${state.t.title} · ${state.t.artists.map((a) => a.name).join(", ")}` : "Sleeve");
   };
   update();
   const offs = [useStore.subscribe(update), useLibrary.subscribe(update), useSettings.subscribe(update), subscribeAudio(update)];
-  stop = () => (offs.forEach((off) => off()), clearInterval(dance), void offBlur?.then((off) => off()), void bar?.close(), (bar = undefined));
+  stop = () => (offs.forEach((off) => off()), hold(), void offBlur?.then((off) => off()), void bar?.close(), (bar = undefined));
   return made;
 }
 // There's an icon when the menu bar player is on, or closing the window leaves Sleeve playing (then just the menu).

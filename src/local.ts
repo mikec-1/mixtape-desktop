@@ -5,7 +5,7 @@ import { fetch } from "@tauri-apps/plugin-http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { files, forget, idb, notify, plural, useStore } from "./store";
-import { searchKind, type Track } from "./yt";
+import { searchKind, stripVersion, type Track } from "./yt";
 
 // Your own music: folders on this computer, read by src-tauri/src/local.rs. What a scan found is kept,
 // so Local Files is there at once on launch; a scan in the background then picks up what changed.
@@ -86,8 +86,6 @@ export async function addFiles(paths: string[]) {
 // and the like, then kept only when the title's words are all in the result's and either artist's name
 // holds the other's. The title stays as yours ("ОТПУСТИ МЕНЯ slowed"); artist, album, year, genre and
 // cover come from the original, so the edit sits with that artist.
-const VERSION = /[([]?\s*\b(?:slowed(?:\s*(?:\+|&|and)?\s*(?:reverb|down))?|sped\s*up|speed\s*up|reverb|nightcore|lo-?fi|bass\s*boost(?:ed)?|8d(?:\s*audio)?|chopped(?:\s*(?:and|&)\s*screwed)?|super\s*slowed|ultra\s*slowed|tik\s*tok(?:\s*(?:edit|remix|version))?|(?:hardstyle|phonk|jersey|drill|techno)(?:\s*(?:edit|remix|version))?|(?:extended|radio|official)?\s*(?:edit|remix|version|mix)|remaster(?:ed)?|acoustic|instrumental)\b\s*[)\]]?/gi;
-export const stripVersion = (t: string) => t.replace(VERSION, " ").replace(/\s*[-–|]\s*$|\(\s*\)|\[\s*\]/g, "").replace(/\s+/g, " ").trim() || t;
 const words = (s: string) => new Set(s.toLowerCase().replace(/\(\s*(?:feat|ft|with)\b[^)]*\)/g, "").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1));
 const within = (a: Set<string>, b: Set<string>) => a.size > 0 && [...a].every((w) => b.has(w));
 const jaccard = (a: Set<string>, b: Set<string>) => [...a].filter((w) => b.has(w)).length / (new Set([...a, ...b]).size || 1);

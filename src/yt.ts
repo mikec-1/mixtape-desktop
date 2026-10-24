@@ -397,13 +397,19 @@ export async function fetchAudio(id: string, quality: Quality = "high") {
   return { chunks, mime, duration, loudness };
 }
 
-// Song radio: YT Music's automix "watch next" for a track (the seed itself comes first).
+// "slowed", "sped up", "remix" and the like, as in a title (local.ts uses it to find the song an edit is of).
+const VERSION = /[([]?\s*\b(?:slowed(?:\s*(?:\+|&|and)?\s*(?:reverb|down))?|sped\s*up|speed\s*up|reverb|nightcore|lo-?fi|bass\s*boost(?:ed)?|8d(?:\s*audio)?|chopped(?:\s*(?:and|&)\s*screwed)?|super\s*slowed|ultra\s*slowed|tik\s*tok(?:\s*(?:edit|remix|version))?|(?:hardstyle|phonk|jersey|drill|techno)(?:\s*(?:edit|remix|version))?|(?:extended|radio|official)?\s*(?:edit|remix|version|mix)|remaster(?:ed)?|acoustic|instrumental)\b\s*[)\]]?/gi;
+export const stripVersion = (t: string) => t.replace(VERSION, " ").replace(/\s*[-–|]\s*$|\(\s*\)|\[\s*\]/g, "").replace(/\s+/g, " ").trim() || t;
+
+// Song radio: YT Music's automix "watch next" for a track (the seed itself comes first). Only songs as released:
+// no fan uploads (no album: "Artik & Asti - Она не я 3Dwawe" by whoever posted it) and no edits or remixes.
+// ponytail: also drops official music videos, the songs themselves still come.
 export async function radio(id: string): Promise<Track[]> {
   const panel = await (await yt).music.getUpNext(id, true);
   return panel.contents
     .map((v) => (v.is(YTNodes.PlaylistPanelVideoWrapper) ? v.primary : v))
     .flatMap((v) =>
-      v?.is(YTNodes.PlaylistPanelVideo)
+      v?.is(YTNodes.PlaylistPanelVideo) && (v.video_id === id || (v.album && stripVersion(v.title.toString()) === v.title.toString().replace(/\s+/g, " ").trim()))
         ? [{
             id: v.video_id,
             title: v.title.toString(),
@@ -463,6 +469,28 @@ export function albumByName(name: string, artist = "") {
   return albums.get(key)!;
 }
 
+// The menu-bar bars (startup.ts): how loud the bass, low mids, high mids and treble are, 30 times a second through
+// a song, worked out once it's all here. WebKit hands streamed songs to Web Audio as silence, so it can't listen live.
+export const beats = new WeakMap<HTMLAudioElement, { src: string; bands: Float32Array[] }>();
+export async function hear(audio: HTMLAudioElement, data: ArrayBuffer) {
+  const src = audio.src, buf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(data);
+  const x = buf.getChannelData(0), rate = buf.sampleRate, step = Math.round(rate / 30), n = Math.ceil(x.length / step);
+  const bands = [0, 1, 2, 3].map(() => new Float32Array(n)), [k1, k2, k3] = [150, 600, 3000].map((f) => 1 - Math.exp((-2 * Math.PI * f) / rate));
+  // Split at 150 Hz, 600 Hz and 3 kHz with simple low-pass filters, and add up each part's power per frame.
+  for (let i = 0, a = 0, b = 0, c = 0; i < x.length; i++) {
+    const v = x[i], f = (i / step) | 0;
+    (a += k1 * (v - a)), (b += k2 * (v - b)), (c += k3 * (v - c));
+    (bands[0][f] += a * a), (bands[1][f] += (b - a) ** 2), (bands[2][f] += (c - b) ** 2), (bands[3][f] += (v - c) ** 2);
+  }
+  // Each band against its own loud parts, so quiet treble still moves, and peaks stand out.
+  for (const band of bands) {
+    band.forEach((p, i) => (band[i] = Math.sqrt(p / step)));
+    const top = [...band].sort((p, q) => p - q)[Math.floor(n * 0.95)] || 1;
+    band.forEach((p, i) => (band[i] = Math.min(1, p / top) ** 1.5));
+  }
+  if (audio.src === src) beats.set(audio, { src, bands });
+}
+
 // YouTube serves fragmented (DASH) MP4, which WebKit can't play from a plain src, so feed it via MSE.
 // start resumes partway in (after a relaunch). autoplay false only buffers it (the next track, for gapless).
 export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duration }: Awaited<ReturnType<typeof fetchAudio>>, start = 0, autoplay = true) {
@@ -492,4 +520,5 @@ export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duratio
     else if (i === 0) (audio.currentTime = start), audio.play().catch(() => {});
   }
   ms.endOfStream();
+  void Promise.all(chunks).then((all) => new Blob(all).arrayBuffer()).then((b) => hear(audio, b)).catch((e) => console.warn("Couldn't read the beat", e));
 }

@@ -363,7 +363,7 @@ function Toast() {
           {/* A new toast over a showing one swaps its contents in place. */}
           <div key={t.id} className="flex min-w-0 flex-1 animate-enter items-center gap-4">
             {/* Ones still working keep a black square for the cover they're about to get. */}
-            {(t.thumb || t.sticky) && <div className="size-14 shrink-0 overflow-hidden rounded-[10px] bg-black">{t.thumb && <img src={art(t.thumb, 120)} alt="" className="size-full object-cover" />}</div>}
+            {(t.thumb || t.sticky) && <div className="size-14 shrink-0 overflow-hidden rounded-[10px]"><img src={art(t.thumb, 120)} alt="" className="size-full rounded-[10px] object-cover" /></div>}
             <div className="min-w-0 flex-1">
               <div className="truncate text-[17px] font-bold tracking-tight">{t.text}</div>
               {t.detail && <div className="truncate text-sm text-white/60">{t.detail}</div>}

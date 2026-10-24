@@ -125,7 +125,7 @@ export default function Bar() {
   const row = (song: Track, i: number, onPick: () => void, picked = false) => (
     <div key={`${song.id}${i}`} data-picked={picked || undefined} className={`group flex items-center gap-3 rounded-[10px] px-2 py-1.5 ${picked ? "bg-ink/[0.08]" : "hover:bg-ink/[0.06]"}`}>
       <button onClick={onPick} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-        <div className="size-9 shrink-0 overflow-hidden rounded-md bg-black">{song.thumb && <img src={art(song.thumb, 96)} alt="" className="size-full object-cover" />}</div>
+        <div className="size-9 shrink-0 overflow-hidden rounded-md"><img src={art(song.thumb, 96)} alt="" className="size-full rounded-md object-cover" /></div>
         <div className="min-w-0">
           <div className="truncate text-[13px] leading-snug font-semibold">{song.title}</div>
           <div className="truncate text-[12px] leading-snug text-muted">{names(song)}</div>
@@ -147,7 +147,7 @@ export default function Bar() {
 
       <div onWheel={swiped} className="relative">
         <div className="flex items-center gap-3.5 px-4 pt-4">
-          <button onClick={() => away("sheet", "playing")} aria-label="Open Now Playing" className="press size-[88px] shrink-0 overflow-hidden rounded-xl bg-black shadow-lg ring-1 ring-ink/10">
+          <button onClick={() => away("sheet", "playing")} aria-label="Open Now Playing" className="press size-[88px] shrink-0 overflow-hidden rounded-xl shadow-lg ring-1 ring-ink/10">
             {t?.thumb && <img src={art(t.thumb, 300)} alt="" className="size-full object-cover" />}
           </button>
           <div key={t?.id} className="min-w-0 flex-1">

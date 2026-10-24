@@ -2,7 +2,7 @@ import React, { type ComponentType, type ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 
-// Artwork that won't load (a moved file, a dead link) shows as no artwork: black (index.css), not a broken image.
+// Artwork that won't load (a moved file, a dead link) shows as no artwork (index.css), not a broken image.
 addEventListener("error", (e) => e.target instanceof HTMLImageElement && e.target.removeAttribute("src"), true);
 
 let Root: ComponentType;

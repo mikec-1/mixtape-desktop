@@ -513,9 +513,11 @@ input[type="range"].knob::-webkit-slider-thumb {
   }
 }
 
-/* A song with no artwork: plain black, not WebKit's broken-image outline. */
+/* A song with no artwork: a faint outline of where it would be, not WebKit's broken-image outline. */
 img:not([src]),
 img[src=""] {
   content: url("data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==");
-  background-color: #000;
+  background-color: transparent;
+  outline: 1px solid color-mix(in oklab, var(--color-ink) 16%, transparent);
+  outline-offset: -1px;
 }

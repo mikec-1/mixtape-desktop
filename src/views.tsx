@@ -2318,7 +2318,7 @@ function SpotifyImport() {
           )}
           {lib.playlists.map((p) => {
             const n = (p.items ?? p.tracks)?.total;
-            return row(p.id, <img src={p.images?.[0]?.url} alt="" loading="lazy" className="size-10 shrink-0 rounded-md bg-black object-cover" />, p.name, [n !== undefined && plural(n, "song"), p.owner?.display_name !== name && p.owner?.display_name && `by ${p.owner.display_name}`].filter(Boolean).join(" · "));
+            return row(p.id, <img src={p.images?.[0]?.url} alt="" loading="lazy" className="size-10 shrink-0 rounded-md object-cover" />, p.name, [n !== undefined && plural(n, "song"), p.owner?.display_name !== name && p.owner?.display_name && `by ${p.owner.display_name}`].filter(Boolean).join(" · "));
           })}
         </ul>
       ) : (

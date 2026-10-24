@@ -50,7 +50,12 @@ export function removeDownload(key: string) {
 export function removeAllDownloads() {
   set({ lists: {} });
   sync();
-  notify({ text: "Downloads Removed" });
+}
+// Settings → Storage: the kept covers go, and downloaded songs fetch theirs again next launch.
+export function forgetArt() {
+  const names = Object.values(get().art).flatMap((n) => SIZES.map(([x]) => `${n}-${x}`));
+  set({ art: {} });
+  return invoke("delete_downloads", { names });
 }
 
 // Brings the files in line with the downloaded lists: queues what's missing, deletes what's no longer
@@ -216,7 +221,8 @@ export function progress(key: string, s: Offline) {
   const saved = tracks.filter((t) => s.songs[t.id]).length;
   return { saved, total: tracks.length, done: saved === tracks.length };
 }
-export const downloadedSize = () => (canDownload ? invoke<number>("downloads_size") : Promise.resolve(0));
+// Songs, then artwork, in bytes.
+export const downloadedSize = () => (canDownload ? invoke<[number, number]>("downloads_size") : Promise.resolve<[number, number]>([0, 0]));
 
 // Keeping up: a change to a downloaded list (or getting back online) syncs, a beat later, once.
 let soon = 0;

@@ -100,6 +100,7 @@ export const idbPut = (key: string, value: unknown) => kv("readwrite", (s) => s.
 const range = (prefix: string) => IDBKeyRange.bound(prefix, prefix + "\uffff");
 export const idbKeys = (prefix: string) => kv<IDBValidKey[]>("readonly", (s) => s.getAllKeys(range(prefix)));
 export const idbDelete = (prefix: string) => kv("readwrite", (s) => s.delete(range(prefix)));
+export const idbBytes = (prefix: string) => kv<unknown[]>("readonly", (s) => s.getAll(range(prefix))).then((v) => new Blob([JSON.stringify(v)]).size);
 export const idb: StateStorage = {
   // Libraries saved before the move are still in localStorage until their first write here.
   getItem: async (k) => (await kv<string | undefined>("readonly", (s) => s.get(k))) ?? localStorage.getItem(k),
@@ -182,6 +183,9 @@ export const renamePlaylist = (id: string, name: string) => lib(edit(id, () => (
 export const describePlaylist = (id: string, about: string) => lib(edit(id, () => ({ about })));
 export const sortPlaylist = (id: string, sort: TrackSort) => lib(edit(id, () => ({ sort })));
 export const setCover = (id: string, cover?: string) => change(cover ? "Cover Changed" : "Cover Removed", { title: playlist(id)?.name, thumb: cover }, edit(id, () => ({ cover })));
+// Settings → Danger Zone. Both come back with Undo on the toast.
+export const deleteAllPlaylists = () => change("Playlists Deleted", undefined, (s) => ({ playlists: [], folders: [], pinned: s.pinned.filter((k) => !/^(playlist|folder):/.test(k)) }));
+export const clearLibrary = () => change("Library Cleared", undefined, () => ({ ...empty() }));
 export function deletePlaylist(id: string) {
   const p = playlist(id);
   if (p) change("Playlist Deleted", { title: p.name, thumb: p.cover ?? p.tracks[0]?.thumb }, (s) => ({ playlists: s.playlists.filter((x) => x.id !== id), pinned: s.pinned.filter((k) => k !== libraryKey("playlist", id)) }));
@@ -807,6 +811,7 @@ type Settings = {
   keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean; country: string;
   menuBar: "off" | "icon" | "song" | "lyrics"; // the menu bar (tray) player, and what shows beside its icon (Mac only)
   listenBrainzToken: string; lastfmSessionKey: string; lastfmUsername: string; discordRpc: boolean;
+  doubleClick: "play" | "queue"; resumeQueue: boolean; pauseOnDevice: boolean; // Settings → Playback
 };
 export type LyricsSource = "apple" | "lrclib" | "netease";
 const defaultCountry = () => {
@@ -828,10 +833,17 @@ export const useSettings = create<Settings>()(
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "icon",
       country: defaultCountry(),
       listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "", discordRpc: false,
+      doubleClick: "play", resumeQueue: true, pauseOnDevice: true,
     }),
     { name: "settings" },
   ),
 );
+// Every preference back to how it started; Last.fm and ListenBrainz stay signed in.
+export function resetSettings() {
+  const { listenBrainzToken, lastfmSessionKey, lastfmUsername } = useSettings.getState();
+  useSettings.setState({ ...useSettings.getInitialState(), listenBrainzToken, lastfmSessionKey, lastfmUsername });
+  notify({ text: "Settings Reset" });
+}
 useSettings.subscribe((s, was) => {
   if (was?.discordRpc && !s.discordRpc) clearDiscordRpc();
 });
@@ -879,6 +891,10 @@ function equalize(eq: number[]) {
   bands.forEach((b, i) => (b.gain.value = eq[i] ?? 0));
 }
 applySettings(useSettings.getState());
+// Settings → Playback: start with an empty queue instead of the last one, and pause when headphones
+// come out (any audio device change, so plugging some in pauses too).
+if (!useSettings.getState().resumeQueue) useStore.setState({ queue: [], index: -1, added: 0, original: undefined });
+navigator.mediaDevices?.addEventListener("devicechange", () => useSettings.getState().pauseOnDevice && !audio.paused && pause());
 useSettings.subscribe(applySettings);
 
 // Media keys, Control Center / taskbar controls.

@@ -35,10 +35,13 @@ pub fn delete_downloads<R: Runtime>(app: AppHandle<R>, names: Vec<String>) -> Re
     Ok(())
 }
 
-/// How much room downloads take, in bytes.
+/// How much room downloads take, in bytes: the songs, then the artwork (its files start art-).
 #[tauri::command]
-pub fn downloads_size<R: Runtime>(app: AppHandle<R>) -> Result<u64, String> {
-    Ok(fs::read_dir(dir(&app)?).map_err(|e| e.to_string())?.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum())
+pub fn downloads_size<R: Runtime>(app: AppHandle<R>) -> Result<(u64, u64), String> {
+    Ok(fs::read_dir(dir(&app)?).map_err(|e| e.to_string())?.flatten().fold((0, 0), |(songs, art), e| {
+        let n = e.metadata().map(|m| m.len()).unwrap_or(0);
+        if e.file_name().to_string_lossy().starts_with("art-") { (songs, art + n) } else { (songs + n, art) }
+    }))
 }
 
 fn dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {

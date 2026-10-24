@@ -1,24 +1,25 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ArrowDownToLine, Disc3, Link2, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { type LucideIcon, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, fixImport, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
   shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
-  useRecentSearches, addRecentSearch, idbGet, idbPut,
+  useRecentSearches, addRecentSearch, idbGet, idbPut, idbBytes, idbDelete, deleteAllPlaylists, clearLibrary, resetSettings,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
-import { asText, estimateWords, forgetLyrics, groups, keptLyrics, isRtl, lineNow, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
+import { asText, estimateWords, forgetLyrics, groups, isRtl, lineNow, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { albumByName, art, artist, artistByName, charts, collection as ytCollection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
 import { album as deezerAlbum, isDeezer, withGuests } from "./deezer";
 import { addFolder, canHaveFiles, guessTags, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
-import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, useOffline } from "./offline";
+import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
 import { SignIn } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
+import appIcon from "../src-tauri/icons/128x128@2x.png";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
 import { importLink, importPlaylistFile, isLink, rematch } from "./import";
 import { connect, contents, disconnect, importSpotify, useSpotify } from "./spotify";
@@ -2758,41 +2759,109 @@ export async function restore(file: File) {
   }
 }
 
-const panes = [
-  { id: "account", label: "Account" },
-  { id: "linked", label: "Linked Accounts" },
-  { id: "appearance", label: "Appearance" },
-  { id: "playback", label: "Playback" },
-  { id: "lyrics", label: "Lyrics" },
-  { id: "library", label: "Library" },
-  { id: "privacy", label: "Privacy" },
-  { id: "shortcuts", label: "Shortcuts" },
-  ...(canHaveFiles ? [{ id: "startup", label: "Startup" }] : []),
-  { id: "about", label: "About" },
+// Grouped as what you'd tune, then the app itself. tint colours the icon's chip; find: extra words the search matches.
+const PANES: { group: string; id: string; tint: string; label: string; icon: LucideIcon; about: string; find: string; view: () => ReactNode }[] = [
+  { group: "Preferences", id: "playback", tint: "#ff9f0a", label: "Playback", icon: ListMusic, about: "What plays next, and what clicks do.", find: "autoplay double-click queue resume startup crossfade headphones device", view: Playback },
+  { group: "Preferences", id: "audio", tint: "#ff375f", label: "Audio", icon: SlidersHorizontal, about: "Streaming quality, volume and the equalizer.", find: "quality data saver normalise normalize loudness eq equalizer bass treble", view: AudioPane },
+  { group: "Preferences", id: "lyrics", tint: "#bf5af2", label: "Lyrics", icon: MicVocal, about: "Where lyrics come from and how they move.", find: "translate romanise word by word sources player bar", view: LyricsPane },
+  { group: "Preferences", id: "appearance", tint: "#0a84ff", label: "Appearance", icon: SunMoon, about: "Theme, colour and size.", find: "theme dark light colour color accent artwork motion zoom size", view: Appearance },
+  { group: "Preferences", id: "shortcuts", tint: "#8e8e93", label: "Shortcuts", icon: Command, about: "Keyboard shortcuts, and changing them.", find: "keys keyboard hotkeys", view: Shortcuts },
+  { group: "Application", id: "account", tint: "#5e5ce6", label: "Account", icon: UserRound, about: "Your profile, sync and public playlists.", find: "sign in sync profile public delete export", view: AccountPane },
+  { group: "Application", id: "linked", tint: "#30d158", label: "Linked Accounts", icon: Link2, about: "Scrobbling and your Discord status.", find: "last.fm lastfm listenbrainz discord scrobble", view: LinkedAccountsPane },
+  { group: "Application", id: "library", tint: "#ff6b3d", label: "Library", icon: LibraryBig, about: "Importing, exporting and what you’ve hidden.", find: "import export restore spotify csv local files folders hidden blocked artists", view: LibraryPane },
+  { group: "Application", id: "storage", tint: "#7d7aff", label: "Storage", icon: HardDrive, about: "What’s kept on this computer, and the room it takes.", find: "cache downloads offline space clear lyrics size disk", view: Storage },
+  { group: "Application", id: "privacy", tint: "#40c8e0", label: "Privacy", icon: LockKeyhole, about: "Your listening history, and what’s kept.", find: "private session history wrapped clear", view: Privacy },
+  ...(canHaveFiles ? [{ group: "Application", id: "startup", tint: "#34c759", label: "Startup", icon: Power, about: "Opening at login, the tray and the menu bar.", find: "login tray menu bar background close", view: Startup }] : []),
+  { group: "Application", id: "danger", tint: "#ff453a", label: "Danger Zone", icon: TriangleAlert, about: "Starting over, in part or in full. Everything asks first.", find: "reset defaults delete playlists clear library history wipe", view: DangerZone },
+  { group: "Help", id: "about", tint: "#8e8e93", label: "About", icon: Disc3, about: "The version, and what it’s built on.", find: "version licences licenses welcome github", view: About },
 ];
+const matching = (q: string) => PANES.filter((p) => !q || `${p.label} ${p.about} ${p.find}`.toLowerCase().includes(q));
 
+const subhead = "text-[15px] font-semibold tracking-tight";
+// A group of rows on a step of tone, with lines between the rows but not around them.
+const card = "rounded-2xl bg-ink/[0.04] px-4 divide-y divide-ink/[0.07]";
 const btn = "press flex h-9 items-center gap-2 rounded-full px-4 text-sm font-semibold disabled:opacity-50";
 export const solid = `${btn} bg-ink text-paper`;
 export const quiet = `${btn} bg-ink/[0.07] hover:bg-ink/[0.12]`;
 
-// Its own list of panes beside the content, like System Settings.
+// What the settings search is looking for, so a row it names lights up.
+const Looking = createContext("");
+
+// Mixtape's layout: the categories down a column of their own under the search, and one pane at a time
+// beside them. Searching swaps the categories for the panes that match; picking one opens it with the
+// matching rows lit for a few seconds. Opened at a pane (Edit Profile opens Account), it starts there.
 export function Settings() {
-  const pane = useStore((s) => s.pane) ?? "account";
-  const setPane = (pane: string) => useStore.setState({ pane });
+  const pane = useStore((s) => s.pane);
+  const [now, setNow] = useState(pane ?? PANES[0].id);
+  const [q, setQ] = useState("");
+  const [lit, setLit] = useState(""); // what a search opened the pane for
+  const page = useRef<HTMLDivElement>(null);
+  const fade = useRef(0);
+  const find = q.trim().toLowerCase();
+  const shown = matching(find);
+  const go = (id: string, light = "") => {
+    setNow(id);
+    setLit(light);
+    clearTimeout(fade.current);
+    if (light) fade.current = window.setTimeout(() => setLit(""), 3000);
+    page.current?.scrollTo({ top: 0 });
+  };
+  const pick = (id: string) => (go(id, find), setQ(""));
+  useEffect(() => void (pane && (go(pane), useStore.setState({ pane: undefined }))), [pane]);
+  const { id, label, about, view: View } = PANES.find((p) => p.id === now) ?? PANES[0];
+  const chip = (p: (typeof PANES)[number]) => (
+    <span aria-hidden className="grid size-[22px] shrink-0 place-items-center rounded-[6px]" style={{ background: `color-mix(in oklab, ${p.tint} 22%, transparent)`, color: p.tint }}><p.icon size={13} strokeWidth={2.25} /></span>
+  );
   return (
-    <div className="animate-enter px-8 pt-14">
-      <h1 className="text-display">Settings</h1>
-      <div className="mt-10 flex items-start gap-10">
-        <nav aria-label="Settings" className="sticky top-14 flex w-40 shrink-0 flex-col gap-1">
-          {panes.map(({ id, label }) => (
-            <button key={id} onClick={() => setPane(id)} aria-current={pane === id ? "page" : undefined} className={`flex h-9 items-center rounded-xl px-3 font-semibold transition-colors ${pane === id ? "bg-ink/[0.08]" : "text-muted hover:bg-ink/[0.04] hover:text-ink"}`}>
-              {label}
+    <div className="absolute inset-0 flex animate-enter font-ui">
+      <nav aria-label="Settings" className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-ink/[0.06] bg-ink/[0.025] px-3 pt-16 pb-6 @max-2xl:w-48">
+        <h1 className="px-2 text-[22px] font-bold tracking-tight">Settings</h1>
+        <label className="mt-3 mb-4 flex h-8 shrink-0 items-center gap-2 rounded-lg bg-ink/[0.07] px-2.5 text-muted transition-colors focus-within:bg-ink/[0.1]">
+          <SearchIcon size={14} aria-hidden />
+          <input
+            data-find
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => (e.key === "Escape" && q ? (e.stopPropagation(), setQ("")) : e.key === "Enter" && shown[0] && find && pick(shown[0].id))}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-muted"
+          />
+          {q && <button onClick={() => setQ("")} aria-label="Clear Search" className="press -mr-1 grid size-5 place-items-center rounded-full hover:bg-ink/[0.1] hover:text-ink"><X size={12} /></button>}
+        </label>
+        {!find ? (
+          [...new Set(PANES.map((p) => p.group))].map((group) => (
+            <div key={group} className="pb-3">
+              {PANES.filter((p) => p.group === group).map((p) => (
+                <button key={p.id} onClick={() => go(p.id)} aria-current={now === p.id ? "page" : undefined} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-[13px] font-medium transition-colors duration-100 ${now === p.id ? "bg-accent/20" : "hover:bg-ink/[0.05]"}`}>
+                  {chip(p)} {p.label}
+                </button>
+              ))}
+            </div>
+          ))
+        ) : shown.length ? (
+          shown.map((p) => (
+            <button key={p.id} onClick={() => pick(p.id)} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors duration-100 hover:bg-ink/[0.05]">
+              {chip(p)}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-medium">{p.label}</span>
+                <span className="block truncate text-[11px] text-muted">{p.about}</span>
+              </span>
+              <ChevronRight size={14} aria-hidden className="shrink-0 text-muted" />
             </button>
-          ))}
-        </nav>
-        <div key={pane} className="max-w-3xl min-w-0 flex-1 animate-enter">
-          {pane === "account" ? <AccountPane /> : pane === "linked" ? <LinkedAccountsPane /> : pane === "appearance" ? <Appearance /> : pane === "playback" ? <Playback /> : pane === "lyrics" ? <LyricsPane /> : pane === "library" ? <LibraryPane /> : pane === "privacy" ? <Privacy /> : pane === "shortcuts" ? <Shortcuts /> : pane === "startup" ? <Startup /> : <About />}
-        </div>
+          ))
+        ) : (
+          <p className="px-2 text-[13px] text-muted">No settings match “{q.trim()}”.</p>
+        )}
+      </nav>
+      <div ref={page} className="min-w-0 flex-1 overflow-y-auto">
+        <Looking value={find || lit}>
+          <section key={id} aria-labelledby="settings-pane" className="max-w-2xl animate-enter px-10 pt-16 pb-24 @max-2xl:px-6">
+            <h2 id="settings-pane" className={`text-[28px] font-bold tracking-tight ${id === "danger" ? "text-[#ff375f]" : ""}`}>{label}</h2>
+            <p className="mt-1 mb-8 text-[13px] text-muted">{about}</p>
+            <View />
+          </section>
+        </Looking>
       </div>
     </div>
   );
@@ -2808,15 +2877,15 @@ function AccountPane() {
   if (!canSignIn)
     return (
       <>
-        <p className="max-w-xl text-muted">Accounts aren’t set up in this copy of Sleeve, so your library stays on this computer. Everything works without one.</p>
+        <p className="max-w-xl text-[13px] text-muted">Accounts aren’t set up in this copy of Sleeve, so your library stays on this computer. Everything works without one.</p>
         <button onClick={() => void exportAll()} className={`${quiet} mt-6`}><Download size={16} /> Export Your Data</button>
       </>
     );
   if (!user)
     return (
       <>
-        <h2 className="text-3xl font-extrabold tracking-[-0.03em]">Sign in</h2>
-        <p className="mt-2 mb-8 max-w-md text-muted">Your library, playlists and lyrics, the same on every computer you use. Everything works without an account too.</p>
+        <h2 className="text-xl font-bold tracking-tight">Sign in</h2>
+        <p className="mt-1 mb-6 max-w-md text-[13px] text-muted">Your library, playlists and lyrics, the same on every computer you use. Everything works without an account too.</p>
         <SignIn />
       </>
     );
@@ -2830,16 +2899,16 @@ function AccountPane() {
           title="Change Picture"
           className="press group/avatar relative rounded-full"
         >
-          <Avatar profile={profile} className="size-20 text-3xl" />
+          <Avatar profile={profile} className="size-14 text-2xl" />
           <span className="absolute inset-0 grid place-items-center rounded-full bg-black/45 text-white opacity-0 transition-opacity group-hover/avatar:opacity-100"><ImagePlus size={22} /></span>
         </button>
         <input ref={picture} type="file" accept="image/*" hidden onChange={(e) => (e.target.files?.[0] && void coverFrom(e.target.files[0], 256).then((avatar) => setProfile({ avatar }), report), (e.target.value = ""))} />
         <div className="min-w-0 flex-1">
-          <input value={profile?.name ?? ""} onChange={(e) => setProfile({ name: e.target.value })} placeholder="Your name" aria-label="Your name" name="profile-name" autoComplete="off" className="room w-full bg-transparent text-3xl font-extrabold tracking-[-0.03em] outline-none placeholder:text-muted" />
-          <div className="truncate text-muted">{user.email}</div>
+          <input value={profile?.name ?? ""} onChange={(e) => setProfile({ name: e.target.value })} placeholder="Your name" aria-label="Your name" name="profile-name" autoComplete="off" className="room w-full bg-transparent text-xl font-bold tracking-tight outline-none placeholder:text-muted" />
+          <div className="truncate text-[13px] text-muted">{user.email}</div>
         </div>
       </div>
-      <div className="mt-6 divide-y divide-ink/10">
+      <div className={`${card} mt-6`}>
         <Row label="Library Sync" detail={status}>
           <button onClick={() => void syncNow()} disabled={state === "syncing" || !online} className={quiet}>Sync Now</button>
         </Row>
@@ -2850,17 +2919,17 @@ function AccountPane() {
           </div>
         </Row>
       </div>
-      <section className="mt-10">
-        <h2 className="mb-1 text-xl font-bold tracking-tight">Public Playlists</h2>
-        <p className="mb-3 text-sm text-muted">Anyone with a public playlist’s link can see it and play it, and it shows on your profile.</p>
+      <section className="mt-8">
+        <h3 className={`${subhead} mb-1`}>Public Playlists</h3>
+        <p className="mb-3 text-xs text-muted">Anyone with a public playlist’s link can see it and play it, and it shows on your profile.</p>
         {playlists.length ? (
-          <div className="divide-y divide-ink/10">
+          <div className={card}>
             {playlists.map((p) => (
               <div key={p.id} className="flex h-14 items-center gap-3">
                 <div className="size-10 shrink-0 overflow-hidden rounded-lg"><PlaylistCover id={p.id} tracks={p.tracks} cover={p.cover} small /></div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-semibold">{p.name}</div>
-                  <div className="truncate text-sm text-muted">{count(p.tracks.length)}</div>
+                  <div className="truncate text-[13px] font-semibold">{p.name}</div>
+                  <div className="truncate text-xs text-muted">{count(p.tracks.length)}</div>
                 </div>
                 {p.public && <button onClick={() => copyLink(playlistLink(p.id))} aria-label={`Copy Link to ${p.name}`} title="Copy Link" className="press grid size-9 place-items-center rounded-full text-muted hover:bg-ink/[0.07] hover:text-ink"><Link size={16} /></button>}
                 <Switch label={`${p.name} is public`} on={!!p.public} onChange={(on) => setPublic(p.id, on)} />
@@ -2868,11 +2937,11 @@ function AccountPane() {
             ))}
           </div>
         ) : (
-          <p className="text-muted">Playlists you make show here.</p>
+          <p className="text-[13px] text-muted">Playlists you make show here.</p>
         )}
       </section>
-      <section className="mt-10">
-        <h2 className="mb-3 text-xl font-bold tracking-tight">Your Data</h2>
+      <section className="mt-8">
+        <h3 className={`${subhead} mb-3`}>Your Data</h3>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => void exportAll()} className={quiet}><Download size={16} /> Export Your Data</button>
           <button onClick={() => void signOut().catch(report)} className={quiet}>Sign Out</button>
@@ -2905,7 +2974,7 @@ function LinkedAccountsPane() {
   };
   const linkBrainz = () => token && (set({ listenBrainzToken: token }), setToken(""), notify({ text: "Connected to ListenBrainz" }));
   return (
-    <div className="divide-y divide-ink/10">
+    <div className={card}>
       <Row label="Last.fm" detail={lastfmSessionKey ? `Scrobbling as ${lastfmUsername}` : lastfm.error ?? (lastfm.token ? "Allow Sleeve in your browser, then come back and click Done" : "Scrobble what you play to Last.fm")}>
         {lastfmSessionKey ? (
           <button onClick={lastfmSignOut} className={quiet}>Disconnect</button>
@@ -2942,19 +3011,16 @@ function Appearance() {
   const set = useSettings.setState;
   return (
     <>
-      <Group title="Theme">
-        <Choice label="System" on={theme === "system"} onPick={() => set({ theme: "system" })}>
-          <Preview scheme="light" />
-          <div className="absolute inset-0 [clip-path:inset(0_0_0_50%)]"><Preview scheme="dark" /></div>
-        </Choice>
-        <Choice label="Light" on={theme === "light"} onPick={() => set({ theme: "light" })}><Preview scheme="light" /></Choice>
-        <Choice label="Dark" on={theme === "dark"} onPick={() => set({ theme: "dark" })}><Preview scheme="dark" /></Choice>
+      <Group title="Theme" about="Choose the overall appearance of the app.">
+        <Choice label="System" on={theme === "system"} onPick={() => set({ theme: "system" })}><Mini scheme="light" /><Mini scheme="dark" /></Choice>
+        <Choice label="Light" on={theme === "light"} onPick={() => set({ theme: "light" })}><Mini scheme="light" /></Choice>
+        <Choice label="Dark" on={theme === "dark"} onPick={() => set({ theme: "dark" })}><Mini scheme="dark" /></Choice>
       </Group>
-      <Group title="Colour">
-        <Choice label="From Artwork" on={artworkAccent} onPick={() => set({ artworkAccent: true })}><Preview tint="#ff8a3d" /></Choice>
-        <Choice label="Sleeve Pink" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Preview /></Choice>
+      <Group title="Colour" about="Where the highlight colour comes from.">
+        <Choice label="From Artwork" on={artworkAccent} onPick={() => set({ artworkAccent: true })}><Mini tint="#ff8a3d" /></Choice>
+        <Choice label="Sleeve Pink" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Mini tint="#ff375f" /></Choice>
       </Group>
-      <div className="divide-y divide-ink/10">
+      <div className={card}>
         <Row label="Reduce Motion" detail={reduceMotion ? "Things fade in place instead of sliding" : "Follows the system’s Reduce Motion"}>
           <Switch label="Reduce Motion" on={reduceMotion} onChange={(reduceMotion) => set({ reduceMotion })} />
         </Row>
@@ -2971,11 +3037,13 @@ function Appearance() {
 const fill = (v: number, min: number, max: number) => ({ "--p": `${((v - min) / (max - min)) * 100}%` }) as CSSProperties;
 
 function Row({ label, detail, children }: { label: string; detail: ReactNode; children: ReactNode }) {
+  const looking = useContext(Looking);
   return (
-    <div className="flex min-h-16 items-center justify-between gap-6 py-3">
-      <div>
-        <div className="font-semibold">{label}</div>
-        <div className="text-sm text-muted">{detail}</div>
+    // When the pane is too narrow for both, the control drops below its label instead of squeezing it to a word a line.
+    <div className="flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3">
+      <div className="min-w-48 flex-1">
+        <div className={`text-[13px] font-semibold transition-colors ${looking && label.toLowerCase().includes(looking) ? "text-accent" : ""}`}>{label}</div>
+        <div className="text-xs text-muted">{detail}</div>
       </div>
       {children}
     </div>
@@ -2983,38 +3051,56 @@ function Row({ label, detail, children }: { label: string; detail: ReactNode; ch
 }
 
 function Playback() {
-  const { quality, normalize, crossfade, eq, autoplay } = useSettings();
+  const { crossfade, autoplay, doubleClick, resumeQueue, pauseOnDevice } = useSettings();
+  const set = useSettings.setState;
+  return (
+    <div className={card}>
+      <Row label="Autoplay" detail={autoplay ? "When the queue runs out, similar songs keep playing" : "Music stops when the queue runs out"}>
+        <Switch label="Autoplay" on={autoplay} onChange={(autoplay) => set({ autoplay })} />
+      </Row>
+      <Row label="Double-Click a Song" detail={doubleClick === "play" ? "Plays it, with the rest of the list after it" : "Adds it to the end of the queue"}>
+        <Segments label="Double-Click a Song" value={doubleClick} onPick={(doubleClick) => set({ doubleClick })} options={[["play", "Play"], ["queue", "Add to Queue"]]} />
+      </Row>
+      <Row label="On Launch" detail={resumeQueue ? "Your last queue is back, paused where you left it" : "The queue starts empty"}>
+        <Segments label="On Launch" value={resumeQueue ? "resume" : "empty"} onPick={(v) => set({ resumeQueue: v === "resume" })} options={[["resume", "Resume Queue"], ["empty", "Start Empty"]]} />
+      </Row>
+      <Row label="Pause When Headphones Disconnect" detail="Pauses when an audio device is plugged in or out">
+        <Switch label="Pause When Headphones Disconnect" on={pauseOnDevice} onChange={(pauseOnDevice) => set({ pauseOnDevice })} />
+      </Row>
+      <Row label="Crossfade" detail={crossfade ? "Songs fade into each other" : "Off: songs play back to back with no gap"}>
+        <div className="flex items-center gap-3">
+          <input type="range" aria-label="Crossfade" min={0} max={12} step={1} value={crossfade} onChange={(e) => set({ crossfade: +e.target.value })} style={fill(crossfade, 0, 12)} className="w-36" />
+          <span className="w-10 text-right text-xs tabular-nums">{crossfade ? `${crossfade} s` : "Off"}</span>
+        </div>
+      </Row>
+    </div>
+  );
+}
+
+function AudioPane() {
+  const { quality, normalize, eq } = useSettings();
   const set = useSettings.setState;
   const preset = Object.entries(EQ_PRESETS).find(([, g]) => g.every((v, i) => v === eq[i]))?.[0];
   return (
     <>
-      <div className="mb-10 divide-y divide-ink/10">
-        <Row label="Audio Quality" detail={quality === "high" ? "The best stream there is for each song" : "Smaller streams, for slow or metered connections"}>
-          <Segments label="Audio Quality" value={quality} onPick={(quality) => set({ quality })} options={[["high", "High"], ["low", "Data Saver"]]} />
+      <div className={`${card} mb-8`}>
+        <Row label="Streaming Quality" detail={quality === "high" ? "The best stream there is for each song" : "Smaller streams, for slow or metered connections"}>
+          <Segments label="Streaming Quality" value={quality} onPick={(quality) => set({ quality })} options={[["high", "High"], ["low", "Data Saver"]]} />
         </Row>
         <Row label="Normalise Volume" detail="Turns loud songs down to the level of the rest">
           <Switch label="Normalise Volume" on={normalize} onChange={(normalize) => set({ normalize })} />
         </Row>
-        <Row label="Crossfade" detail={crossfade ? "Songs fade into each other" : "Off: songs play back to back with no gap"}>
-          <div className="flex items-center gap-3">
-            <input type="range" aria-label="Crossfade" min={0} max={12} step={1} value={crossfade} onChange={(e) => set({ crossfade: +e.target.value })} style={fill(crossfade, 0, 12)} className="w-40" />
-            <span className="w-10 text-right text-sm tabular-nums">{crossfade ? `${crossfade} s` : "Off"}</span>
-          </div>
-        </Row>
-        <Row label="Autoplay" detail={autoplay ? "When the queue runs out, similar songs keep playing" : "Music stops when the queue runs out"}>
-          <Switch label="Autoplay" on={autoplay} onChange={(autoplay) => set({ autoplay })} />
-        </Row>
       </div>
       <section>
-        <h2 className="mb-3 text-xl font-bold tracking-tight">Equalizer</h2>
-        <div className="flex flex-wrap gap-2">
+        <h3 className={`${subhead} mb-3`}>Equalizer</h3>
+        <div className="flex flex-wrap gap-1.5">
           {Object.entries(EQ_PRESETS).map(([name, g]) => (
-            <button key={name} aria-pressed={preset === name} onClick={() => set({ eq: g })} className={`press h-8 rounded-full px-3.5 text-sm font-semibold transition-colors ${preset === name ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`}>
+            <button key={name} aria-pressed={preset === name} onClick={() => set({ eq: g })} className={`press h-7 rounded-lg px-3 text-xs font-semibold transition-colors ${preset === name ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`}>
               {name}
             </button>
           ))}
         </div>
-        <div className="mt-6 flex justify-between rounded-2xl bg-ink/[0.04] px-8 py-6">
+        <div className="mt-4 flex justify-between rounded-xl bg-ink/[0.04] px-8 py-5">
           {EQ_BANDS.map((f, i) => (
             <div key={f} className="flex flex-col items-center gap-2">
               <span className="text-xs tabular-nums text-muted">{eq[i] > 0 ? `+${eq[i]}` : eq[i]}</span>
@@ -3041,12 +3127,19 @@ function Playback() {
   );
 }
 
-// A small row of choices, one picked, like the system's segmented controls.
+// A small row of choices, one picked, like the system's segmented controls. The thumb slides to it.
 function Segments<T extends string | number>({ label, value, options, onPick }: { label: string; value: T; options: [T, string][]; onPick: (v: T) => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [thumb, setThumb] = useState<{ x: number; w: number }>();
+  useLayoutEffect(() => {
+    const b = box.current?.querySelector<HTMLElement>("[aria-checked=true]");
+    setThumb(b ? { x: b.offsetLeft, w: b.offsetWidth } : undefined);
+  }, [value]);
   return (
-    <div role="radiogroup" aria-label={label} className="flex rounded-full bg-ink/[0.07] p-1">
+    <div ref={box} role="radiogroup" aria-label={label} className="relative flex shrink-0 rounded-lg bg-ink/[0.07] p-0.5">
+      {thumb && <span aria-hidden className="absolute inset-y-0.5 left-0 rounded-md bg-[light-dark(#fff,#4a4a4f)] shadow-sm transition-[translate,width] duration-200 ease-out" style={{ translate: `${thumb.x}px`, width: thumb.w }} />}
       {options.map(([v, text]) => (
-        <button key={v} role="radio" aria-checked={value === v} onClick={() => onPick(v)} className={`h-7 rounded-full px-3 text-sm font-semibold transition-colors ${value === v ? "bg-paper shadow-sm" : "text-muted hover:text-ink"}`}>
+        <button key={v} role="radio" aria-checked={value === v} onClick={() => onPick(v)} className={`relative h-7 rounded-md px-3 text-xs font-semibold transition-colors ${value === v ? "" : "text-muted hover:text-ink"}`}>
           {text}
         </button>
       ))}
@@ -3056,8 +3149,8 @@ function Segments<T extends string | number>({ label, value, options, onPick }: 
 
 function Switch({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
   return (
-    <button role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)} className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${on ? "bg-accent" : "bg-ink/20"}`}>
-      <span className={`absolute top-0.5 left-0.5 size-6 rounded-full bg-white shadow transition-transform duration-200 ease-out ${on ? "translate-x-5" : ""}`} />
+    <button role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)} className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${on ? "bg-accent" : "bg-ink/20"}`}>
+      <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform duration-200 ease-out ${on ? "translate-x-4" : ""}`} />
     </button>
   );
 }
@@ -3079,7 +3172,7 @@ function LyricsPane() {
   const mine = Object.entries(useMine((s) => s.songs)).sort((a, b) => b[1].at - a[1].at);
   return (
     <>
-      <div className="mb-6 divide-y divide-ink/10">
+      <div className={`${card} mb-6`}>
         <Row label="Lyrics on the Player Bar" detail="The line being sung, under the song’s name">
           <Switch label="Lyrics on the Player Bar" on={lyricsPeek} onChange={(lyricsPeek) => set({ lyricsPeek })} />
         </Row>
@@ -3105,9 +3198,9 @@ function LyricsPane() {
         </Row>
       </div>
       <section className="mb-6">
-        <h2 className="mb-1 text-xl font-bold tracking-tight">Sources</h2>
-        <p className="max-w-xl text-sm leading-relaxed text-muted">Your own lyrics come first, then the first of these that has the song, in this order. Translation and romanisation are by Google, and only happen when you switch them on.</p>
-        <div className="divide-y divide-ink/10">
+        <h3 className={`${subhead} mb-1`}>Sources</h3>
+        <p className="max-w-xl text-xs leading-relaxed text-muted">Your own lyrics come first, then the first of these that has the song, in this order. Translation and romanisation are by Google, and only happen when you switch them on.</p>
+        <div className={card}>
           {LYRIC_SOURCES.map(([id, label, detail]) => (
             <Row key={id} label={label} detail={detail}>
               <Switch label={label} on={!lyricsOff.includes(id)} onChange={(on) => set({ lyricsOff: on ? lyricsOff.filter((k) => k !== id) : [...lyricsOff, id] })} />
@@ -3115,15 +3208,15 @@ function LyricsPane() {
           ))}
         </div>
       </section>
-      <section className="mt-10">
-        <h2 className="mb-3 text-xl font-bold tracking-tight">Your Lyrics</h2>
+      <section className="mt-8">
+        <h3 className={`${subhead} mb-3`}>Your Lyrics</h3>
         {mine.length ? (
-          <div className="divide-y divide-ink/10">
+          <div className={card}>
             {mine.map(([key, m]) => (
               <div key={key} className="flex h-14 items-center gap-3">
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-semibold">{m.title}</div>
-                  <div className="truncate text-sm text-muted">{m.artist}</div>
+                  <div className="truncate text-[13px] font-semibold">{m.title}</div>
+                  <div className="truncate text-xs text-muted">{m.artist}</div>
                 </div>
                 <button onClick={() => useStore.setState({ dialog: { kind: "edit", key, title: m.title, artist: m.artist, text: m.text } })} className={quiet}>Edit</button>
                 <button onClick={() => removeMine(key)} className={quiet}>Remove</button>
@@ -3131,53 +3224,49 @@ function LyricsPane() {
             ))}
           </div>
         ) : (
-          <p className="text-muted">Lyrics you write or fix land here. Right-click any song and choose Edit Lyrics.</p>
+          <p className="text-[13px] text-muted">Lyrics you write or fix land here. Right-click any song and choose Edit Lyrics.</p>
         )}
       </section>
     </>
   );
 }
 
-function Group({ title, children }: { title: string; children: ReactNode }) {
+function Group({ title, about, children }: { title: string; about: string; children: ReactNode }) {
   return (
-    <section className="mb-10">
-      <h2 className="mb-3 text-xl font-bold tracking-tight">{title}</h2>
-      <div role="radiogroup" aria-label={title} className="grid grid-cols-3 gap-4">{children}</div>
+    <section className="mb-8">
+      <h3 className={subhead}>{title}</h3>
+      <p className="mt-0.5 mb-3.5 text-[13px] text-muted">{about}</p>
+      <div role="radiogroup" aria-label={title} className="grid grid-cols-3 gap-3">{children}</div>
     </section>
   );
 }
 
 function Choice({ label, on, onPick, children }: { label: string; on: boolean; onPick: () => void; children: ReactNode }) {
   return (
-    <button role="radio" aria-checked={on} onClick={onPick} className="group text-left">
-      <div className={`relative aspect-[16/10] overflow-hidden rounded-xl ring-1 ring-ink/10 outline-offset-2 transition-[outline-color] ${on ? "outline-2 outline-accent" : "outline-2 outline-transparent group-hover:outline-ink/20"}`}>
+    <button role="radio" aria-checked={on} onClick={onPick} className="press group text-left">
+      <div className={`relative flex aspect-[2.45] overflow-hidden rounded-lg transition-shadow duration-150 ${on ? "ring-2 ring-ink" : "ring-1 ring-ink/10 group-hover:ring-ink/30"}`}>
         {children}
+        <span className={`absolute top-2 right-2 grid size-[18px] place-items-center rounded-full bg-ink text-paper shadow-sm transition-[opacity,scale] duration-150 ease-out ${on ? "" : "scale-50 opacity-0"}`}><Check size={11} strokeWidth={3.5} /></span>
       </div>
-      <div className={`mt-2 text-sm ${on ? "font-bold" : "text-muted"}`}>{label}</div>
+      <div className={`mt-2 text-[13px] ${on ? "font-semibold" : "text-muted"}`}>{label}</div>
     </button>
   );
 }
 
-// Sleeve in miniature: the icon rail, the page with its big title and coloured card, the player.
-// Tokens are light-dark(), so a color-scheme here repaints it; tint stands in for the artwork colour.
-function Preview({ scheme, tint = "#ff375f" }: { scheme?: "light" | "dark"; tint?: string }) {
+// A window in miniature: the lights and a sidebar of lines, then a title over four tiles. Its greys are
+// light-dark(), so a color-scheme here repaints it; tint stands in for the artwork colour.
+function Mini({ scheme, tint }: { scheme?: "light" | "dark"; tint?: string }) {
+  const bit = "bg-[light-dark(#d9dbda,#262828)]";
   return (
-    <div style={{ colorScheme: scheme }} className="absolute inset-0 flex gap-[2.5%] bg-base p-[2.5%] text-ink">
-      <div className="flex w-[9%] flex-col items-center gap-[8%] rounded-[4px] bg-paper pt-[30%]">
-        {[1, 0.25, 0.25].map((o, i) => <div key={i} className="aspect-square w-[40%] rounded-full bg-ink" style={{ opacity: o }} />)}
+    <div style={{ colorScheme: scheme }} className="flex flex-1 bg-[light-dark(#ebedec,#0e100f)]">
+      <div className="flex w-[36%] flex-col gap-1.5 bg-[light-dark(#fefefe,#1b1d1c)] p-2">
+        <div className="mb-1.5 flex gap-[3px]">{["#ff5f57", "#febc2e", "#28c840"].map((c) => <i key={c} className="size-[5px] rounded-full" style={{ background: c }} />)}</div>
+        {[60, 44, 54].map((w) => <i key={w} className="h-1 rounded-full bg-[light-dark(#e4e4e4,#3d3e3e)]" style={{ width: `${w}%` }} />)}
+        <i className="mt-auto h-3 rounded-[3px] bg-[light-dark(#d6d6d6,#484948)]" style={tint ? { background: tint } : undefined} />
       </div>
-      <div className="flex min-w-0 flex-1 flex-col gap-[3%]">
-        <div className="flex-1 rounded-[4px] bg-paper p-[5%]">
-          <div className="h-[16%] w-[45%] rounded-[2px] bg-ink" />
-          <div className="mt-[6%] flex h-[48%] items-center justify-end rounded-[4px] p-[4%]" style={{ background: `linear-gradient(135deg, ${tint}, color-mix(in oklab, ${tint} 55%, black))` }}>
-            <div className="aspect-square h-full rounded-[2px] bg-white/30" />
-          </div>
-        </div>
-        <div className="flex h-[13%] items-center gap-[4%] rounded-[4px] bg-paper px-[3%]" style={{ backgroundImage: `linear-gradient(to right, color-mix(in oklab, ${tint} 30%, transparent), transparent)` }}>
-          <div className="aspect-square h-[60%] rounded-[2px]" style={{ background: tint }} />
-          <div className="aspect-square h-[55%] rounded-full" style={{ background: tint }} />
-          <div className="h-[12%] flex-1 rounded-full bg-ink/20" />
-        </div>
+      <div className="flex flex-1 flex-col gap-[5px] p-2">
+        <i className={`h-[5px] w-2/5 rounded-full ${bit}`} />
+        <div className="grid grid-cols-2 gap-1">{[0, 1, 2, 3].map((i) => <i key={i} className={`h-3.5 rounded-[3px] ${bit}`} style={tint && !i ? { background: tint } : undefined} />)}</div>
       </div>
     </div>
   );
@@ -3201,61 +3290,59 @@ function LibraryPane() {
     <>
       <dl className="grid grid-cols-4 gap-3">
         {stats.map(([label, n, bg]) => (
-          <div key={label} className={`flex flex-col-reverse rounded-2xl p-5 text-white ${bg}`}>
-            <dt className="mt-1 font-semibold text-white/85">{label}</dt>
-            <dd className="text-5xl font-extrabold tracking-[-0.04em] tabular-nums">{n}</dd>
+          <div key={label} className={`flex flex-col-reverse rounded-xl p-4 text-white ${bg}`}>
+            <dt className="mt-0.5 text-xs font-semibold text-white/85">{label}</dt>
+            <dd className="text-3xl font-bold tracking-tight tabular-nums">{n}</dd>
           </div>
         ))}
       </dl>
-      <div className="mt-6 flex flex-wrap gap-2">
-        <button onClick={exportLibrary} className={solid}>
-          <Download size={16} /> Export
-        </button>
-        <button onClick={() => file.current?.click()} className={quiet}>
-          <Upload size={16} /> Restore from File…
-        </button>
-        <input ref={file} type="file" accept=".json,application/json" hidden onChange={(e) => (e.target.files?.[0] && restore(e.target.files[0]), (e.target.value = ""))} />
-        <button onClick={() => csvFile.current?.click()} className={quiet}>
-          <Upload size={16} /> Import Playlist from File…
-        </button>
-        <button onClick={() => useStore.setState({ dialog: { kind: "link" } })} className={quiet}>
-          <Link2 size={16} /> Import from Link…
-        </button>
+      <div className={`${card} mt-6`}>
         {canHaveFiles && (
-          <button onClick={() => useStore.setState({ dialog: { kind: "spotify" } })} className={quiet}>
-            <ArrowDownToLine size={16} /> Import from Spotify…
-          </button>
+          <Row label="Import from Spotify" detail="Your playlists, liked songs, albums and artists, all at once">
+            <button onClick={() => useStore.setState({ dialog: { kind: "spotify" } })} className={quiet}><ArrowDownToLine size={16} /> Import…</button>
+          </Row>
         )}
-        <input ref={csvFile} type="file" accept=".csv,text/csv" hidden onChange={(e) => (e.target.files?.[0] && void importPlaylistFile(e.target.files[0]), (e.target.value = ""))} />
+        <Row label="Import a Playlist" detail="A CSV file, or a link to a playlist on another service">
+          <div className="flex gap-2">
+            <button onClick={() => csvFile.current?.click()} className={quiet}><Upload size={16} /> File…</button>
+            <button onClick={() => useStore.setState({ dialog: { kind: "link" } })} className={quiet}><Link2 size={16} /> Link…</button>
+          </div>
+        </Row>
+        <Row label="Back Up Your Library" detail="Everything in Your Library as one file, to keep or to move to another computer">
+          <div className="flex gap-2">
+            <button onClick={exportLibrary} className={quiet}><Download size={16} /> Export</button>
+            <button onClick={() => file.current?.click()} className={quiet}>Restore…</button>
+          </div>
+        </Row>
       </div>
+      <input ref={file} type="file" accept=".json,application/json" hidden onChange={(e) => (e.target.files?.[0] && restore(e.target.files[0]), (e.target.value = ""))} />
+      <input ref={csvFile} type="file" accept=".csv,text/csv" hidden onChange={(e) => (e.target.files?.[0] && void importPlaylistFile(e.target.files[0]), (e.target.value = ""))} />
       {canHaveFiles && <LocalFolders />}
-      {canDownload && <Downloads />}
-      <Cache />
-      <section className="mt-10">
-        <h2 className="mb-1 text-xl font-bold tracking-tight">Hidden Songs</h2>
-        <p className="mb-3 text-sm text-muted">Skipped when a playlist or radio plays on by itself. They still play when you pick them.</p>
+      <section className="mt-8">
+        <h3 className={`${subhead} mb-1`}>Hidden Songs</h3>
+        <p className="mb-3 text-xs text-muted">Skipped when a playlist or radio plays on by itself. They still play when you pick them.</p>
         {hidden.length ? (
-          <div className="divide-y divide-ink/10">
+          <div className={card}>
             {hidden.map((t) => (
               <div key={t.id} className="flex h-14 items-center gap-3">
                 <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-10 rounded-lg bg-ink/[0.06] object-cover" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-semibold">{t.title}</div>
-                  <div className="truncate text-sm text-muted">{t.artists.map((a) => a.name).join(", ")}</div>
+                  <div className="truncate text-[13px] font-semibold">{t.title}</div>
+                  <div className="truncate text-xs text-muted">{t.artists.map((a) => a.name).join(", ")}</div>
                 </div>
                 <button onClick={() => toggleHide(t)} className={quiet}>Unhide</button>
               </div>
             ))}
           </div>
         ) : (
-          <p className="text-muted">None. Right-click a song and choose Hide Song.</p>
+          <p className="text-[13px] text-muted">None. Right-click a song and choose Hide Song.</p>
         )}
       </section>
-      <section className="mt-10">
-        <h2 className="mb-1 text-xl font-bold tracking-tight">Artists You Don’t Play</h2>
-        <p className="mb-3 text-sm text-muted">Their songs are skipped and left out of radio.</p>
+      <section className="mt-8">
+        <h3 className={`${subhead} mb-1`}>Artists You Don’t Play</h3>
+        <p className="mb-3 text-xs text-muted">Their songs are skipped and left out of radio.</p>
         {blocked.length ? (
-          <div className="divide-y divide-ink/10">
+          <div className={card}>
             {blocked.map((a) => (
               <div key={a.id ?? a.name} className="flex h-14 items-center gap-3">
                 <div className="min-w-0 flex-1 truncate font-semibold">{a.name}</div>
@@ -3264,40 +3351,104 @@ function LibraryPane() {
             ))}
           </div>
         ) : (
-          <p className="text-muted">None. On an artist’s page, choose ••• then Don’t Play This Artist.</p>
+          <p className="text-[13px] text-muted">None. On an artist’s page, choose ••• then Don’t Play This Artist.</p>
         )}
       </section>
     </>
   );
 }
 
-// What's downloaded, in Settings → Library, and the room it takes.
+// What's kept on this computer, by kind. Everything with something in it starts ticked; untick what to
+// keep, then clear the rest. The ring is the legend's total, with what's staying faded.
+function Storage() {
+  const songs = useOffline((s) => s.songs);
+  const searches = useRecentSearches((s) => s.items);
+  const [m, setM] = useState<number[]>();
+  const [off, setOff] = useState<string[]>([]);
+  const kept = (prefix: string) => idbBytes(prefix).then((n) => Math.max(0, n - 2), () => 0); // an empty list is "[]"
+  const measure = () => void Promise.all([downloadedSize().catch(() => [0, 0]), kept("lyrics:"), kept("artist:")]).then(([[songs, art], lyrics, artists]) => setM([art, songs, lyrics, artists]));
+  useEffect(measure, [songs]);
+  const kinds = [
+    { label: "Cover Artwork", colour: "#4fc3dc", size: m?.[0], clear: forgetArt },
+    { label: "Audio Tracks", colour: "#6e5ce6", size: m?.[1], clear: removeAllDownloads },
+    { label: "Lyrics", colour: "#d6458a", size: m?.[2], clear: forgetLyrics },
+    { label: "Catalog & Search", colour: "#e5a03a", size: m && m[3] + (searches.length && new Blob([JSON.stringify(searches)]).size), clear: () => (useRecentSearches.setState({ items: [] }), idbDelete("artist:")) },
+  ].slice(canDownload ? 0 : 2).map((k) => ({ ...k, size: k.size ?? 0, on: !!k.size && !off.includes(k.label) }));
+  const total = kinds.reduce((n, k) => n + k.size, 0);
+  const picked = kinds.filter((k) => k.on);
+  const gap = kinds.filter((k) => k.size).length > 1 ? 1.2 : 0;
+  const [num, unit] = bytes(total).split(" ");
+  let at = 0;
+  const clear = () => warn(`Clear ${new Intl.ListFormat("en").format(picked.map((k) => k.label.toLowerCase()))}?`, "Clear", () => void Promise.all(picked.map((k) => k.clear())).then(() => (measure(), notify({ text: "Cache Cleared" })), report), picked.some((k) => k.clear === removeAllDownloads) ? "Downloaded songs will stream again, so they need the internet." : "It’s fetched again when it’s needed.");
+  return (
+    <>
+      <h3 className={subhead}>Cache</h3>
+      <p className="mt-0.5 mb-3 text-[13px] text-muted">What’s kept on this computer so things open quickly. Untick what to keep.</p>
+      <div className="flex flex-wrap items-center gap-x-14 gap-y-6 @max-2xl:gap-x-8">
+        <div className="min-w-48 flex-1">
+          {kinds.map((k) => (
+            <label key={k.label} className={`flex h-[39px] items-center gap-3 transition-opacity duration-150 ${k.on ? "" : "opacity-45"} ${k.size ? "cursor-pointer" : ""}`}>
+              <input type="checkbox" checked={k.on} disabled={!k.size} onChange={() => setOff((o) => (o.includes(k.label) ? o.filter((l) => l !== k.label) : [...o, k.label]))} className="peer sr-only" />
+              <span className="grid size-4 shrink-0 place-items-center rounded-[4px] bg-ink/[0.08] text-paper transition-colors duration-150 peer-checked:bg-ink peer-focus-visible:ring-2 peer-focus-visible:ring-accent">{k.on && <Check size={11} strokeWidth={3.5} />}</span>
+              <i className="size-[7px] shrink-0 rounded-full" style={{ background: k.colour }} />
+              <span className="truncate text-[14px] font-semibold">{k.label}</span>
+              <span className="rounded-[5px] bg-ink/[0.08] px-1.5 py-px text-[10px] font-medium text-muted tabular-nums">{total ? Math.round((k.size / total) * 100) : 0}%</span>
+              <span className="ml-auto pl-3 text-[13px] font-semibold tabular-nums">{m ? bytes(k.size) : ""}</span>
+            </label>
+          ))}
+        </div>
+        <figure className="flex shrink-0 flex-col items-center gap-2.5">
+          <div className="relative size-[120px]">
+            <svg viewBox="0 0 36 36" className="size-full -rotate-90">
+              <circle cx="18" cy="18" r="16.05" fill="none" strokeWidth="3.9" className="stroke-ink/[0.07]" />
+              {kinds.map((k) => {
+                const len = total ? (k.size / total) * 100 : 0;
+                const seg = <circle key={k.label} cx="18" cy="18" r="16.05" fill="none" strokeWidth="3.9" pathLength={100} stroke={k.colour} strokeOpacity={k.on ? 1 : 0.3} strokeDasharray={`${Math.max(0, len - gap)} 100`} strokeDashoffset={-at} className="transition-[stroke-dasharray,stroke-dashoffset,stroke-opacity] duration-500 ease-out" />;
+                at += len;
+                return seg;
+              })}
+            </svg>
+            <div className="absolute inset-0 grid place-content-center text-center leading-none">
+              <div className="text-[22px] font-bold tracking-tight tabular-nums">{m ? num : "…"}</div>
+              <div className="mt-1 text-[10px] font-medium text-muted">{m ? unit : ""}</div>
+            </div>
+          </div>
+          <figcaption className="text-xs text-muted">Storage Usage</figcaption>
+        </figure>
+      </div>
+      <button onClick={clear} disabled={!picked.length} className={`${quiet} mt-4`}>Clear Selected…</button>
+      {canDownload && <Downloads />}
+    </>
+  );
+}
+
+// What's downloaded, in Settings → Storage, and the room it takes.
 function Downloads() {
   const { songs, lists, waiting } = useOffline();
   const [size, setSize] = useState<number>();
-  useEffect(() => void downloadedSize().then(setSize, () => {}), [songs]);
+  useEffect(() => void downloadedSize().then(([s, a]) => setSize(s + a), () => {}), [songs]);
   const entries = Object.entries(lists).sort((a, b) => b[1].at - a[1].at);
   const n = Object.keys(songs).length;
   return (
-    <section className="mt-10">
-      <h2 className="mb-1 text-xl font-bold tracking-tight">Downloads</h2>
-      <p className="mb-3 text-sm text-muted">
+    <section className="mt-8">
+      <h3 className={`${subhead} mb-1`}>Downloads</h3>
+      <p className="mb-3 text-xs text-muted">
         {entries.length ? `${count(n)}${size !== undefined ? `, ${bytes(size)}` : ""}${waiting.length ? `, ${waiting.length} still to come` : ""}. They play without a connection, and only in Sleeve.` : "Download a playlist or album with its arrow button and it plays without a connection."}
       </p>
       {entries.length > 0 && (
         <>
-          <div className="mb-3 divide-y divide-ink/10">
+          <div className={`${card} mb-3`}>
             {entries.map(([key, l]) => (
               <div key={key} className="flex h-14 items-center gap-3">
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-semibold">{l.title}</div>
-                  <div className="truncate text-sm text-muted">{count(listTracks(key).length)}</div>
+                  <div className="truncate text-[13px] font-semibold">{l.title}</div>
+                  <div className="truncate text-xs text-muted">{count(listTracks(key).length)}</div>
                 </div>
                 <button onClick={() => unsave(key)} className={quiet}>Remove</button>
               </div>
             ))}
           </div>
-          <button onClick={() => warn("Remove all downloads?", "Remove All", removeAllDownloads, "Their songs will stream again, so they need the internet.")} className={quiet}>Remove All…</button>
+          <button onClick={() => warn("Remove all downloads?", "Remove All", () => (removeAllDownloads(), notify({ text: "Downloads Removed" })), "Their songs will stream again, so they need the internet.")} className={quiet}>Remove All…</button>
         </>
       )}
     </section>
@@ -3310,17 +3461,17 @@ function LocalFolders() {
   const scanning = useLocal((s) => s.scanning);
   const songs = useLocal((s) => Object.keys(s.files).length);
   return (
-    <section className="mt-10">
-      <h2 className="mb-1 text-xl font-bold tracking-tight">Local Files</h2>
-      <p className="mb-3 text-sm text-muted">{folders.length ? `${count(songs)} from these folders${scanning ? ", looking for changes…" : ""}. They’re read again each time Sleeve opens.` : "Music on this Mac plays alongside everything else. Add a folder and its songs land in Local Files."}</p>
+    <section className="mt-8">
+      <h3 className={`${subhead} mb-1`}>Local Files</h3>
+      <p className="mb-3 text-xs text-muted">{folders.length ? `${count(songs)} from these folders${scanning ? ", looking for changes…" : ""}. They’re read again each time Sleeve opens.` : "Music on this Mac plays alongside everything else. Add a folder and its songs land in Local Files."}</p>
       {folders.length > 0 && (
-        <div className="mb-3 divide-y divide-ink/10">
+        <div className={`${card} mb-3`}>
           {folders.map((f) => (
             <div key={f} className="flex h-14 items-center gap-3">
               <FolderIcon size={18} className="shrink-0 text-muted" />
               <div title={f} className="min-w-0 flex-1">
-                <div className="truncate font-semibold">{f.split(/[\\/]/).filter(Boolean).at(-1) ?? f}</div>
-                <div className="truncate text-sm text-muted">{f}</div>
+                <div className="truncate text-[13px] font-semibold">{f.split(/[\\/]/).filter(Boolean).at(-1) ?? f}</div>
+                <div className="truncate text-xs text-muted">{f}</div>
               </div>
               <button onClick={() => warn(`Remove the “${f.split(/[\\/]/).filter(Boolean).at(-1) ?? f}” folder?`, "Remove", () => removeFolder(f), "Its songs leave your library. The files stay on your disk.")} className={quiet}>Remove</button>
             </div>
@@ -3359,12 +3510,12 @@ function Shortcuts() {
   }, [editing]);
   return (
     <>
-      <div className="divide-y divide-ink/10">
+      <div className={card}>
         {KEYS.map(({ id, label }) => {
           const combo = comboOf(id);
           return (
-            <div key={id} className="flex h-12 items-center justify-between gap-6">
-              <span>{label}</span>
+            <div key={id} className="flex min-h-11 flex-wrap items-center justify-between gap-x-6 gap-y-1">
+              <span className="text-[13px]">{label}</span>
               <button onClick={() => setEditing(editing === id ? undefined : id)} aria-label={`Change shortcut for ${label}`} className={`press min-w-12 rounded-md px-2 py-0.5 text-center font-mono text-xs transition-colors ${editing === id ? "bg-accent text-white" : "bg-ink/[0.07] hover:bg-ink/[0.12]"} ${combo || editing === id ? "" : "text-muted"}`}>
                 {editing === id ? "Press keys…" : combo ? showCombo(combo) : "None"}
               </button>
@@ -3372,36 +3523,41 @@ function Shortcuts() {
           );
         })}
       </div>
-      <p className="mt-4 text-sm text-muted">Click a shortcut, then press the keys you want. Esc keeps it, Delete removes it.</p>
+      <p className="mt-4 text-xs text-muted">Click a shortcut, then press the keys you want. Esc keeps it, Delete removes it.</p>
       {Object.keys(keymap).length > 0 && <button onClick={resetKeys} className={`${quiet} mt-4`}>Restore Defaults</button>}
     </>
   );
 }
 
-// What's kept to make things quick, and room it takes on this computer.
-function Cache() {
-  const [lyrics, setLyrics] = useState<number>();
-  const [used, setUsed] = useState<number>();
-  const read = () => (keptLyrics().then(setLyrics, () => {}), navigator.storage?.estimate().then((e) => setUsed(e.usage), () => {}));
-  useEffect(() => void read(), []);
+const bytes = (n: number) => (n < 1e3 ? `${n} B` : n < 1e6 ? `${Math.round(n / 1e3)} KB` : n < 1e9 ? `${n < 1e7 ? (n / 1e6).toFixed(1) : Math.round(n / 1e6)} MB` : `${(n / 1e9).toFixed(1)} GB`);
+
+// The big resets in one place, each asking first.
+function DangerZone() {
+  const red = `${btn} bg-[#ff375f]/12 text-[#ff375f] hover:bg-[#ff375f]/20`;
   return (
-    <section className="mt-10">
-      <h2 className="mb-1 text-xl font-bold tracking-tight">Cache</h2>
-      <p className="mb-3 text-sm text-muted">
-        {lyrics === undefined ? "Looking…" : `Lyrics kept for ${count(lyrics)}`}{used !== undefined ? `. Sleeve’s data on this computer, your library included: ${bytes(used)}` : ""}. Clearing fetches the lyrics again when songs play.
-      </p>
-      <button onClick={() => void forgetLyrics().then(() => (read(), notify({ text: "Lyrics Cache Cleared" })), report)} disabled={!lyrics} className={quiet}>Clear Lyrics Cache</button>
-    </section>
+    <div className="divide-y divide-[#ff375f]/15 rounded-2xl bg-[#ff375f]/[0.06] px-4">
+      <Row label="Reset All Settings" detail="Every preference here goes back to how it started. Your music and linked accounts stay">
+        <button onClick={() => warn("Reset all settings?", "Reset", resetSettings, "Appearance, playback, lyrics and shortcuts go back to their defaults.")} className={red}>Reset…</button>
+      </Row>
+      <Row label="Clear Listening History" detail="Every play, Wrapped and Recently Played on Home">
+        <button onClick={() => warn("Clear your listening history?", "Clear History", clearHistory, "Every play goes, and Recently Played on Home with it.")} className={red}>Clear…</button>
+      </Row>
+      <Row label="Delete All Playlists" detail="Playlists and folders you made. Liked Songs and albums stay">
+        <button onClick={() => warn("Delete all your playlists?", "Delete All", deleteAllPlaylists, "Every playlist and folder goes. You can undo it from the message that follows.")} className={red}>Delete…</button>
+      </Row>
+      <Row label="Clear Your Library" detail="Liked songs, playlists, albums, artists, pins and what you’ve hidden">
+        <button onClick={() => warn("Clear your whole library?", "Clear Library", clearLibrary, "Everything in Your Library goes. Local folders and downloads stay on this computer.")} className={red}>Clear…</button>
+      </Row>
+    </div>
   );
 }
-const bytes = (n: number) => (n < 1e9 ? `${n < 1e7 ? (n / 1e6).toFixed(1) : Math.round(n / 1e6)} MB` : `${(n / 1e9).toFixed(1)} GB`);
 
 function Privacy() {
   const history = useSettings((s) => s.history);
   const priv = usePrivate((s) => s.on);
   return (
     <>
-      <div className="divide-y divide-ink/10">
+      <div className={card}>
         <Row label="Private Session" detail={priv ? "What you play now isn’t kept, for 6 hours or until Sleeve quits" : "Plays nothing into your history until Sleeve quits"}>
           <Switch label="Private Session" on={priv} onChange={(on) => usePrivate.setState({ on })} />
         </Row>
@@ -3411,11 +3567,8 @@ function Privacy() {
             <Switch label="Listening History" on={history} onChange={(history) => useSettings.setState({ history })} />
           </div>
         </Row>
-        <Row label="Clear Listening History" detail="Removes every play, and Recently Played on Home">
-          <button onClick={() => warn("Clear your listening history?", "Clear History", clearHistory, "Every play goes, and Recently Played on Home with it.")} className={quiet}>Clear…</button>
-        </Row>
       </div>
-      <p className="mt-6 max-w-xl text-sm leading-relaxed text-muted">Sleeve sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
+      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">Sleeve sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
     </>
   );
 }
@@ -3429,7 +3582,7 @@ function Startup() {
     void import("@tauri-apps/plugin-autostart").then((a) => (on ? a.enable() : a.disable())).then(() => setLogin(on), report);
   const isMac = /Mac/.test(navigator.userAgent);
   return (
-    <div className="divide-y divide-ink/10">
+    <div className={card}>
       <Row label="Open at Login" detail="Sleeve starts when you log in">
         <Switch label="Open at Login" on={!!login} onChange={toggleLogin} />
       </Row>
@@ -3465,20 +3618,32 @@ const LICENCES: [string, string][] = [
   ["Tailwind CSS", "MIT"],
 ];
 
+const openLink = (url: string) => void (canHaveFiles ? import("@tauri-apps/plugin-opener").then((o) => o.openUrl(url)) : window.open(url, "_blank", "noopener"));
+
 function About() {
   return (
     <div>
-      <div className="text-5xl font-extrabold tracking-[-0.04em]">Sleeve</div>
-      <div className="mt-2 text-muted">Version {version}</div>
-      <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={`${quiet} mt-6`}>Show the Welcome Again</button>
-      <section className="mt-10">
-        <h2 className="mb-1 text-xl font-bold tracking-tight">Licences</h2>
-        <p className="mb-3 text-sm text-muted">Sleeve is built on these open-source projects. Thank you.</p>
-        <div className="divide-y divide-ink/10">
+      <div className="flex flex-col items-center rounded-2xl bg-ink/[0.04] px-6 py-8 text-center">
+        <img src={appIcon} alt="" className="size-16 rounded-2xl" />
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-xl font-bold tracking-tight">Sleeve</span>
+          <span className="flex items-center gap-1.5 rounded-full bg-ink/[0.07] px-2 py-0.5 text-xs font-semibold tabular-nums"><span className="size-1.5 rounded-full bg-[#30d158]" />v{version}</span>
+        </div>
+        <p className="mt-1 text-[13px] text-muted">Your library from anywhere, in one free player.</p>
+        <div className="mt-5 flex flex-wrap justify-center gap-2">
+          <button onClick={() => openLink("https://github.com/mikec-1/Sleeve")} className={quiet}><CodeXml size={15} /> GitHub</button>
+          <button onClick={() => openLink("https://github.com/mikec-1/Sleeve/issues")} className={quiet}><LifeBuoy size={15} /> Report a Problem</button>
+          <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={quiet}>Show the Welcome Again</button>
+        </div>
+      </div>
+      <section className="mt-8">
+        <h3 className={`${subhead} mb-1`}>Licences</h3>
+        <p className="mb-3 text-xs text-muted">Sleeve is built on these open-source projects. Thank you.</p>
+        <div className={card}>
           {LICENCES.map(([name, licence]) => (
-            <div key={name} className="flex h-11 items-center justify-between gap-6">
-              <span>{name}</span>
-              <span className="text-sm text-muted">{licence}</span>
+            <div key={name} className="flex h-10 items-center justify-between gap-6">
+              <span className="text-[13px]">{name}</span>
+              <span className="text-xs text-muted">{licence}</span>
             </div>
           ))}
         </div>
@@ -3793,7 +3958,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
                 over === i && drag !== undefined && drag !== i ? (drag > i ? "shadow-[inset_0_2px_var(--color-accent)]" : "shadow-[inset_0_-2px_var(--color-accent)]") : ""
               }`}
             >
-              <button onClick={(e) => e.detail === 0 && onPlay(i)} onDoubleClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
+              <button onClick={(e) => e.detail === 0 && onPlay(i)} onDoubleClick={() => (useSettings.getState().doubleClick === "queue" ? enqueue([t], false) : onPlay(i))} aria-label={`Play ${t.title}`} className="hit" />
               {num && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
               <div className="flex min-w-0 items-center gap-3">
                 {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" draggable={false} className={`size-10 shrink-0 rounded-lg bg-ink/[0.06] object-cover ${dim ? "opacity-40" : ""}`} />}

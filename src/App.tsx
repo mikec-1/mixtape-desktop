@@ -1,16 +1,15 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, Volume2, VolumeX, WifiOff, X, type LucideIcon } from "lucide-react";
-import { audio, back, cycleRepeat, go, next, notify, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { audio, back, cycleRepeat, go, next, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { actionFor, comboFrom, findSearch, recording } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
 import { useAccount } from "./account";
 import { Welcome } from "./welcome";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { addFiles, canHaveFiles } from "./local";
-import { importLink, importPlaylistFile, isLink } from "./import";
+import { importCsvPaths, importLink, isLink } from "./import";
 import { art, type Track } from "./yt";
 
 // A picture that can't load (offline, say) leaves its grey tile rather than WebKit's broken-image mark;
@@ -84,10 +83,7 @@ export default function App() {
       if (e.type !== "drop") return;
       const { csv, songs } = sort(e.paths);
       if (songs.length) void addFiles(songs);
-      for (const p of csv) {
-        const name = p.split(/[\\/]/).pop()!;
-        await invoke<string>("read_text", { path: p }).then((text) => importPlaylistFile(new File([text], name))).catch((e) => notify({ text: "Couldn’t Import Playlist", detail: `${name}: ${e}` }));
-      }
+      void importCsvPaths(csv);
     });
     return () => void off.then((f) => f());
   }, []);

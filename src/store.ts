@@ -5,8 +5,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { art, details, fetchAudio, playAudio, radio, searchKind, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
-import type { Review } from "./import";
-import { youtubeId } from "./deezer";
+import { foundWhenPlayed, youtubeId } from "./deezer";
 import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
 
 type Root = "home" | "search" | "library" | "settings";
@@ -41,7 +40,7 @@ type State = {
 export type Dialog =
   | { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track }
   | { kind: "card"; track: Track; pick: number[] }
-  | { kind: "import"; playlist?: string; name: string; added: number; items: Review[] } // no playlist: Liked Songs
+  | { kind: "versions"; track: Track }
   | { kind: "songs"; paths: string[]; editing?: boolean }
   | { kind: "warn"; title: string; text: string; yes: string; then: () => void }
   | { kind: "link" }
@@ -163,12 +162,6 @@ export const toggleFollow = (a: Followed) =>
   change(has(useLibrary.getState().followed, a.id) ? "Unfollowed" : "Following", { title: a.name, thumb: a.thumb }, (s) => ({ followed: toggleIn(s.followed, a) }));
 export const addToPlaylist = (id: string, tracks: Track[]) =>
   change(`Added to ${playlist(id)?.name}`, tracks[0], edit(id, (p) => ({ tracks: [...p.tracks, ...tracks.map(entry)] })));
-// The import review's choices, in a playlist or (no id) Liked Songs: each guess swapped for the chosen song
-// (or dropped), then the found ones added.
-export const fixImport = (id: string | undefined, swap: Map<string, Track | undefined>, add: Track[]) => {
-  const fix = (ts: Track[]) => [...ts.flatMap((t) => (!swap.has(t.id) ? [t] : swap.get(t.id) ? [entry(swap.get(t.id)!)] : [])), ...add.map(entry)];
-  change(`Updated ${id ? playlist(id)?.name : "Liked Songs"}`, add[0], id ? edit(id, (p) => ({ tracks: fix(p.tracks) })) : (s) => ({ liked: fix(s.liked) }));
-};
 export const removeFromPlaylist = (id: string, at: number[]) =>
   change(`Removed from ${playlist(id)?.name}`, at.length > 1 ? { title: plural(at.length, "song"), thumb: playlist(id)?.tracks[at[0]]?.thumb } : playlist(id)?.tracks[at[0]], edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => !at.includes(i)) })));
 // Rows picked together move together, in their order, to either side of the one they're dropped on.
@@ -267,7 +260,8 @@ export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" :
 // Songs from some lists come without an album or a length (a music video has neither), and ones kept
 // before artists were read properly can have two in one ("Jazeek & Luciano"). Each is looked up once a
 // launch, two at a time, from its own entry on YT Music, and the answer written back wherever it's kept.
-const needsFill = (t: Track) => !t.file && (t.album === undefined || !t.duration || (!t.albumId && t.artists.some((a) => SEP.test(a.name))));
+// Songs found on YouTube when played (deezer.ts) have no entry there to read.
+const needsFill = (t: Track) => !t.file && !foundWhenPlayed(t.id) && (t.album === undefined || !t.duration || (!t.albumId && t.artists.some((a) => SEP.test(a.name))));
 const asked = new Set<string>();
 const toFill: Track[] = [];
 let filling = 0;
@@ -283,9 +277,10 @@ async function fillNext() {
   }
   filling--;
 }
-// Changes a song wherever it's kept: your lists, the queue, recently played.
-export function patch(id: string, p: Partial<Track>) {
-  const fix = (list: Track[]) => (list.some((x) => x.id === id) ? list.map((x) => (x.id === id ? { ...x, ...p } : x)) : list);
+// Changes songs wherever they're kept: your lists, the queue, recently played.
+export const patch = (id: string, p: Partial<Track>) => patchAll(new Map([[id, p]]));
+export function patchAll(ps: Map<string, Partial<Track>>) {
+  const fix = (list: Track[]) => (list.some((x) => ps.has(x.id)) ? list.map((x) => (ps.has(x.id) ? { ...x, ...ps.get(x.id) } : x)) : list);
   const l = useLibrary.getState();
   const liked = fix(l.liked), hidden = fix(l.hidden), playlists = l.playlists.map((pl) => ((t) => (t === pl.tracks ? pl : { ...pl, tracks: t }))(fix(pl.tracks)));
   if (liked !== l.liked || hidden !== l.hidden || playlists.some((pl, i) => pl !== l.playlists[i])) lib({ liked, hidden, playlists });
@@ -460,6 +455,13 @@ function fetchCached({ id, ...t }: Track) {
   if (cache.size > 4) cache.delete(cache.keys().next().value!);
   p.catch(() => cache.delete(id));
   return p;
+}
+// A song pinned to another version (deezer.ts pin): its old audio goes, and if it's the one on, it goes on
+// from the same place in the new one.
+export function replay(id: string) {
+  cache.delete(id);
+  if (ready?.id === id) ready = undefined;
+  if (get().queue[get().index]?.id === id) void load(get().index, audio.currentTime);
 }
 const prefetch = () => {
   const t = get().queue[nextIndex(get().index)];

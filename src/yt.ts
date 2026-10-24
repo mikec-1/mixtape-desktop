@@ -41,8 +41,9 @@ export type Album = { id: string; title: string; year?: string; by?: string; thu
 // downloaded song's artwork (offline.ts sets covers.local) comes from disk instead, at any size.
 export const covers: { local?: (url: string, w: number) => string | undefined } = {};
 export const artBase = (url: string) => url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, "");
-// Deezer's covers take any size in the path (/1000x1000-000000-80-0-0.jpg).
-export const sizedArt = (url: string, w: number, h = w) => (url.includes("dzcdn.net") ? url.replace(/\/\d+x\d+-/, `/${w}x${h}-`) : url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, `=w${w}-h${h}-l90-rj`));
+// Deezer's covers take any size in the path (/1000x1000-000000-80-0-0.jpg); Spotify's come at 640, 300
+// and 64 (the code before the picture's id).
+export const sizedArt = (url: string, w: number, h = w) => (url.includes("dzcdn.net") ? url.replace(/\/\d+x\d+-/, `/${w}x${h}-`) : url.includes("i.scdn.co") ? (w <= 300 ? url.replace("ab67616d0000b273", "ab67616d00001e02") : url) : url.replace(/=(w\d+-h\d+|s\d+)[^/]*$/, `=w${w}-h${h}-l90-rj`));
 export const art = (url: string | undefined, w: number, h = w) => url && (covers.local?.(url, w) ?? sizedArt(url, w, h));
 
 // YT Music links only the artists it has a page for; the rest are plain text in the same line ("Jazeek &

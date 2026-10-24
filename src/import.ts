@@ -1,12 +1,15 @@
+import { invoke } from "@tauri-apps/api/core";
+import { open as choose } from "@tauri-apps/plugin-dialog";
 import { fetch } from "@tauri-apps/plugin-http";
 import { searchKind, searchYouTube, parseSecs, SEP, type Track } from "./yt";
-import { likeAll, newPlaylist, notify, open, plural, useStore, type Dialog, type View } from "./store";
-import { playlist as dzPlaylist } from "./deezer";
+import { likeAll, newPlaylist, notify, open, plural, useStore, type View } from "./store";
+import { covers, length, playlist as dzPlaylist } from "./deezer";
 
-// A song the import wasn't sure of (pick: the guess it added) or didn't find, with the next best results to choose from.
-export type Review = { row: CsvTrack; pick?: Track; options: Track[] };
-
-export type CsvTrack = { title: string; artist: string; album?: string; secs?: number; isrc?: string };
+// id: Spotify's (sp:…) when the list has it, so it's the same song as one brought over by signing in.
+export type CsvTrack = { title: string; artist: string; album?: string; secs?: number; isrc?: string; id?: string; thumb?: string; explicit?: boolean };
+export const rowOf = (t: Track): CsvTrack => ({ title: t.title, artist: t.artists.map((a) => a.name).join(", "), album: t.album, secs: parseSecs(t.duration), isrc: t.isrc });
+// A Spotify track id from a URI, a link or on its own (22 letters and digits).
+const spotifyId = (s?: string) => s?.trim().match(/(?:^|[:/])([A-Za-z0-9]{22})$/)?.[1];
 
 // RFC 4180: quoted fields, "" escapes, CRLF or LF.
 export function parseCsv(text: string): string[][] {
@@ -38,15 +41,16 @@ export function parsePlaylistCsv(text: string): CsvTrack[] {
   const title = col("track name", "title", "song", "name");
   const artist = col("artist name(s)", "artist name", "artist", "artists");
   const album = col("album name", "album");
-  const dur = col("duration (ms)", "duration (s)", "duration", "length");
-  const isrc = col("isrc");
+  const dur = col("duration (ms)", "track duration (ms)", "duration (s)", "duration", "length");
+  const isrc = col("isrc"), uri = col("track uri", "spotify - id", "spotify id"), image = col("album image url"), explicit = col("explicit");
   if (title < 0 || artist < 0) return [];
   return rows.flatMap((r) => {
     const t = r[title]?.trim(), a = r[artist]?.trim();
     if (!t || !a) return [];
     const d = r[dur]?.trim() ?? "", n = Number(d);
     const secs = n > 0 ? Math.round(n > 1000 ? n / 1000 : n) : parseSecs(d);
-    return [{ title: t, artist: a, album: r[album]?.trim() || undefined, secs, isrc: r[isrc]?.trim() || undefined }];
+    const sp = spotifyId(r[uri]);
+    return [{ title: t, artist: a, album: r[album]?.trim() || undefined, secs, isrc: r[isrc]?.trim() || undefined, id: sp && `sp:${sp}`, thumb: r[image]?.trim() || undefined, explicit: r[explicit] === "true" }];
   });
 }
 
@@ -144,8 +148,10 @@ async function retry<T>(run: () => Promise<T>, waits = [2000, 6000, 15000]): Pro
   return run();
 }
 
-// Cheapest search first: ISRC, songs, music videos, the second credited artist, then all of YouTube.
-async function find(row: CsvTrack, cache: Map<string, Promise<Track[]>>) {
+// A song's copy on YouTube (deezer.ts youtubeId), cheapest search first: ISRC, songs, music videos, the
+// second credited artist, then all of YouTube.
+export async function findSong(row: CsvTrack) {
+  const cache = new Map<string, Promise<Track[]>>();
   const artists = rowArtists(row.artist);
   const q = (a = artists[0] ?? row.artist) => `${bareTitle(row.title)} ${a}`;
   const steps: [keyof typeof SEARCH, string | undefined][] = [["song", row.isrc], ["song", q()], ["video", q()], ["song", artists[1] && q(artists[1])], ["youtube", q()]];
@@ -156,27 +162,26 @@ async function find(row: CsvTrack, cache: Map<string, Promise<Track[]>>) {
   };
   // The ISRC and the plain song search go out together, as one or the other almost always hits.
   if (row.isrc) void get(steps[1]);
-  const seen = new Map<string, Track>();
   let guess: Track | undefined;
   for (const step of steps) {
     if (!step[1]) continue;
-    const results = await get(step);
-    for (const c of results) seen.set(c.id, c);
-    const hit = best(row, results);
+    const hit = best(row, await get(step));
     // Found by its artist: done. Found by a long title alone: keep it, but look on for the artist's own.
-    if (hit && byArtist(row, hit)) return { hit: toTrack(row, hit), sure: true, options: [] };
+    if (hit && byArtist(row, hit)) return toTrack(row, hit);
     guess ??= hit;
   }
-  const options = [...seen.values()]
-    .filter((c) => c.id !== guess?.id)
+  return guess && toTrack(row, guess);
+}
+// Every copy the searches turn up, likeliest first, for picking another when it plays the wrong version.
+export async function versions(t: Track) {
+  const row = rowOf(t), q = `${bareTitle(row.title)} ${rowArtists(row.artist)[0] ?? row.artist}`;
+  const got = await Promise.all([row.isrc ? searchKind(row.isrc, "song") : [], searchKind(q, "song"), searchKind(q, "video")].map((p) => Promise.resolve(p).catch(() => [] as Track[])));
+  return [...new Map(got.flat().map((c) => [c.id, c])).values()]
     .map((c, i) => [c, score(row, c, i) + (matches(row, c) ? 0 : 200)] as const)
     .sort((a, b) => a[1] - b[1])
-    .slice(0, 3)
-    .map(([c]) => toTrack(row, c));
-  return { hit: guess && toTrack(row, guess), sure: false, options };
+    .slice(0, 8)
+    .map(([c]) => c);
 }
-// One song's YouTube copy, for songs from Deezer (deezer.ts youtubeId).
-export const findSong = (row: CsvTrack) => find(row, new Map()).then((r) => r.hit);
 const byArtist = (row: CsvTrack, c: Track) => {
   const hay = squash(norm(`${c.title} ${c.artists.map((a) => a.name).join(" ")}`));
   return rowArtists(row.artist).some((a) => words(a).every((w) => hay.includes(w)));
@@ -198,28 +203,19 @@ export async function pool<T, R>(items: T[], fn: (x: T) => Promise<R>, each: (do
   );
   return out;
 }
-// Matches rows; throttled searches are retried in find, so a miss is a real miss.
-function matchAll(rows: CsvTrack[], each: (done: number, got?: { hit?: Track }) => void, stopped = () => false) {
-  const cache = new Map<string, Promise<Track[]>>();
-  return pool(rows, (row) => find(row, cache).catch(() => ({ hit: undefined, sure: false, options: [] as Track[] })), each, stopped);
-}
-
-// Search again for the ones still not found, e.g. after YouTube stopped throttling.
-export async function rematch(items: Review[]): Promise<(Review & { found: boolean })[]> {
-  const got = await matchAll(items.map((r) => r.row), () => {});
-  return items.map((r, i) => {
-    const { hit, options = [] } = got[i] ?? {};
-    return { row: r.row, found: !!hit, options: hit ? [hit, ...options].slice(0, 3) : options.length ? options : r.options };
-  });
-}
-
-let cancel: (() => void) | undefined;
-
 export async function importPlaylistFile(file: File) {
   const rows = parsePlaylistCsv(await file.text());
   if (!rows.length) return notify({ text: "Couldn’t Import Playlist", detail: `${file.name} has no title and artist columns` });
   return importRows(file.name.replace(/\.[^.]+$/, "") || "Imported Playlist", rows);
 }
+export async function importCsvPaths(paths: string[]) {
+  for (const p of paths) {
+    const name = p.split(/[\\/]/).pop()!;
+    await invoke<string>("read_text", { path: p }).then((text) => importPlaylistFile(new File([text], name))).catch((e) => notify({ text: "Couldn’t Import Playlist", detail: `${name}: ${e}` }));
+  }
+}
+// The system's own picker, as the webview's lets any file through on macOS.
+export const pickPlaylists = () => choose({ filters: [{ name: "Playlists", extensions: ["csv"] }], multiple: true, title: "Import Playlist" }).then((ps) => importCsvPaths(ps ?? []), () => {});
 
 // Playlists and albums from a link. Spotify's and Apple Music's own pages list the songs (Spotify's embed only
 // the first 100), which are then matched like a CSV; Deezer's come as they are, and YouTube Music's just open.
@@ -247,12 +243,12 @@ export async function readLink(text: string): Promise<Linked | undefined> {
     if (kind === "playlist") return dzPlaylist(id);
   } else if (url.host === "open.spotify.com" && id && (kind === "playlist" || kind === "album")) {
     const e = script(await page(`https://open.spotify.com/embed/${kind}/${id}`), "__NEXT_DATA__")?.props?.pageProps?.state?.data?.entity;
-    if (e?.trackList?.length) return { name: e.name, cover: e.coverArt?.sources?.[0]?.url ?? e.visualIdentity?.image?.reduce((a: { maxWidth: number }, b: { maxWidth: number }) => (b.maxWidth > a.maxWidth ? b : a))?.url, rows: e.trackList.map((t: { title: string; subtitle: string; duration: number }) => ({ title: t.title, artist: t.subtitle, album: kind === "album" ? e.name : undefined, secs: Math.round(t.duration / 1000) })) };
+    if (e?.trackList?.length) return { name: e.name, cover: e.coverArt?.sources?.[0]?.url ?? e.visualIdentity?.image?.reduce((a: { maxWidth: number }, b: { maxWidth: number }) => (b.maxWidth > a.maxWidth ? b : a))?.url, rows: e.trackList.map((t: { uri?: string; title: string; subtitle: string; duration: number }) => ({ title: t.title, artist: t.subtitle, album: kind === "album" ? e.name : undefined, secs: Math.round(t.duration / 1000), id: spotifyId(t.uri) && `sp:${spotifyId(t.uri)}` })) };
   } else if (url.host === "music.apple.com" && /^(playlist|album)$/.test(kind)) {
     type Link = { title: string };
     const sections: { itemKind: string; items: any[] }[] = script(await page(url.href), "serialized-server-data")?.data?.[0]?.data?.sections ?? [];
     const head = sections[0]?.items[0], by = head?.subtitleLinks?.map((l: Link) => l.title).join(", ");
-    const rows = sections.filter((s) => s.itemKind === "trackLockup").flatMap((s) => s.items).map((t) => ({ title: t.title, artist: t.subtitleLinks?.map((l: Link) => l.title).join(", ") || by, album: t.tertiaryLinks?.[0]?.title ?? (kind === "album" ? head.title : undefined), secs: Math.round(t.duration / 1000) }));
+    const rows = sections.filter((s) => s.itemKind === "trackLockup").flatMap((s) => s.items).map((t) => ({ title: t.title, artist: t.subtitleLinks?.map((l: Link) => l.title).join(", ") || by, album: t.tertiaryLinks?.[0]?.title ?? (kind === "album" ? head.title : undefined), secs: Math.round(t.duration / 1000), thumb: t.artwork?.dictionary?.url?.replace("{w}x{h}bb.{f}", "300x300bb.jpg") }));
     if (rows.length) return { name: head.title, cover: head.artwork?.dictionary?.url?.replace("{w}x{h}bb.{f}", "600x600bb.jpg"), rows };
   }
 }
@@ -270,35 +266,26 @@ export async function importLink(text: string) {
   }
 }
 
-// Reviews wait their turn (several playlists from Spotify): the next opens when the last one closes.
-// Watched from the first one on, not at load: store.ts reaches this file (through deezer.ts) before it's done.
-const waiting: Dialog[] = [];
-let watching: (() => void) | undefined;
-const later = (d: Dialog) => (waiting.push(d), (watching ??= useStore.subscribe((s) => !s.dialog && waiting.length && useStore.setState({ dialog: waiting.shift() }))));
-
-// Matches rows into a new playlist, or with liked into Liked Songs (cover is then only the toast's). Resolves true if it was cancelled.
-export async function importRows(name: string, rows: CsvTrack[], cover?: string, liked = false) {
-  cancel?.();
-  let stopped = false;
-  const stop = (cancel = () => (stopped = true));
-  const action = { label: "Cancel", run: stop };
-  let shown = 0;
-  const progress = (done: number, got?: { hit?: Track }) => Date.now() - shown > 250 && !stopped && ((shown = Date.now()), notify({ text: `Importing ${name}…`, detail: `${done} of ${rows.length} songs`, action, sticky: true, thumb: cover ?? got?.hit?.thumb }));
-  progress(0);
-  const found = await matchAll(rows, progress, () => stopped);
-  if (cancel === stop) cancel = undefined;
-
-  const tracks = found.flatMap((f) => (f?.hit ? [f.hit] : []));
-  const review: Review[] = found.flatMap((f, i) => (f && !f.sure ? [{ row: rows[i], pick: f.hit, options: f.options }] : []));
-  if (liked && tracks.length) likeAll(tracks, true);
-  const id = liked ? undefined : tracks.length ? newPlaylist(tracks, undefined, name, cover) : undefined;
-  if (stopped) return notify({ text: "Import Cancelled", detail: tracks.length ? `Saved ${tracks.length} songs to ${name}` : "No songs were imported", thumb: cover ?? tracks[0]?.thumb }), true;
-  if (!review.length) return notify({ text: `Imported ${name}`, detail: plural(tracks.length, "song"), thumb: cover ?? tracks[0]?.thumb }), false;
-  const d: Dialog = { kind: "import", playlist: liked ? undefined : (id ?? newPlaylist([], undefined, name, cover)), name, added: tracks.length, items: review };
-  useStore.setState({ toast: undefined });
-  if (useStore.getState().dialog) later(d);
-  else useStore.setState({ dialog: d });
-  return false;
+// A song as the list has it, found on YouTube the first time it's played (deezer.ts youtubeId), as Mixtape
+// does, so a list of any length comes over at once.
+const asIs = (r: CsvTrack): Track => ({
+  id: r.id ?? `csv:${squash(norm(r.title))}:${squash(norm(rowArtists(r.artist).join(" ")))}`,
+  title: r.title,
+  artists: rowArtists(r.artist).map((name) => ({ name })),
+  album: r.album ?? "",
+  ...(r.thumb && { thumb: r.thumb }),
+  ...(r.secs && { duration: length(r.secs) }),
+  ...(r.explicit && { explicit: true as const }),
+  ...(r.isrc && { isrc: r.isrc }),
+});
+// Rows into a new playlist, or with liked into Liked Songs (cover is then only the toast's). Covers for songs
+// without one come in after.
+export function importRows(name: string, rows: CsvTrack[], cover?: string, liked = false) {
+  const tracks = rows.map(asIs);
+  if (liked) likeAll(tracks, true);
+  else newPlaylist(tracks, undefined, name, cover);
+  notify({ text: `Imported ${name}`, detail: plural(tracks.length, "song"), thumb: cover ?? tracks.find((t) => t.thumb)?.thumb });
+  void covers(tracks);
 }
 
 export function demo() {
@@ -320,6 +307,7 @@ export function demo() {
   const ok = (c: boolean, what: string) => { if (!c) throw new Error(what); };
   ok(rows.length === 9 && rows[0].title === "The Less I Know, The Better" && rows[0].secs === 216 && rows[0].isrc === "AUUM71500303", "csv");
   ok(bareTitle(rows[6].title) === "Boss Orange", "bareTitle");
+  ok(["spotify:track:4cOdK2wGLETKBW3PvgPWqT", "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"].every((u) => spotifyId(u) === "4cOdK2wGLETKBW3PvgPWqT") && !spotifyId("abc"), "spotify id");
   ok(!best(rows[1], [t("Tyga - Ice Cream (Official Music Video)", "Tyga")]), "rejects the wrong Ice Cream");
   ok(!!best(rows[2], [t("Blame (feat. John Newman)", "Calvin Harris", "3:32")]), "Blame");
   ok(!!best(rows[3], [t("Pashanim - 2019 (justbars rmx)", "Pashanim Nulldreinull", "1:44")]), "2019");

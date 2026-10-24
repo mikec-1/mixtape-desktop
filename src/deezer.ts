@@ -1,6 +1,7 @@
 import { fetch } from "@tauri-apps/plugin-http";
-import { findSong } from "./import";
-import { parseSecs, type Artist, type Collection, type Track } from "./yt";
+import { findSong, rowOf } from "./import";
+import { patch, patchAll, replay } from "./store";
+import type { Artist, Collection, Track } from "./yt";
 
 // Albums saved from Deezer (when artist pages came from there) still open from it, as in Mixtape. A song
 // from here only goes to YouTube when it's played (youtubeId).
@@ -83,18 +84,52 @@ export async function playlist(id: string) {
 export const withGuests = (tracks: Track[]) =>
   Promise.all(tracks.map((t) => (isDeezer(t.id) ? get(`track/${t.id.slice(3)}`).then((d: DzTrack) => (d.contributors && d.contributors.length > 1 ? { ...t, artists: d.contributors.map(who) } : t), () => t) : t)));
 
-// A song from Deezer or Spotify plays from its copy on YouTube, found the way a CSV import finds songs, the
-// first time it's played or queued up next, and remembered.
+// A song from Deezer, Spotify or a CSV plays from its copy on YouTube, found the first time it's played or
+// queued up next, and remembered; one without a cover takes the copy's. Any song can be pinned to another
+// version (Wrong Version…).
 const found: Record<string, string> = JSON.parse(localStorage.youtubeIds ?? "{}");
 const finding = new Map<string, Promise<string>>();
+const keep = (id: string, yt: string) => ((found[id] = yt), (localStorage.youtubeIds = JSON.stringify(found)));
+export const foundWhenPlayed = (id: string) => /^(dz|sp|csv):/.test(id);
 export function youtubeId(t: Track): Promise<string> {
-  if (!/^(dz|sp):/.test(t.id) || found[t.id]) return Promise.resolve(found[t.id] ?? t.id);
+  if (!foundWhenPlayed(t.id) || found[t.id]) return Promise.resolve(found[t.id] ?? t.id);
   if (!finding.has(t.id))
     finding.set(
       t.id,
-      findSong({ title: t.title, artist: t.artists.map((a) => a.name).join(", "), album: t.album, secs: parseSecs(t.duration), isrc: t.isrc })
-        .then((hit) => (hit ? ((found[t.id] = hit.id), (localStorage.youtubeIds = JSON.stringify(found)), hit.id) : Promise.reject(new Error(`Couldn’t find “${t.title}” on YouTube`))))
+      findSong(rowOf(t))
+        .then((hit) => (hit ? (keep(t.id, hit.id), !t.thumb && hit.thumb && patch(t.id, { thumb: hit.thumb }), hit.id) : Promise.reject(new Error(`Couldn’t find “${t.title}” on YouTube`))))
         .finally(() => finding.delete(t.id)),
     );
   return finding.get(t.id)!;
+}
+export const pin = (t: Track, yt: string) => (keep(t.id, yt), replay(t.id));
+
+// Covers (and lengths) for songs that came without them (a CSV), by ISRC, three calls out at a time so
+// others still get in. The songs on screen go first (onScreen: replacing the last screen's) and are drawn
+// as soon as they're in; the rest are written a few seconds' worth at a time, so a big list isn't redrawn
+// and saved for every song.
+let screen: Track[] = [], workers = 0, flush: ReturnType<typeof setTimeout> | undefined, due = Infinity;
+const rest: Track[] = [], tried = new Set<string>(), got = new Map<string, Partial<Track>>();
+const save = (ms: number) => {
+  if (Date.now() + ms >= due) return;
+  clearTimeout(flush), (due = Date.now() + ms);
+  flush = setTimeout(() => (patchAll(new Map(got)), got.clear(), (due = Infinity)), ms);
+};
+async function coverNext() {
+  workers++;
+  for (;;) {
+    const soon = screen.length > 0, t = screen.shift() ?? rest.shift();
+    if (!t) break;
+    if (tried.has(t.id)) continue;
+    tried.add(t.id);
+    const d: DzTrack | undefined = await get(`track/isrc:${t.isrc}`).catch(() => undefined);
+    if (d?.album?.cover_xl) got.set(t.id, { thumb: d.album.cover_xl, ...(!t.duration && d.duration && { duration: length(d.duration) }) }), save(soon ? 150 : 5000);
+  }
+  workers--;
+}
+export function covers(tracks: Track[], onScreen = false) {
+  const need = tracks.filter((t) => !t.thumb && t.isrc && !tried.has(t.id));
+  if (onScreen) screen = need;
+  else rest.push(...need);
+  while (workers < 3 && (screen.length || rest.length)) void coverNext();
 }

@@ -140,7 +140,7 @@ export async function importSpotify(pick: Pick) {
       if (songs) songs.length && newPlaylist(songs, undefined, p.name, pic(p));
       else {
         const l = await readLink(`https://open.spotify.com/playlist/${p.id}`).catch(() => undefined);
-        if (l && "rows" in l && l.rows.length && (await importRows(p.name, l.rows, pic(p)))) return;
+        if (l && "rows" in l && l.rows.length) importRows(p.name, l.rows, pic(p));
       }
     }
     if (pick.playlists.length) brought.push(plural(pick.playlists.length, "playlist"));

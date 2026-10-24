@@ -5,14 +5,14 @@ import { type LucideIcon, TriangleAlert, ChevronRight, ListMusic, SlidersHorizon
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
-  copyPlaylist, fixImport, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
+  copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
   shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
   useRecentSearches, addRecentSearch, idbGet, idbPut, idbBytes, idbDelete, deleteAllPlaylists, clearLibrary, resetSettings,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, isRtl, lineNow, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { albumByName, art, artist, artistByName, charts, collection as ytCollection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
-import { album as deezerAlbum, isDeezer, withGuests } from "./deezer";
+import { album as deezerAlbum, covers as coversFor, isDeezer, pin, withGuests, youtubeId } from "./deezer";
 import { addFolder, canHaveFiles, guessTags, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
@@ -21,7 +21,7 @@ import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCom
 import { version } from "../package.json";
 import appIcon from "../src-tauri/icons/128x128@2x.png";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
-import { importLink, importPlaylistFile, isLink, rematch } from "./import";
+import { importLink, importPlaylistFile, isLink, pickPlaylists, versions } from "./import";
 import { connect, contents, disconnect, importSpotify, useSpotify } from "./spotify";
 
 // An album from Deezer (artist pages) or YouTube Music (search, Home).
@@ -245,7 +245,7 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
           ...(q < queue.length - 1 ? [{ text: "Move Down", action: () => moveInQueue(q, q + 1) }] : []),
           { text: "Remove from Queue", action: () => removeFromQueue(q) },
         ]),
-    ...(t.file ? [] : [{ text: "Start Radio", action: () => startRadio(t) }]),
+    ...(t.file ? [] : [{ text: "Start Radio", action: () => startRadio(t) }, { text: "Wrong Version…", action: () => useStore.setState({ dialog: { kind: "versions", track: t } }) }]),
     ...(t.file
       ? [
           { text: "Edit Song Info…", action: () => useStore.setState({ dialog: { kind: "songs", paths: [t.file!], editing: true } }) },
@@ -2232,7 +2232,7 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "import" ? <ImportReview d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "versions" ? <Versions d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
 
@@ -2449,80 +2449,41 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
   );
 }
 
-// After an import: the songs it guessed at or couldn't find, each with up to three results to choose
-// from (play one to check it). Nothing changes until Done.
-function ImportReview({ d }: { d: Extract<Dialog, { kind: "import" }> }) {
-  const [items, setItems] = useState(d.items);
-  const [chosen, setChosen] = useState(() => new Map(d.items.map((r, i) => [i, r.pick])));
-  const [busy, setBusy] = useState(false);
-  const missing = items.filter((r) => !r.pick).length;
-  const choose = (i: number, t?: Track) => setChosen((m) => new Map(m).set(i, m.get(i)?.id === t?.id ? undefined : t));
-  // Found ones come back as choices, the find already chosen; the playlist only changes on Done.
-  const searchAgain = async () => {
-    setBusy(true);
-    const lost = items.flatMap((r, i) => (r.pick ? [] : [i]));
-    const got = await rematch(lost.map((i) => items[i]));
-    setItems((all) => all.map((r, i) => (lost.includes(i) ? got[lost.indexOf(i)] : r)));
-    setChosen((m) => new Map([...m, ...lost.flatMap((i, k) => (got[k].options[0] && got[k].found ? [[i, got[k].options[0]] as const] : []))]));
-    setBusy(false);
-  };
-  const done = () => {
-    const swap = new Map<string, Track | undefined>(), add: Track[] = [];
-    items.forEach((r, i) => {
-      const t = chosen.get(i);
-      if (r.pick) t?.id !== r.pick.id && swap.set(r.pick.id, t);
-      else if (t) add.push(t);
-    });
-    if (swap.size || add.length) fixImport(d.playlist, swap, add);
-    closeDialog();
-  };
+// Right-click → Wrong Version…: other copies of the song on YouTube (play one to check it). Picking one keeps
+// it for this song from then on.
+function Versions({ d }: { d: Extract<Dialog, { kind: "versions" }> }) {
+  const t = d.track, { data, loading } = useAsync(() => versions(t), [t.id]);
+  const [now, setNow] = useState<string>();
+  useEffect(() => void youtubeId(t).then(setNow, () => {}), [t.id]);
   return (
-    <Modal label="Review Import" onClose={closeDialog} className="flex max-h-[86vh] w-[min(680px,94vw)] flex-col">
+    <Modal label="Pick the Right Version" onClose={closeDialog} className="flex max-h-[86vh] w-[min(520px,94vw)] flex-col">
       <header className="px-6 pt-5">
-        <h2 className="text-xl font-bold tracking-tight">Review Import</h2>
-        <p className="text-sm text-muted">
-          {d.added} added to {d.name}. {items.length - missing > 0 && `${items.length - missing} to check. `}
-          {missing > 0 && `${missing} not found.`}
-          {!items.length && "Every song was found."}
-        </p>
+        <h2 className="text-xl font-bold tracking-tight">Pick the Right Version</h2>
+        <p className="truncate text-sm text-muted">{t.title} · {t.artists.map((a) => a.name).join(", ")}</p>
       </header>
-      <ol className="@container mt-3 min-h-0 flex-1 divide-y divide-ink/10 overflow-y-auto px-6">
-        {items.map((r, i) => (
-          <li key={i} className="py-3">
-            <div className="flex items-baseline gap-2">
-              <span className="truncate font-semibold select-text">{r.row.title}</span>
-              <span className="truncate text-sm text-muted select-text">{r.row.artist}</span>
-              <span className="ml-auto shrink-0 text-xs font-semibold text-muted">{r.pick ? "Best Guess" : "Not Found"}</span>
+      <div className="mt-3 grid min-h-0 flex-1 content-start gap-1.5 overflow-y-auto px-6">
+        {loading && <p className="text-sm text-muted">Searching…</p>}
+        {!loading && !data?.length && <p className="text-sm text-muted">No other versions found.</p>}
+        {data?.map((v) => {
+          const on = now === v.id;
+          return (
+            <div key={v.id} className={`group relative flex items-center gap-2.5 rounded-xl p-1.5 ${on ? "bg-accent/15 ring-1 ring-accent" : "bg-ink/[0.05] hover:bg-ink/[0.09]"}`}>
+              <button onClick={() => (setNow(v.id), pin(t, v.id))} aria-pressed={on} aria-label={`Use ${v.title} by ${v.artists[0]?.name}`} className="hit" />
+              <button onClick={() => play([v], 0)} aria-label={`Play ${v.title}`} className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
+                <img src={art(v.thumb, 80)} alt="" className="absolute inset-0 size-full object-cover" />
+                <Play size={14} className="relative fill-white text-white opacity-0 drop-shadow group-hover:opacity-100" />
+              </button>
+              <div className="pointer-events-none min-w-0 flex-1 text-sm">
+                <div className="truncate font-semibold">{v.title}</div>
+                <div className="truncate text-muted">{[v.artists.map((a) => a.name).join(", "), v.album, v.duration].filter(Boolean).join(" · ")}</div>
+              </div>
+              {on && <Check size={16} className="pointer-events-none mr-1 shrink-0 text-accent" />}
             </div>
-            <div className="mt-2 grid gap-1.5 @xl:grid-cols-3">
-              {[...(r.pick ? [r.pick] : []), ...r.options].map((t) => {
-                const on = chosen.get(i)?.id === t.id;
-                return (
-                  <div key={t.id} className={`group relative flex items-center gap-2.5 rounded-xl p-1.5 ${on ? "bg-accent/15 ring-1 ring-accent" : "bg-ink/[0.05] hover:bg-ink/[0.09]"}`}>
-                    <button onClick={() => choose(i, t)} aria-pressed={on} aria-label={`Use ${t.title} by ${t.artists[0]?.name}`} className="hit" />
-                    <button onClick={() => play([t], 0)} aria-label={`Play ${t.title}`} className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
-                      <img src={art(t.thumb, 80)} alt="" className="absolute inset-0 size-full object-cover" />
-                      <Play size={14} className="relative fill-white text-white opacity-0 drop-shadow group-hover:opacity-100" />
-                    </button>
-                    <div className="pointer-events-none min-w-0 flex-1 text-sm">
-                      <div className="truncate font-semibold">{t.title}</div>
-                      <div className="truncate text-muted">{[t.artists.map((a) => a.name).join(", "), t.duration].filter(Boolean).join(" · ")}</div>
-                    </div>
-                    {on && <Check size={16} className="pointer-events-none mr-1 shrink-0 text-accent" />}
-                  </div>
-                );
-              })}
-              {!r.pick && !r.options.length && <p className="text-sm text-muted">No results.</p>}
-            </div>
-          </li>
-        ))}
-      </ol>
-      <footer className="flex items-center gap-2 px-6 py-4">
-        {missing > 0 && <button onClick={searchAgain} disabled={busy} className={quiet}>{busy ? "Searching…" : "Search Again"}</button>}
-        <div className="ml-auto flex gap-2">
-          <button onClick={closeDialog} className={quiet}>Cancel</button>
-          <button onClick={done} className={solid}>Done</button>
-        </div>
+          );
+        })}
+      </div>
+      <footer className="flex justify-end px-6 py-4">
+        <button onClick={closeDialog} className={solid}>Done</button>
       </footer>
     </Modal>
   );
@@ -3304,7 +3265,7 @@ function LibraryPane() {
         )}
         <Row label="Import a Playlist" detail="A CSV file, or a link to a playlist on another service">
           <div className="flex gap-2">
-            <button onClick={() => csvFile.current?.click()} className={quiet}><Upload size={16} /> File…</button>
+            <button onClick={() => (canHaveFiles ? void pickPlaylists() : csvFile.current?.click())} className={quiet}><Upload size={16} /> File…</button>
             <button onClick={() => useStore.setState({ dialog: { kind: "link" } })} className={quiet}><Link2 size={16} /> Link…</button>
           </div>
         </Row>
@@ -3784,7 +3745,9 @@ export function QueuePanel() {
           </>
         )}
         <h3 className={heading}>Next Up</h3>
-        {rest.length ? <ol>{rest.map((t, i) => row(t, index + 1 + added + i))}</ol> : <p className="px-3 text-sm text-muted">When the queue ends, similar songs play.</p>}
+        {/* The next hundred, so a queue of thousands opens at once. */}
+        {rest.length ? <ol>{rest.slice(0, 100).map((t, i) => row(t, index + 1 + added + i))}</ol> : <p className="px-3 text-sm text-muted">When the queue ends, similar songs play.</p>}
+        {rest.length > 100 && <p className="px-3 pt-2 text-sm text-muted">{plural(rest.length - 100, "more song")}</p>}
       </div>
     </aside>
   );
@@ -3820,6 +3783,37 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   const held = useRef<number>(undefined);
   const list = useRef<HTMLOListElement>(null);
   const run = (a: number, b: number) => new Set(Array.from({ length: Math.abs(b - a) + 1 }, (_, k) => Math.min(a, b) + k));
+  // Only the rows in view and a screenful either side are drawn (start–stop, moved ten rows at a time), so a
+  // list of thousands scrolls smoothly; the rest is empty space as tall as they'd be. rowH: a row's height,
+  // measured. Songs on screen without a cover get theirs first.
+  const [[start, stop], setShown] = useState([0, 60]);
+  const rowH = useRef(56);
+  const now = useRef(tracks);
+  now.current = tracks;
+  useLayoutEffect(() => {
+    const page = list.current?.closest<HTMLElement>("main > div");
+    if (!page) return setShown([0, Infinity]);
+    const update = () => {
+      rowH.current = list.current?.querySelector("li")?.getBoundingClientRect().height || rowH.current;
+      const top = list.current!.getBoundingClientRect().top - page.getBoundingClientRect().top;
+      const first = Math.max(0, Math.floor(-top / rowH.current)), last = Math.max(0, Math.ceil((page.clientHeight - top) / rowH.current));
+      coversFor(now.current.slice(first, last), true);
+      const a = Math.max(0, Math.floor((first - 20) / 10) * 10), b = Math.ceil((last + 20) / 10) * 10;
+      setShown((s) => (s[0] === a && s[1] === b ? s : [a, b]));
+    };
+    update();
+    const sizes = new ResizeObserver(update);
+    sizes.observe(page), sizes.observe(list.current!);
+    page.addEventListener("scroll", update, { passive: true });
+    return () => (sizes.disconnect(), page.removeEventListener("scroll", update));
+  }, []);
+  // Row i brought into view, drawn or not.
+  const reveal = (i: number) => {
+    const page = list.current?.closest<HTMLElement>("main > div"), o = list.current?.getBoundingClientRect();
+    if (!page || !o) return;
+    const p = page.getBoundingClientRect(), top = o.top + i * rowH.current - p.top;
+    page.scrollTop += top < 0 ? top : Math.max(0, top + rowH.current - p.height);
+  };
   // A new list, not the same one made again on a render, starts with nothing picked.
   const ids = tracks.map((t) => t.id).join("\n");
   useEffect(() => setSel(new Set()), [ids]);
@@ -3850,7 +3844,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
         e.preventDefault(), (lead.current = i);
         if (e.shiftKey) setSel(run(anchor.current, i));
         else (anchor.current = i), setSel(new Set([i]));
-        list.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: "nearest" });
+        reveal(i);
       };
       if (e.key === "Escape") setSel(new Set());
       else if (e.key === "a" && mod) e.preventDefault(), setSel(run(0, end));
@@ -3875,8 +3869,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   }, [sel, sweeping, tracks, onPlay]);
   // The box, kept to the page and redrawn as the pointer moves and every frame (so it follows the scroll).
   // Held past the page's top or bottom, the page scrolls, faster the further out. The rows it touches are
-  // found by halving (rows not drawn yet aren't their real height). add: the rows picked already, kept
-  // with ⌘ or shift.
+  // worked out from their height, as most aren't drawn. add: the rows picked already, kept with ⌘ or shift.
   const draw = (e: PointerEvent, page: HTMLElement, add: Set<number>) => {
     const x0 = e.clientX, y0 = e.clientY + page.scrollTop;
     let x = x0, y = e.clientY, was = "", frame = 0;
@@ -3885,12 +3878,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
       const [left, right] = [Math.max(p.left, Math.min(x0, x)), Math.min(p.right, Math.max(x0, x))];
       const [top, bottom] = [Math.max(p.top, Math.min(y0 - page.scrollTop, y)), Math.min(p.bottom, Math.max(y0 - page.scrollTop, y))];
       if (box.current) Object.assign(box.current.style, { left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
-      const rows = list.current?.children ?? [];
-      const row = (y: number) => {
-        let [lo, hi] = [0, rows.length - 1];
-        while (lo < hi) { const m = (lo + hi + 1) >> 1; if (rows[m].getBoundingClientRect().top <= y) lo = m; else hi = m - 1; }
-        return lo;
-      };
+      const row = (y: number) => Math.max(0, Math.min(tracks.length - 1, Math.floor((y - o!.top) / rowH.current)));
       const [a, b] = o && right > o.left && left < o.right && bottom > o.top && top < o.bottom ? [row(top), row(bottom)] : [0, -1];
       if (`${a} ${b}` !== was) (was = `${a} ${b}`), setSel(new Set([...add, ...(b >= a ? run(a, b) : [])])), b >= a && (anchor.current = lead.current = a);
     };
@@ -3934,9 +3922,9 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
     <>
       {header && <TrackHeader grid={grid} num={!!num} flex={flex} played={!!times} />}
       {boxing && createPortal(<div ref={box} className="pointer-events-none fixed z-50 rounded-[3px] border border-ink/25 bg-ink/[0.08]" />, document.body)}
-      <ol ref={list} data-rows onPointerEnter={() => (hot.current = true)} onPointerLeave={() => (hot.current = false)} className="select-none">
-        {tracks.map((t, i) => {
-          const off = skipped(t);
+      <ol ref={list} data-rows onPointerEnter={() => (hot.current = true)} onPointerLeave={() => (hot.current = false)} style={{ paddingTop: start * rowH.current, paddingBottom: Math.max(0, tracks.length - stop) * rowH.current }} className="select-none">
+        {tracks.slice(start, stop).map((t, k) => {
+          const i = start + k, off = skipped(t);
           const dim = off || unavailable(t);
           return (
             <li
@@ -3954,7 +3942,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
               onContextMenu={(e) => (e.preventDefault(), menu(i))}
               aria-selected={sel.has(i)}
               style={grid}
-              className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors [contain-intrinsic-size:auto_56px] [content-visibility:auto] ${sel.has(i) ? "bg-accent/20" : "hover:bg-ink/[0.04]"} ${drag === i ? "opacity-40" : ""} ${
+              className={`group relative grid items-center gap-4 rounded-xl px-3 py-1.5 transition-colors ${sel.has(i) ? "bg-accent/20" : "hover:bg-ink/[0.04]"} ${drag === i ? "opacity-40" : ""} ${
                 over === i && drag !== undefined && drag !== i ? (drag > i ? "shadow-[inset_0_2px_var(--color-accent)]" : "shadow-[inset_0_-2px_var(--color-accent)]") : ""
               }`}
             >

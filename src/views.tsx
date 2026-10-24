@@ -1,6 +1,6 @@
 import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { type LucideIcon, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
@@ -217,7 +217,8 @@ const playCollection = (id: string) => collection(id).then((c) => play(c.tracks,
 const count = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 
 // Right-click menus are the OS's own. ponytail: Tauri-only; the web build needs an HTML fallback.
-export const popup = (items: MenuOptions["items"]) => Menu.new({ items }).then((m) => m.popup(), report);
+// Shown by lib.rs's popup, not Tauri's, which froze the app if the menu-bar icon changed while it was open.
+export const popup = (items: MenuOptions["items"]) => Menu.new({ items }).then((m) => invoke("popup", { rid: m.rid }), report);
 
 // Anything that deletes asks first (Warning): what goes, and a red button that Return presses.
 export const warn = (title: string, yes: string, then: () => void, text = "") => useStore.setState({ dialog: { kind: "warn", title, text, yes, then } });

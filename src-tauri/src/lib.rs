@@ -60,6 +60,15 @@ fn sink(window: &tauri::Window) {
     let _ = window;
 }
 
+/// Shows a right-click menu made in the page. Tauri's own popup keeps the page's resources locked until the
+/// menu closes, so the menu-bar icon (startup.ts), which changes 30 times a second while a song plays, waited
+/// on them forever on the main thread and froze the app. This lets go of them first.
+#[tauri::command]
+async fn popup(webview: tauri::Webview, window: tauri::Window, rid: tauri::ResourceId) -> tauri::Result<()> {
+    let menu = webview.resources_table().get::<tauri::menu::Menu<tauri::Wry>>(rid)?;
+    tauri::menu::ContextMenu::popup(&*menu, window)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -68,7 +77,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Settings → Startup. Opened at login it starts hidden; main.tsx shows it unless you chose otherwise.
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--login"])))
-        .invoke_handler(tauri::generate_handler![float, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
+        .invoke_handler(tauri::generate_handler![float, popup, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.

@@ -1,17 +1,18 @@
 @import "tailwindcss";
+@import "@fontsource-variable/geist";
 
 @theme {
   /* Every colour is light-dark(): the root's color-scheme (system, or Settings' choice) picks one. */
   /* The rail, the page and the player (paper) sit on a slightly darker base with gaps between them. */
   --color-base: light-dark(#e9e9ec, #000);
-  --color-paper: light-dark(#fff, #141416);
+  --color-paper: light-dark(#fbf9f5, #141416);
   --color-ink: light-dark(#121212, #f5f5f7);
   --color-muted: light-dark(#6e6e73, #98989d);
-  /* Tint taken from the playing track's artwork (store.ts). Lightness is clamped so paper on it
-     and it on paper both stay above 4.5:1; dark mode flips the range. With no colour (nothing
-     playing, or turned off in Settings) it's Mixtape's pink. */
+  /* Tint taken from the playing track's artwork (store.ts). Lightness is clamped so it stays vivid
+     but readable on paper (about 3:1, like the Mixtape app's orange); dark mode flips the range. With
+     no colour (nothing playing, or turned off in Settings) it's Mixtape's orange. */
   --color-accent: light-dark(
-    oklch(from var(--accent-raw) clamp(0.22, l, 0.55) min(c, 0.2) h),
+    oklch(from var(--accent-raw) clamp(0.22, l, 0.64) min(c, 0.22) h),
     oklch(from var(--accent-raw) max(clamp(0.66, l, 0.82), 0.97 - c * 10) min(c, 0.2) h)
   );
   /* Always dark enough for white on it: the Now Playing sheet. */
@@ -21,6 +22,8 @@
   --color-accent-vivid: oklch(from var(--accent-raw) clamp(0.5, l, 0.58) min(c, 0.16) h);
   /* Mixtape’s font: the system’s own (SF Pro on a Mac, Segoe UI on Windows). Mono is only for keys. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  /* Settings is set in Geist, like Mobbin. */
+  --font-geist: "Geist Variable", -apple-system, system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
 
   /* Sized to the page card (main is a container), not the window. */
@@ -33,11 +36,21 @@
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
   --animate-enter: enter 0.3s var(--ease-out) both;
-  --animate-done: done 0.6s var(--ease-out) both;
+  --animate-pop: pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  /* Checking it off: the accent floods the chip from the middle, it gives a little bounce, then the tick draws. */
+  --animate-done: fill 0.45s var(--ease-out) both, done 0.55s 0.25s var(--ease-out) both;
+  @keyframes fill {
+    from { clip-path: circle(0% at 50% 50%); }
+    to { clip-path: circle(71% at 50% 50%); }
+  }
   @keyframes done {
-    0% { transform: scale(0.5); box-shadow: 0 0 0 0 var(--color-accent); }
-    40% { transform: scale(1.12); }
-    100% { transform: scale(1); box-shadow: 0 0 0 14px transparent; }
+    0% { transform: scale(1); }
+    35% { transform: scale(1.15); }
+    65% { transform: scale(0.96); }
+    100% { transform: scale(1); }
+  }
+  @keyframes pop {
+    from { opacity: 0; scale: 0.6; }
   }
   @keyframes enter {
     from {
@@ -50,7 +63,7 @@
 @property --accent-raw {
   syntax: "<color>";
   inherits: true;
-  initial-value: #ff375f;
+  initial-value: #ff6b00;
 }
 :root {
   transition: --accent-raw 0.5s ease;
@@ -546,6 +559,5 @@ img[src=""] {
 }
 
 /* The welcome tick draws itself in after its chip pops. */
-.tick path { stroke-dasharray: 24; animation: draw 0.35s 0.15s var(--ease-out) both; }
+.tick path { stroke-dasharray: 24; animation: draw 0.4s 0.4s var(--ease-out) both; }
 @keyframes draw { from { stroke-dashoffset: 24; } }
-@media (prefers-reduced-motion: reduce) { .tick path, .animate-done { animation: none; } }

@@ -70,7 +70,8 @@ pub struct LocalLyrics {
 /// page can't read any file it names; one saved by Excel needn't be UTF-8.
 #[tauri::command]
 pub fn read_text(path: String) -> Result<String, String> {
-    if !Path::new(&path).extension().is_some_and(|x| x.eq_ignore_ascii_case("csv")) {
+    // Playlists (csv) and library exports (json, under 50 MB) only.
+    if !Path::new(&path).extension().is_some_and(|x| x.eq_ignore_ascii_case("csv") || x.eq_ignore_ascii_case("json")) || fs::metadata(&path).map_or(true, |m| m.len() > 50_000_000) {
         return Err("Not a playlist file".into());
     }
     fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).map_err(|e| e.to_string())

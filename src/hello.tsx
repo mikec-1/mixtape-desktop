@@ -6,15 +6,15 @@ import { SignIn } from "./signin";
 // so it has no skip and shows again whenever you're signed out). Behind it, a wall of what the world is
 // playing right now (Apple's top albums), drifting in columns. leaving: you just signed in, so it says hi
 // and fades into the app (App.tsx).
-export function Hello({ onSkip, leaving }: { onSkip?: () => void; leaving?: boolean }) {
+export function Hello({ onSkip, leaving }: { onSkip?: () => void; leaving?: false | "wait" | "hi" | "out" }) {
   const name = useAccount((s) => s.profile?.name.split(" ")[0]);
   return (
-    <div data-tauri-drag-region className={`dark fixed inset-0 z-[100] overflow-hidden bg-[#0b0b0c] text-white [color-scheme:dark] [--color-ink:#fff] [--color-muted:rgb(255_255_255/0.55)] [--color-paper:#0b0b0c] ${leaving ? "pointer-events-none animate-[fade_450ms_var(--ease-out)_650ms_reverse_both]" : ""}`}>
+    <div data-tauri-drag-region className={`dark fixed inset-0 z-[100] overflow-hidden bg-[#0b0b0c] text-white [color-scheme:dark] [--color-ink:#fff] [--color-muted:rgb(255_255_255/0.55)] [--color-paper:#0b0b0c] ${leaving ? "pointer-events-none" : ""} ${leaving === "out" ? "animate-[fade_450ms_var(--ease-out)_reverse_both]" : ""}`}>
       <Wall />
       <div aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-r from-[#0b0b0c] from-35% via-[#0b0b0c]/85 via-55% to-[#0b0b0c]/10" />
       <div data-tauri-drag-region className="relative flex h-full w-full max-w-[560px] flex-col overflow-y-auto px-[clamp(32px,6vw,88px)] pt-16 pb-10">
-        <div key={leaving ? "hi" : "in"} className="my-auto animate-[rise_600ms_var(--ease-out)_both] py-8">
-          {leaving ? (
+        <div key={leaving ? leaving === "wait" ? "wait" : "hi" : "in"} className="my-auto animate-[rise_600ms_var(--ease-out)_both] py-8">
+          {leaving === "wait" ? null : leaving ? (
             <h1 className="text-[clamp(48px,6vw,84px)] leading-[0.9] font-black tracking-[-0.05em]">{name ? `Hi, ${name}.` : "You’re in."}</h1>
           ) : canSignIn ? (
             <SignIn poster />

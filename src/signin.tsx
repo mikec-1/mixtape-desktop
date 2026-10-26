@@ -19,7 +19,7 @@ const say = (e: unknown) => {
   if (/password should|weak password/i.test(m)) return "Pick a stronger password: at least 8 characters.";
   if (/valid email|invalid format/i.test(m)) return "That doesn’t look like an email address.";
   if (/failed to fetch|network|load failed/i.test(m)) return "Can’t reach Mixtape. Check your connection.";
-  return "Something went wrong. Try again.";
+  return m ? (/[.!?]$/.test(m) ? m : m + ".") : "Something went wrong. Try again."; // say what actually happened
 };
 
 export function SignIn({ poster = false }: { poster?: boolean }) {

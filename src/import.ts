@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as choose } from "@tauri-apps/plugin-dialog";
 import { fetch } from "@tauri-apps/plugin-http";
 import { searchKind, searchYouTube, parseSecs, SEP, type Track } from "./yt";
-import { likeAll, newPlaylist, notify, open, plural, useStore, type View } from "./store";
+import { likeAll, newPlaylist, notify, open, plural, useLibrary, useStore, type View } from "./store";
 import { covers, length, playlist as dzPlaylist } from "./deezer";
 
 // id: Spotify's (sp:…) when the list has it, so it's the same song as one brought over by signing in.
@@ -220,17 +220,20 @@ export async function pool<T, R>(items: T[], fn: (x: T) => Promise<R>, each: (do
 }
 export async function importPlaylistFile(file: File) {
   const rows = parsePlaylistCsv(await file.text());
-  if (!rows.length) return notify({ text: "Couldn’t Import Playlist", detail: `${file.name} has no title and artist columns` });
+  if (!rows.length) return void notify({ text: "Couldn’t Import Playlist", detail: `${file.name} has no title and artist columns` });
   return importRows(file.name.replace(/\.[^.]+$/, "") || "Imported Playlist", rows);
 }
+// The ids of the playlists that came in.
 export async function importCsvPaths(paths: string[]) {
+  const done: string[] = [];
   for (const p of paths) {
     const name = p.split(/[\\/]/).pop()!;
-    await invoke<string>("read_text", { path: p }).then((text) => importPlaylistFile(new File([text], name))).catch((e) => notify({ text: "Couldn’t Import Playlist", detail: `${name}: ${e}` }));
+    await invoke<string>("read_text", { path: p }).then((text) => importPlaylistFile(new File([text], name))).then((n) => n && done.push(n), (e) => notify({ text: "Couldn’t Import Playlist", detail: `${name}: ${e}` }));
   }
+  return done;
 }
 // The system's own picker, as the webview's lets any file through on macOS.
-export const pickPlaylists = () => choose({ filters: [{ name: "Playlists", extensions: ["csv"] }], multiple: true, title: "Import Playlist" }).then((ps) => importCsvPaths(ps ?? []), () => {});
+export const pickPlaylists = () => choose({ filters: [{ name: "Playlists", extensions: ["csv"] }], multiple: true, title: "Import Playlist" }).then((ps) => importCsvPaths(ps ?? []), () => [] as string[]);
 
 // Playlists and albums from a link. Spotify's and Apple Music's own pages list the songs (Spotify's embed only
 // the first 100), which are then matched like a CSV; Deezer's come as they are, and YouTube Music's just open.
@@ -298,9 +301,10 @@ const asIs = (r: CsvTrack): Track => ({
 export function importRows(name: string, rows: CsvTrack[], cover?: string, liked = false) {
   const tracks = rows.map(asIs);
   if (liked) likeAll(tracks, true);
-  else newPlaylist(tracks, undefined, name, cover);
-  notify({ text: `Imported ${name}`, detail: plural(tracks.length, "song"), thumb: cover ?? tracks.find((t) => t.thumb)?.thumb });
+  const id = liked ? undefined : newPlaylist(tracks, undefined, name, cover);
+  notify({ text: `Imported ${name}`, detail: plural(tracks.length, "song"), thumb: cover ?? tracks.find((t) => t.thumb)?.thumb, undo: id ? () => (useLibrary.setState((s) => ({ playlists: s.playlists.filter((p) => p.id !== id) })), useStore.setState({ toast: undefined })) : undefined });
   void covers(tracks);
+  return id;
 }
 
 export function demo() {

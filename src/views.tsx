@@ -1092,7 +1092,7 @@ export function PlaylistPage({ id }: { id: string }) {
 // stays small (about 80 KB a cover) and the cover loads at once. Profile pictures are 256 px.
 // WebKit's file picker ignores accept="image/*", so in the app the native one, showing only images, picks it.
 const pickImage = (input: HTMLInputElement | null, use: (image: Blob) => unknown) =>
-  canHaveFiles ? void openFile({ filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "heic", "avif", "bmp", "tif", "tiff"] }], title: "Choose Image" }).then((p) => p && fetch(convertFileSrc(p)).then((r) => r.blob()).then(use)).catch(report) : input?.click();
+  canHaveFiles ? openFile({ filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "heic", "avif", "bmp", "tif", "tiff"] }], title: "Choose Image" }).then((p) => p && fetch(convertFileSrc(p)).then((r) => r.blob()).then(use)).catch(report) : input?.click();
 async function coverFrom(file: Blob, size = 640) {
   const img = await createImageBitmap(file);
   const side = Math.min(img.width, img.height);
@@ -2341,8 +2341,8 @@ function LinkImport() {
 
 // Your Spotify library, once you're signed in (spotify.ts): everything is ticked, untick what stays behind.
 // inline: shown as a page of the welcome screen instead of a dialog; told whether anything was imported.
-export function SpotifyImport({ inline }: { inline?: (imported: boolean) => void }) {
-  const close = () => (inline ? inline(false) : closeDialog());
+export function SpotifyImport({ inline }: { inline?: (job?: ReturnType<typeof importSpotify>) => void }) {
+  const close = () => (inline ? inline() : closeDialog());
   const name = useSpotify((s) => s.name);
   const history = useSettings((s) => s.history);
   const [lib, setLib] = useState<Awaited<ReturnType<typeof contents>>>();
@@ -2351,12 +2351,14 @@ export function SpotifyImport({ inline }: { inline?: (imported: boolean) => void
   const [off, setOff] = useState(() => new Set<string>()); // unticked: playlist ids, or liked, albums, artists, recent
   const say = (e: unknown) => setError(String(e instanceof Error ? e.message : e));
   useEffect(() => void (name && contents().then(setLib, say)), [name]);
+  const [choose, setChoose] = useState(false); // the welcome: every playlist comes unless you open the list
+  const allLists = () => lib && setOff((o) => new Set(lib.playlists.every((p) => !o.has(p.id)) ? [...o, ...lib.playlists.map((p) => p.id)] : [...o].filter((id) => !lib.playlists.some((p) => p.id === id))));
   const tick = (id: string) => setOff((o) => (o.has(id) ? new Set([...o].filter((x) => x !== id)) : new Set([...o, id])));
   const signIn = () => (setBusy(true), setError(""), connect().catch(say).finally(() => setBusy(false)));
   const on = (id: string) => !off.has(id) && (id !== "recent" || history);
   const picked = lib ? lib.playlists.filter((p) => on(p.id)) : [];
   const any = !!lib && (picked.length > 0 || ["liked", "albums", "artists", "recent"].some(on));
-  const go = () => lib && (inline ? inline(true) : closeDialog(), void importSpotify({ playlists: picked, liked: on("liked"), albums: on("albums"), artists: on("artists"), recent: on("recent") }));
+  const go = () => { if (!lib) return; const job = importSpotify({ playlists: picked, liked: on("liked"), albums: on("albums"), artists: on("artists"), recent: on("recent") }); inline ? inline(job) : closeDialog(); };
   // A plain function, not a component, so ticking one keeps its focus.
   const row = (id: string, cover: ReactNode, title: string, detail: string) => (
     <li key={id}>
@@ -2370,28 +2372,60 @@ export function SpotifyImport({ inline }: { inline?: (imported: boolean) => void
       </label>
     </li>
   );
+  // The welcome's big tiles: a picture of what comes over before you sign in, then the switches for it.
+  const big = (bg: string, glyph: ReactNode, label: string, i: number, pick?: { id: string; detail: string; sel?: boolean; flip?: () => void }) => {
+    const Tag = pick ? "button" : "div", sel = pick ? (pick.sel ?? on(pick.id)) : true, dead = pick?.id === "recent" && !history;
+    return (
+      <li key={label} style={{ animationDelay: `${i * 50}ms` }} className="w-24 animate-enter">
+        <Tag {...(pick && { onClick: pick.flip ?? (() => tick(pick.id)), disabled: dead, "aria-pressed": sel })} className={`flex w-full flex-col items-center gap-2 ${pick ? "press disabled:opacity-40" : ""}`}>
+          <span className={`relative grid size-20 place-items-center rounded-xl text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.25)] transition-[opacity,filter] duration-200 ${bg} ${sel ? "" : "opacity-35 grayscale"}`}>
+            <svg viewBox="0 0 24 24" className="size-9 fill-current drop-shadow-[0_2px_4px_rgb(0_0_0/0.18)]">{glyph}</svg>
+            {pick && sel && <span className="absolute -top-1.5 -right-1.5 grid size-6 animate-done place-items-center rounded-full bg-accent text-paper ring-2 ring-paper"><Check size={14} strokeWidth={3} className="tick" /></span>}
+          </span>
+          <span className="text-[13px] font-semibold">{label}</span>
+          {pick && <span className="-mt-1.5 text-xs text-muted">{pick.detail}</span>}
+        </Tag>
+      </li>
+    );
+  };
   const tile = (bg: string, icon: ReactNode) => <div className={`grid size-10 shrink-0 place-items-center rounded-md text-white ${bg}`}>{icon}</div>;
   const body = (
     <>
       <header className="px-6 pt-5">
         {!inline && <h2 className="text-xl font-bold tracking-tight">Import from Spotify</h2>}
-        <p className="text-sm text-muted">{name ? `Signed in as ${name}. Untick anything you’d rather leave behind.` : "Sign in to bring over your playlists, Liked Songs, albums and artists. Your recent plays join your History, and keep coming in while you’re signed in."}</p>
+        {!(inline && choose) && <p className="text-sm text-muted">{name ? inline ? `Signed in as ${name}. Click anything you’d rather leave behind.` : `Signed in as ${name}. Untick anything you’d rather leave behind.` : "Sign in to bring over your playlists, Liked Songs, albums and artists. Your recent plays join your History, and keep coming in while you’re signed in."}</p>}
       </header>
+      {inline && choose && <button onClick={() => setChoose(false)} className="mx-auto -mt-1 flex items-center gap-1 text-sm font-semibold text-muted hover:text-ink">Done Choosing<ChevronDown size={15} className="rotate-180" /></button>}
       {lib ? (
-        <ul className={`mt-3 min-h-0 flex-1 overflow-y-auto px-4 ${inline ? "max-h-[46vh]" : ""}`}>
-          {row("liked", tile(LIKED, <Heart size={16} className="fill-white" />), "Liked Songs", plural(lib.liked, "song"))}
-          {row("albums", tile(tint("b"), <Disc3 size={18} />), "Albums", plural(lib.albums, "album"))}
-          {row("artists", tile(tint("c"), <UserCheck size={18} />), "Artists", plural(lib.artists, "artist"))}
-          {row("recent", tile(tint("a"), <HistoryIcon size={18} />), "Recent Plays", history ? "Your last 50 plays, into History" : "History is off in Settings")}
-          {lib.playlists.length > 0 && (
+        <ul className={`mt-3 overflow-y-auto px-4 ${inline ? (choose ? "max-h-[52vh] [mask-image:linear-gradient(transparent,black_20px,black_calc(100%-56px),transparent)] pb-10" : "") : "min-h-0 flex-1"}`}>
+          {inline ? (
+            !choose && <li className="pb-2">
+              <ul className="flex justify-center gap-3 pt-2">
+                {big(LIKED, GLYPHS.liked, "Liked Songs", 0, { id: "liked", detail: plural(lib.liked, "song") })}
+                {lib.playlists.length > 0 && big(tint("d"), GLYPHS.playlists, "Playlists", 1, { id: "playlists", detail: picked.length === lib.playlists.length ? plural(picked.length, "playlist") : `${picked.length} of ${lib.playlists.length}`, sel: picked.length > 0, flip: allLists })}
+                {big(tint("b"), GLYPHS.albums, "Albums", 2, { id: "albums", detail: plural(lib.albums, "album") })}
+                {big(tint("c"), GLYPHS.artists, "Artists", 3, { id: "artists", detail: plural(lib.artists, "artist") })}
+                {big(tint("a"), GLYPHS.recent, "Recent Plays", 4, { id: "recent", detail: history ? "Last 50" : "History is off" })}
+              </ul>
+              {lib.playlists.length > 0 && <button onClick={() => setChoose(!choose)} className="mx-auto mt-4 flex items-center gap-1 text-sm font-semibold text-muted hover:text-ink">{choose ? "Done Choosing" : "Choose Playlists"}<ChevronDown size={15} className={`transition-transform duration-200 ${choose ? "rotate-180" : ""}`} /></button>}
+            </li>
+          ) : (
+            <>
+              {row("liked", tile(LIKED, <Heart size={16} className="fill-white" />), "Liked Songs", plural(lib.liked, "song"))}
+              {row("albums", tile(tint("b"), <Disc3 size={18} />), "Albums", plural(lib.albums, "album"))}
+              {row("artists", tile(tint("c"), <UserCheck size={18} />), "Artists", plural(lib.artists, "artist"))}
+              {row("recent", tile(tint("a"), <HistoryIcon size={18} />), "Recent Plays", history ? "Your last 50 plays, into History" : "History is off in Settings")}
+            </>
+          )}
+          {lib.playlists.length > 0 && (!inline || choose) && (
             <li className="flex items-baseline px-2 pt-4 pb-1">
               <span className="text-sm font-semibold text-muted">Playlists</span>
-              <button onClick={() => setOff((o) => new Set(lib.playlists.every((p) => !o.has(p.id)) ? [...o, ...lib.playlists.map((p) => p.id)] : [...o].filter((id) => !lib.playlists.some((p) => p.id === id))))} className="ml-auto text-sm font-semibold text-accent">
+              <button onClick={allLists} className="ml-auto text-sm font-semibold text-accent">
                 {lib.playlists.every((p) => !off.has(p.id)) ? "Select None" : "Select All"}
               </button>
             </li>
           )}
-          {lib.playlists.map((p) => {
+          {(!inline || choose) && lib.playlists.map((p) => {
             const n = (p.items ?? p.tracks)?.total;
             return row(p.id, <img src={p.images?.[0]?.url} alt="" loading="lazy" className="size-10 shrink-0 rounded-md object-cover" />, p.name, [n !== undefined && plural(n, "song"), p.owner?.display_name !== name && p.owner?.display_name && `by ${p.owner.display_name}`].filter(Boolean).join(" · "));
           })}
@@ -2409,8 +2443,29 @@ export function SpotifyImport({ inline }: { inline?: (imported: boolean) => void
       </footer>
     </>
   );
-  return inline ? <div className="flex w-full max-w-lg flex-col rounded-2xl bg-ink/[0.05] text-left">{body}</div> : <Modal label="Import from Spotify" onClose={closeDialog} className="flex max-h-[86vh] w-[min(520px,94vw)] flex-col">{body}</Modal>;
+  // In the welcome, signed out: its title already says what happens, so just the button (back is up top).
+  if (inline && !name)
+    return (
+      <div className="flex flex-col items-center gap-3">
+        {/* What comes over, as the tiles it'll arrive as. */}
+        <ul className="mb-8 grid grid-cols-5 gap-3">
+          {([[LIKED, GLYPHS.liked, "Liked Songs"], [tint("d"), GLYPHS.playlists, "Playlists"], [tint("b"), GLYPHS.albums, "Albums"], [tint("c"), GLYPHS.artists, "Artists"], [tint("a"), GLYPHS.recent, "Recent Plays"]] as const).map(([bg, glyph, label], i) => big(bg, glyph, label, i))}
+        </ul>
+        <button disabled={busy} onClick={signIn} className="press flex h-12 items-center rounded-full bg-[#1ed760] px-7 font-semibold text-black disabled:opacity-50">{busy ? "Waiting for Spotify…" : "Sign In with Spotify"}</button>
+        {error ? <p className="text-sm text-[#ff375f]">{error}</p> : <p className="text-sm text-muted">Nothing changes on Spotify.</p>}
+      </div>
+    );
+  return inline ? <div className="flex w-full max-w-xl flex-col rounded-2xl bg-ink/[0.05] text-left">{body}</div> : <Modal label="Import from Spotify" onClose={closeDialog} className="flex max-h-[86vh] w-[min(520px,94vw)] flex-col">{body}</Modal>;
 }
+
+// Solid, rounded glyphs for the welcome's Spotify tiles, in the spirit of SF Symbols' filled set.
+const GLYPHS = {
+  liked: <path d="M12 21.2c-.3 0-.6-.1-.8-.3C6.4 16.8 2.5 13.5 2.5 9.1 2.5 6 4.9 3.6 7.9 3.6c1.7 0 3.2.8 4.1 2.1.9-1.3 2.4-2.1 4.1-2.1 3 0 5.4 2.4 5.4 5.5 0 4.4-3.9 7.7-8.7 11.8-.2.2-.5.3-.8.3Z" />,
+  playlists: <><rect x="2.5" y="4.5" width="12" height="2.6" rx="1.3" /><rect x="2.5" y="10" width="12" height="2.6" rx="1.3" /><rect x="2.5" y="15.5" width="7" height="2.6" rx="1.3" /><path d="M17 3.8c0-.6.6-1 1.2-.8l2.6.9c.4.1.7.5.7.9v1.6c0 .6-.6 1-1.2.8l-1.3-.4v9.6a3.2 3.2 0 1 1-2-3V3.8Z" /></>,
+  albums: <path fillRule="evenodd" d="M12 2.5a9.5 9.5 0 1 1 0 19 9.5 9.5 0 0 1 0-19Zm0 6.7a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Zm0 1.9a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8Z" />,
+  artists: <><circle cx="12" cy="7.8" r="4.3" /><path d="M3.8 19.6c0-3.4 3.7-6 8.2-6s8.2 2.6 8.2 6c0 .8-.6 1.4-1.4 1.4H5.2c-.8 0-1.4-.6-1.4-1.4Z" /></>,
+  recent: <path fillRule="evenodd" d="M12 2.5a9.5 9.5 0 1 1 0 19 9.5 9.5 0 0 1 0-19Zm0 4.3c-.6 0-1 .4-1 1V12c0 .3.1.5.3.7l3 3a1 1 0 0 0 1.4-1.4L13 11.6V7.8c0-.6-.4-1-1-1Z" />,
+};
 
 // Songs dropped on the window, one at a time before they go into Local Files: what the file says, read
 // sensibly (local.ts guessTags), then the original song looked up (lookUp) for its artist, album, year,
@@ -2806,10 +2861,17 @@ const mod = isMac ? "⌘" : "Ctrl+";
 
 // The file comes from anywhere, so check its shape before it replaces the library. Exports from before
 // follows, folders, pins and hiding have none of them.
+// The app's own picker shows only .json files; the web's file input lets anything through.
+export const pickExport = (input: HTMLInputElement | null) =>
+  canHaveFiles ? openFile({ filters: [{ name: "Mixtape Export", extensions: ["json"] }], title: "Restore an Export" }).then((p) => (p ? invoke<string>("read_text", { path: p }).then((t) => restore(new File([t], p.split(/[\\/]/).pop()!))) : false)).catch(() => (notify({ text: "Couldn’t Restore", detail: "That isn’t a Mixtape library export" }), false)) : (input?.click(), Promise.resolve(false));
+
 export async function restore(file: File) {
   const ids = (x: unknown) => Array.isArray(x) && x.every((y) => typeof y?.id === "string");
   const maybe = (x: unknown) => x === undefined || ids(x);
   try {
+    // Only ever read as data (JSON.parse runs nothing, React escapes text), so the risk is size: a huge file
+    // would hang the app. Real exports are a few MB even for big libraries.
+    if (!/\.json$/i.test(file.name) || file.size > 50e6) throw 0;
     const { liked, saved, playlists, followed, folders, pinned, hidden, blocked, lyrics } = JSON.parse(await file.text());
     const names = (x: unknown) => x === undefined || (Array.isArray(x) && x.every((y) => typeof y?.name === "string"));
     const keys = pinned === undefined || (Array.isArray(pinned) && pinned.every((k: unknown) => typeof k === "string"));
@@ -2817,8 +2879,10 @@ export async function restore(file: File) {
     restoreLibrary({ liked, saved, playlists, ...(followed && { followed }), ...(folders && { folders }), ...(pinned && { pinned }), ...(hidden && { hidden }), ...(blocked && { blocked }) });
     // A full export (Settings → Account) has your lyrics too: added to what's here.
     if (lyrics && typeof lyrics === "object" && Object.values(lyrics).every((m) => typeof (m as { text?: unknown })?.text === "string")) useMine.setState((s) => ({ songs: { ...s.songs, ...lyrics } }));
+    return true;
   } catch {
     notify({ text: "Couldn’t Restore", detail: `${file.name} isn’t a Mixtape library export` });
+    return false;
   }
 }
 
@@ -2876,7 +2940,7 @@ export function Settings() {
     <span aria-hidden className="grid size-[22px] shrink-0 place-items-center rounded-[6px]" style={{ background: `color-mix(in oklab, ${p.tint} 22%, transparent)`, color: p.tint }}><p.icon size={13} strokeWidth={2.25} /></span>
   );
   return (
-    <div className="absolute inset-0 flex animate-enter">
+    <div className="absolute inset-0 flex animate-enter font-geist">
       <nav aria-label="Settings" className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-ink/[0.06] bg-ink/[0.025] px-3 pt-16 pb-6 @max-2xl:w-48">
         <h1 className="px-2 text-[22px] font-bold tracking-tight">Settings</h1>
         <label className="mt-3 mb-4 flex h-8 shrink-0 items-center gap-2 rounded-lg bg-ink/[0.07] px-2.5 text-muted transition-colors focus-within:bg-ink/[0.1]">
@@ -3082,7 +3146,7 @@ function Appearance() {
       </Group>
       <Group title="Colour" about="Where the highlight colour comes from.">
         <Choice label="From Artwork" on={artworkAccent} onPick={() => set({ artworkAccent: true })}><Mini tint="#ff8a3d" /></Choice>
-        <Choice label="Mixtape Pink" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Mini tint="#ff375f" /></Choice>
+        <Choice label="Mixtape Orange" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Mini tint="#ff6b00" /></Choice>
       </Group>
       <div className={card}>
         <Row label="Reduce Motion" detail={reduceMotion ? "Things fade in place instead of sliding" : "Follows the system’s Reduce Motion"}>
@@ -3381,7 +3445,7 @@ function LibraryPane() {
         <Row label="Back Up Your Library" detail="Everything in Your Library as one file, to keep or to move to another computer">
           <div className="flex gap-2">
             <button onClick={exportLibrary} className={quiet}><Download size={16} /> Export</button>
-            <button onClick={() => file.current?.click()} className={quiet}>Restore…</button>
+            <button onClick={() => pickExport(file.current)} className={quiet}>Restore…</button>
           </div>
         </Row>
       </div>

@@ -435,10 +435,10 @@ export async function addPlays(add: Play[]) {
   for (const p of sorted.reverse()) if (!seen.some((x) => sameSong(x, p.t)) && seen.push(p.t) >= RECENT) break;
   useHistory.setState({ recent: seen });
 }
-export function clearHistory() {
+export function clearHistory(quiet?: boolean) {
   void kv("readwrite", (s) => s.clear(), "plays");
   useHistory.setState({ recent: [] });
-  notify({ text: "History Cleared" });
+  if (!quiet) notify({ text: "History Cleared" });
 }
 
 const onlineChange = (cb: () => void) => (addEventListener("online", cb), addEventListener("offline", cb), () => (removeEventListener("online", cb), removeEventListener("offline", cb)));

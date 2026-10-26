@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { GoTrueClient, User } from "@supabase/auth-js";
-import { artistKey, deliberate, idbGet, idbPut, notify, open, plays, useLibrary, useSettings, type Library, type Play, type Playlist, type View } from "./store";
+import { artistKey, clearHistory, deliberate, idbGet, idbPut, notify, open, plays, useLibrary, useRecents, useRecentSearches, useSettings, type Library, type Play, type Playlist, type View } from "./store";
 import { useMine, type Mine } from "./lyrics";
 
 // Accounts: the desktop app needs one; the web works without. Signed in, your library syncs between your
@@ -18,7 +18,8 @@ export const inApp = "__TAURI_INTERNALS__" in window;
 // The app and the website won't open past sign-in without an account (when there are accounts to have).
 export const mustSignIn = canSignIn;
 
-export type Profile = { name: string; handle?: string; avatar?: string };
+// welcomed: this account has been through the welcome (Bring your music, Pick a few artists), on any computer.
+export type Profile = { name: string; handle?: string; avatar?: string; welcomed?: boolean };
 type Account = { user?: { id: string; email?: string }; profile?: Profile; out?: boolean; state: "idle" | "syncing" | "error"; synced?: number; error?: string };
 export const useAccount = create<Account>()(persist((): Account => ({ state: "idle" }), { name: "account", partialize: ({ user, profile, synced }) => ({ user, profile, synced }) }));
 export const setProfile = (p: Partial<Profile>) => useAccount.setState((s) => ({ profile: { name: "", ...s.profile, ...p } }));
@@ -96,9 +97,11 @@ export async function signInInBrowser() {
   await (await import("@tauri-apps/plugin-opener")).openUrl(`${SITE}/?app=${port}&state=${state}`);
   const back = new URLSearchParams(await invoke<string>("oauth_wait"));
   void (await import("@tauri-apps/api/window")).getCurrentWindow().setFocus().catch(() => {});
-  if (back.get("state") !== state) throw new Error("Signing in didn’t finish");
-  const { error } = await c.setSession({ access_token: back.get("access_token") ?? "", refresh_token: back.get("refresh_token") ?? "" });
-  if (error) throw error;
+  if (back.get("error")) throw new Error(`The website couldn’t sign you in: ${back.get("error_description") ?? back.get("error")}`);
+  if (back.get("state") !== state) throw new Error("The website answered an older sign-in. Press Sign in again.");
+  if (!back.get("access_token") || !back.get("refresh_token")) throw new Error("The website didn’t send your account back. Press Sign in again.");
+  const { error } = await c.setSession({ access_token: back.get("access_token")!, refresh_token: back.get("refresh_token")! });
+  if (error) throw new Error(`Mixtape couldn’t use the website’s sign-in: ${error.message}`);
   // A refresh swaps the refresh token the website also had for one only this app has.
   await c.refreshSession();
 }
@@ -113,7 +116,8 @@ if (!inApp && /^5368[2-4]$/.test(asked.get("app") ?? "") && asked.get("state")) 
 export const handingOff = (): { port: string; state: string } | undefined => (sessionStorage.handoff ? JSON.parse(sessionStorage.handoff) : undefined);
 export async function handBack() {
   const h = handingOff();
-  const { data } = await (await auth()).getSession();
+  // Fresh tokens, not the stored ones: a tab that's been signed in a while can hold an expired session.
+  const { data } = await (await auth()).refreshSession();
   if (!h || !data.session) return;
   delete sessionStorage.handoff;
   // Posted, not put in the link, so the tokens never land in the address bar or the browser's history.
@@ -160,13 +164,21 @@ function signedIn(user: User) {
   // Waits for both to load from disk first, or loading would bring the old one back.
   const loaded = (st: typeof useLibrary | typeof useMine) => new Promise<void>((r) => (st.persist.hasHydrated() ? r() : st.persist.onFinishHydration(() => r())));
   void Promise.all([loaded(useLibrary), loaded(useMine)]).then(() => {
-    if (localStorage.libraryOwner && localStorage.libraryOwner !== user.id) useLibrary.setState(useLibrary.getInitialState()), useMine.setState({ songs: {} });
+    if (localStorage.libraryOwner && localStorage.libraryOwner !== user.id) {
+      // Everything else the last account left here goes too: its Spotify, history, recents and scrobbling.
+      useLibrary.setState(useLibrary.getInitialState()), useMine.setState({ songs: {} });
+      dropSpotify(), useRecents.setState({}, true), useRecentSearches.setState({ items: [] }), clearHistory(true);
+      useSettings.setState({ listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "" });
+    }
     localStorage.libraryOwner = user.id;
     watch();
     void syncNow();
   });
 }
+// Loaded late: spotify.ts needs this file first.
+const dropSpotify = () => void import("./spotify").then((s) => s.useSpotify.setState({}, true));
 function signedOut() {
+  dropSpotify(); // Spotify belongs to the account, not this computer
   meta = undefined;
   seen.clear();
   clearTimeout(soon);

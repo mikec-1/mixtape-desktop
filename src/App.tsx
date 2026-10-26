@@ -4,7 +4,7 @@ import { ROOTS, audio, back, cycleRepeat, go, next, prev, seekTo, setMuted, setV
 import { actionFor, comboFrom, recording, searchTab } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, SongName, LikeButton, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
-import { handingOff, mustSignIn, useAccount } from "./account";
+import { handingOff, mustSignIn, publicProfile, useAccount } from "./account";
 import { Welcome } from "./welcome";
 import { Hello } from "./hello";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -30,16 +30,34 @@ function firstLaunch() {
 export default function App() {
   // Settings → About can show it again ("preview"), after a reload.
   const [welcome, setWelcome] = useState<boolean | "preview">(() => (sessionStorage.welcome ? (delete sessionStorage.welcome, "preview") : firstLaunch()));
+  // Dev only: ⌘⇧O replays the welcome from sign-in, without wiping anything.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const key = (e: KeyboardEvent) => e.metaKey && e.shiftKey && e.code === "KeyO" && (e.preventDefault(), setWelcome("preview"));
+    addEventListener("keydown", key);
+    return () => removeEventListener("keydown", key);
+  }, []);
   const locked = useAccount((s) => (mustSignIn || s.out) && !s.user) || !!handingOff(); // the app, signed out: sign in before anything else (and the website, signing the app in)
   // Just signed in: the sign-in says hi and fades into the app, rather than vanishing the moment the account lands.
-  const [leaving, setLeaving] = useState(false);
+  const [leaving, setLeaving] = useState<false | "wait" | "hi" | "out">(false);
   const wasLocked = useRef(locked);
   useEffect(() => {
     const go = wasLocked.current && !locked && !!useAccount.getState().user; // not when you skip it
     wasLocked.current = locked;
     if (!go) return;
-    setLeaving(true);
-    const t = setTimeout(() => setLeaving(false), 1100);
+    setLeaving("wait"); // blank until the name comes, so it never says "You’re in." and then swaps
+    const out = () => (setLeaving("out"), (t = setTimeout(() => setLeaving(false), 450)));
+    // Says hi by name, so it waits for the profile (asked of the server directly; a new account's hasn't
+    // synced yet), then holds the hi long enough to read. An account that's never had the welcome gets it.
+    const me = useAccount.getState().user!.id;
+    let t = setTimeout(() => (setLeaving("hi"), (t = setTimeout(out, 1600))), 2000); // the server's slow: carry on without the name
+    void publicProfile(me).then((p) => {
+      if (useAccount.getState().user?.id !== me) return;
+      const name = p?.profile?.name;
+      if (name && !useAccount.getState().profile?.name) useAccount.setState({ profile: { ...useAccount.getState().profile, ...p!.profile } });
+      if (!p?.profile?.welcomed) setWelcome(true);
+      clearTimeout(t), setLeaving("hi"), (t = setTimeout(out, 1600));
+    }, () => {});
     return () => clearTimeout(t);
   }, [locked]);
   const stack = useStore((s) => s.stack);
@@ -135,7 +153,6 @@ export default function App() {
 
       <NowPlaying />
       <Dialogs />
-      <Toast />
       <Offline />
     </div>
     {dragging && (
@@ -148,7 +165,11 @@ export default function App() {
         </div>
       </div>
     )}
-    {locked || leaving ? <Hello leaving={leaving} onSkip={mustSignIn || handingOff() ? undefined : () => useAccount.setState({ out: false })} /> : welcome && <Welcome preview={welcome === "preview"} onDone={() => setWelcome(false)} />}
+    {/* The welcome sits under the hi as it fades, so the app never shows in between. */}
+    {!locked && welcome && <Welcome preview={welcome === "preview"} onDone={() => setWelcome(false)} />}
+    {/* Outside the frame, which goes inert under the welcome, so its buttons still answer there. */}
+    <Toast />
+    {(locked || leaving) && <Hello leaving={leaving} onSkip={mustSignIn || handingOff() ? undefined : () => useAccount.setState({ out: false })} />}
     {onWindows && <WindowButtons />}
     </>
   );
@@ -387,7 +408,7 @@ function Toast() {
   const t = toast ?? last;
 
   return (
-    <div role="status" className="pointer-events-none fixed bottom-[110px] left-1/2 z-40 -translate-x-1/2">
+    <div role="status" className="pointer-events-none fixed bottom-[110px] left-1/2 z-[60] -translate-x-1/2">
       {t && (
         <div
           inert={!toast}
@@ -395,31 +416,32 @@ function Toast() {
           onPointerLeave={() => setHold(false)}
           onFocus={() => setHold(true)}
           onBlur={() => setHold(false)}
-          className={`flex w-max max-w-[min(460px,calc(100vw-32px))] min-w-[220px] items-center gap-4 rounded-[22px] bg-neutral-900 p-3 text-white ${t.thumb || t.sticky || t.warn ? "" : "pl-5"} shadow-2xl ring-1 shadow-black/30 ${t.warn ? "ring-[#ff453a]/60" : "ring-white/10"} ${
+          className={`flex w-max max-w-[min(460px,calc(100vw-32px))] items-center gap-3 rounded-[10px] bg-white py-2.5 pr-4 text-black shadow-xl shadow-black/25 ${t.thumb || t.sticky || t.warn ? "pl-2.5" : "pl-4"} ${
             toast
               ? "pointer-events-auto translate-y-0 scale-100 opacity-100 transition-[opacity,translate,scale] duration-400 ease-(--ease-out)"
               : "translate-y-4 scale-95 opacity-0 transition-[opacity,translate,scale] duration-200 ease-in"
           }`}
         >
           {/* A new toast over a showing one swaps its contents in place. */}
-          <div key={t.id} className="flex min-w-0 flex-1 animate-enter items-center gap-4">
+          <div key={t.id} className="flex min-w-0 flex-1 animate-enter items-center gap-3">
             {/* Ones still working keep a black square for the cover they're about to get. */}
             {/* Something went wrong: a red warning where the cover would be. */}
-            {t.warn ? <div className="grid size-14 shrink-0 place-items-center rounded-[10px] bg-[#ff453a]/15 text-[#ff453a]"><TriangleAlert size={26} /></div> : (t.thumb || t.sticky) && <div className="size-14 shrink-0 overflow-hidden rounded-[10px]"><img src={art(t.thumb, 120)} alt="" className="size-full rounded-[10px] object-cover" /></div>}
+            {t.warn ? <div className="grid size-8 shrink-0 place-items-center rounded-[5px] bg-[#ff453a]/15 text-[#ff453a]"><TriangleAlert size={16} /></div> : (t.thumb || t.sticky) && <div className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-[5px] bg-black/[0.07]">{t.thumb ? <img src={art(t.thumb, 120)} alt="" className="size-full object-cover" /> : <span className="spinner block size-4 text-black/40" />}</div>}
             <div className="min-w-0 flex-1">
-              <div className="truncate pr-2 text-[17px] font-bold tracking-tight">{t.text}</div>
-              {t.detail && <div className="truncate text-sm text-white/60">{t.detail}</div>}
+              <div className="truncate text-[15px] font-medium">{t.text}</div>
+              {t.detail && <div className="truncate text-[13px] text-black/55">{t.detail}</div>}
             </div>
           </div>
           {t.action ? (
-            <button onClick={t.action.run} className="press h-10 shrink-0 rounded-full bg-white px-5 font-semibold text-black hover:bg-white/85">
+            <button onClick={t.action.run} className="press shrink-0 text-[15px] font-bold text-accent hover:underline">
               {t.action.label}
             </button>
           ) : t.undo ? (
-            <button onClick={t.undo} className="press h-10 shrink-0 rounded-full bg-white px-5 font-semibold text-black hover:bg-white/85">
+            <button onClick={t.undo} className="press shrink-0 text-[15px] font-bold text-accent hover:underline">
               Undo
             </button>
           ) : null}
+          <button onClick={() => useStore.setState({ toast: undefined })} aria-label="Close" className="press -mr-1 grid size-6 shrink-0 place-items-center rounded-full text-black/40 hover:bg-black/[0.06] hover:text-black"><X size={15} /></button>
         </div>
       )}
     </div>

@@ -162,7 +162,7 @@ if ("__TAURI_INTERNALS__" in window) {
 }
 
 export type Pick = { playlists: SpPlaylist[]; liked: boolean; albums: boolean; artists: boolean; recent: boolean };
-export async function importSpotify(pick: Pick) {
+export async function importSpotify(pick: Pick): Promise<"done" | "cancelled" | "failed"> {
   // Each step shows the cover of the first thing in it, and the last toast the first one shown.
   let stopped = false, shown = 0, first: string | undefined;
   const say = (text: string, thumb?: string) => ((first ??= thumb), notify({ text, sticky: true, thumb }));
@@ -219,7 +219,9 @@ export async function importSpotify(pick: Pick) {
       brought.push(plural(got.length, "album"));
     }
     notify({ text: stopped ? "Import Cancelled" : "Imported from Spotify", detail: brought.join(", ") || undefined, thumb: first });
+    return stopped ? "cancelled" : "done";
   } catch (e) {
     notify({ text: "Couldn’t Import from Spotify", detail: String(e instanceof Error ? e.message : e) });
+    return "failed";
   }
 }

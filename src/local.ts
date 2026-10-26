@@ -69,11 +69,13 @@ files.has = (path) => !!useLocal.getState().files[path];
 
 export async function addFolder() {
   const picked = await open({ directory: true, multiple: true, title: "Add Music Folder" }).catch(() => null);
-  const add = [picked ?? []].flat().filter((f) => !useLocal.getState().folders.includes(f));
-  if (!add.length) return;
+  const chosen = [picked ?? []].flat(), add = chosen.filter((f) => !useLocal.getState().folders.includes(f));
+  if (!chosen.length) return false;
+  if (!add.length) return notify({ text: "Already in Local Files", detail: `${plural(localTracks().length, "song")} there` }), true;
   useLocal.setState((s) => ({ folders: [...s.folders, ...add] }));
   await rescan();
   notify({ text: "Folder Added", detail: `${plural(localTracks().length, "song")} in your Local Files` });
+  return true;
 }
 // Songs dropped on the window: kept in Local Files like a folder of one.
 export async function addFiles(paths: string[]) {

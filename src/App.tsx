@@ -216,7 +216,6 @@ function PlayerBar() {
   const loading = useStore((s) => s.loading);
   const error = useStore((s) => s.error);
   const { paused, time, duration, volume, muted } = useAudio();
-  const liked = useLibrary((s) => !!track && s.liked.some((t) => t.id === track.id));
   const shuffle = useStore((s) => s.shuffle);
   const repeat = useStore((s) => s.repeat);
   const sleep = useStore((s) => s.sleep);
@@ -230,7 +229,7 @@ function PlayerBar() {
   // Stays above the Now Playing sheet, so it keeps working while the sheet is up. Narrow, it lets go of
   // the volume slider (mute and ⌘↑/↓ stay), then of Mini Player and Full Screen (the artwork opens it too).
   return (
-    <div className="@container relative isolate z-40 shrink-0 overflow-hidden rounded-2xl bg-paper">
+    <div data-player className="@container relative isolate z-40 shrink-0 overflow-hidden rounded-2xl bg-paper">
       {/* The artwork's colour washes the bar, strongest behind the artwork. */}
       <div className="absolute inset-0 -z-10 bg-linear-to-r from-accent/30 via-accent/12 to-accent/5 transition-opacity duration-500" style={{ opacity: track ? 1 : 0 }} />
       <div className="grid grid-cols-[1fr_minmax(0,1.5fr)_1fr] items-center gap-6 py-2.5 pr-4 pl-2.5">
@@ -243,11 +242,7 @@ function PlayerBar() {
             <div aria-live="polite" className="truncate text-sm text-muted">{track && <>{error && <span title={error} className="font-semibold text-[#ff453a]">Unavailable · </span>}{track.explicit && <Explicit />}<Artists list={track.artists} /></>}</div>
             {track && !error && <Peek track={track} />}
           </div>
-          {track && (
-            <button onClick={() => toggleLike(track)} aria-label={liked ? "Unlike" : "Like"} aria-pressed={liked} className={icon}>
-              <Heart size={18} className={liked ? "fill-accent text-accent" : ""} />
-            </button>
-          )}
+          {track && <LikeButton track={track} />}
         </div>
 
         <div className="flex flex-col items-center gap-0.5">

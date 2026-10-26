@@ -2276,7 +2276,7 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "versions" ? <Versions d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "versions" ? <Versions d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : dialog?.kind === "saved" ? <SavedIn key={dialog.track.id} d={dialog} /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
 
@@ -4050,8 +4050,8 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
                 </div>
               )}
               {added && <div className="min-w-0 truncate text-sm text-muted">{t.at && t.at > 1e11 ? ago(t.at) : ""}</div>}
-              <LikeButton track={t} />
-              <div className="flex justify-end text-sm text-muted tabular-nums">{current === t.id ? <AudioLines size={16} className="text-accent" /> : times ? new Date(times[i]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : t.duration}</div>
+              <LikeButton track={t} mine={!!playlist || from === "liked" || from === "local"} />
+              <div className="flex justify-end text-sm text-muted tabular-nums">{on(t) ? <AudioLines size={16} className="text-accent" /> : times ? new Date(times[i]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : t.duration}</div>
             </li>
           );
         })}
@@ -4139,16 +4139,31 @@ function goToAlbum(t: Track) {
   );
 }
 
-function LikeButton({ track }: { track: Track }) {
-  const liked = useLibrary((s) => s.liked.some((t) => t.id === track.id));
+// Mixtape's rule: inside your library (Liked Songs, your playlists, your files) a row has a heart; anywhere
+// else a plus, which turns to a filled check once the song is in your library in any way.
+const inPlaylists = new WeakMap<LibraryData["playlists"], Set<string>>();
+function held(t: Track, s: LibraryData) {
+  let keys = inPlaylists.get(s.playlists);
+  if (!keys) inPlaylists.set(s.playlists, (keys = new Set(s.playlists.flatMap((p) => p.tracks.flatMap((x) => [x.id, songOf(x)])))));
+  return !!t.file || keys.has(t.id) || keys.has(songOf(t));
+}
+export function LikeButton({ track, mine }: { track: Track; mine?: boolean }) {
+  const liked = useLibrary((s) => !!likedAs(track, s.liked));
+  const saved = useLibrary((s) => liked || held(track, s));
+  // The plus saves to Liked Songs and its toast offers View; the check opens Saved In.
+  const press = () => {
+    if (!mine && saved) return savedIn(track);
+    toggleLike(track);
+    if (!mine) useStore.setState((s) => ({ toast: s.toast && { ...s.toast, undo: undefined, action: { label: "View", run: () => savedIn(track) } } }));
+  };
   return (
     <button
-      onClick={() => toggleLike(track)}
-      aria-label={liked ? `Unlike ${track.title}` : `Like ${track.title}`}
-      aria-pressed={liked}
-      className={`press relative grid size-8 place-items-center rounded-full text-muted hover:text-ink ${liked ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
+      onClick={press}
+      aria-label={mine ? (liked ? `Unlike ${track.title}` : `Like ${track.title}`) : saved ? `Where ${track.title} is saved` : `Add ${track.title} to Liked Songs`}
+      aria-pressed={mine ? liked : saved}
+      className={`press relative grid size-8 place-items-center rounded-full text-muted hover:text-ink ${!mine || liked ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
     >
-      <Heart size={16} className={liked ? "fill-accent text-accent" : ""} />
+      {mine ? <Heart size={18} className={liked ? "fill-accent text-accent" : ""} /> : saved ? <Tick /> : <CirclePlus size={18} strokeWidth={1.75} />}
     </button>
   );
 }
@@ -4183,6 +4198,96 @@ function Albums({ items, grid, remember }: { items: Album[]; grid?: boolean; rem
         </div>
       ))}
     </div>
+  );
+}
+// Spotify's saved mark: a small accent disc with a check.
+const Tick = () => <span className="grid size-[18px] place-items-center rounded-full bg-accent text-paper"><Check size={12} strokeWidth={3.5} /></span>;
+const savedIn = (track: Track) => useStore.setState({ dialog: { kind: "saved", track }, toast: undefined });
+
+// Where a song is saved (Mixtape's Saved In, Spotify's Add to Playlist): what holds it, ticked, then every
+// other playlist. Ticks wait for Done; Cancel, Escape or a click outside drop them. Rows stay where they
+// opened, so they don't jump. Docks bottom-left over the sidebar, above the player bar, at one height.
+function SavedIn({ d: { track: t } }: { d: Extract<Dialog, { kind: "saved" }> }) {
+  const liked = useLibrary((s) => !!likedAs(t, s.liked));
+  const playlists = useLibrary((s) => s.playlists);
+  const holds = (p: { tracks: Track[] }) => p.tracks.some((x) => sameSong(x, t));
+  const [first, setFirst] = useState(() => new Set([...(liked ? ["liked"] : []), ...playlists.filter(holds).map((p) => p.id)]));
+  const [picked, setPicked] = useState(first);
+  const pick = (id: string) => setPicked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const done = () => { if (picked.has("liked") !== liked) toggleLike(t); playlists.forEach((p) => picked.has(p.id) !== holds(p) && flip(p)); closeDialog(); };
+  const [q, setQ] = useState("");
+  const [name, setName] = useState<string>(); // set while naming a new playlist
+  const create = () => { const id = newPlaylist([t], undefined, name!.trim()); setFirst((f) => new Set([...f, id])); setPicked((f) => new Set([...f, id])); setName(undefined); };
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => e.key === "Escape" && (e.stopPropagation(), name === undefined ? closeDialog() : setName(undefined));
+    addEventListener("keydown", key, true);
+    return () => removeEventListener("keydown", key, true);
+  }, [name]);
+  const found = (name: string) => name.toLowerCase().includes(q.trim().toLowerCase());
+  // Most recently changed first (the last song added, or when it was made), fixed at open like the sections.
+  const [order] = useState(() => playlists.map((p) => [p.id, p.tracks.reduce((n, x) => Math.max(n, x.at ?? 0), p.at ?? 0)] as const).sort((a, b) => b[1] - a[1]).map(([id]) => id));
+  const shown = playlists.filter((p) => found(p.name)).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  const flip = (p: (typeof playlists)[number]) => (holds(p) ? removeFromPlaylist(p.id, p.tracks.flatMap((x, i) => (sameSong(x, t) ? [i] : []))) : addToPlaylist(p.id, [t]));
+  const row = (key: string, cover: ReactNode, name: string, detail: string, on: boolean, press?: () => void) => (
+    <li key={key}>
+      <button onClick={press} disabled={!press} aria-pressed={on} className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left enabled:hover:bg-ink/[0.05]">
+        <div className="size-10 shrink-0 overflow-hidden rounded-md">{cover}</div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold">{name}</div>
+          <div className="truncate text-xs text-muted">{detail}</div>
+        </div>
+        <span className="mr-1 grid size-[18px] shrink-0 place-items-center">{on ? <Tick /> : <span className="size-[17px] rounded-full ring-[1.5px] ring-ink/30 ring-inset" />}</span>
+      </button>
+    </li>
+  );
+  const likedRow = found("Liked Songs") && row("liked", <PlaylistCover id="liked" tracks={[]} />, "Liked Songs", plural(useLibrary.getState().liked.length, "song"), picked.has("liked"), () => pick("liked"));
+  const list = (ps: typeof playlists) => ps.map((p) => row(p.id, <PlaylistCover id={p.id} tracks={p.tracks} cover={p.cover} />, p.name, plural(p.tracks.length, "song"), picked.has(p.id), () => pick(p.id)));
+  const head = (text: string) => <li className="px-2 pt-3 pb-1 text-xs font-semibold text-muted">{text}</li>;
+  const mine = shown.filter((p) => first.has(p.id)), rest = shown.filter((p) => !first.has(p.id));
+  const bar = document.querySelector("[data-player]")?.getBoundingClientRect() ?? { left: 8, top: innerHeight - 84 };
+  const place: CSSProperties = { left: bar.left, bottom: innerHeight - bar.top + 8, height: Math.min(520, bar.top - 16) };
+  return createPortal(
+    <div onPointerDown={(e) => e.target === e.currentTarget && closeDialog()} className="fixed inset-0 z-50">
+      <div role="dialog" aria-label="Saved In" onKeyDown={(e) => e.stopPropagation()} style={place} className="fixed flex w-[340px] animate-enter flex-col overflow-hidden rounded-2xl bg-paper text-ink shadow-2xl ring-1 shadow-black/30 ring-ink/10">
+        <header className="flex items-start gap-2 px-4 pt-4">
+          <div className="min-w-0 flex-1">
+            <h2 className="font-bold tracking-tight">Saved In</h2>
+            <p className="truncate text-sm text-muted">{t.title} • {t.artists.map((a) => a.name).join(", ")}</p>
+          </div>
+        </header>
+        <div className="relative mx-4 mt-3">
+          <SearchIcon size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted" />
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a playlist" aria-label="Find a playlist" autoComplete="off" spellCheck={false} className="h-9 w-full rounded-lg bg-ink/[0.06] pr-3 pl-9 text-sm outline-none placeholder:text-muted focus:ring-2 focus:ring-accent" />
+        </div>
+        <ul className="mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+          <li>
+            {name === undefined ? (
+              <button onClick={() => setName("")} className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left text-sm font-semibold hover:bg-ink/[0.05]">
+                <span className="grid size-10 place-items-center rounded-md bg-ink/[0.06]"><Plus size={18} /></span> New Playlist
+              </button>
+            ) : (
+              <form onSubmit={(e) => (e.preventDefault(), name.trim() && create())} className="flex items-center gap-3 px-2 py-1.5">
+                <span className="grid size-10 shrink-0 place-items-center rounded-md bg-ink/[0.06]"><Plus size={18} /></span>
+                <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onBlur={() => !name.trim() && setName(undefined)} placeholder="Playlist name" aria-label="New playlist name" autoComplete="off" spellCheck={false} className="h-10 min-w-0 flex-1 bg-transparent text-sm font-semibold caret-accent outline-none placeholder:font-normal placeholder:text-muted" />
+                <button disabled={!name.trim()} className="press px-1 text-sm font-semibold text-accent transition-colors disabled:text-muted/50">Create</button>
+              </form>
+            )}
+          </li>
+          {(t.file || (first.has("liked") && likedRow) || mine.length > 0) && head("Saved in")}
+          {t.file && row("local", <span className="grid size-full place-items-center bg-ink/[0.06]"><HardDrive size={18} /></span>, "Local Files", "On this computer", true)}
+          {first.has("liked") && likedRow}
+          {list(mine)}
+          {((!first.has("liked") && likedRow) || rest.length > 0) && head("Recently updated")}
+          {!first.has("liked") && likedRow}
+          {list(rest)}
+        </ul>
+        <footer className="flex justify-end gap-2 border-t border-ink/10 px-4 py-3">
+          <button onClick={closeDialog} className={quiet}>Cancel</button>
+          <button onClick={done} className={`${btn} bg-accent text-paper`}>Done</button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

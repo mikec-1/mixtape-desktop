@@ -46,7 +46,8 @@ export type Dialog =
   | { kind: "songs"; paths: string[]; editing?: boolean }
   | { kind: "warn"; title: string; text: string; yes: string; then: () => void }
   | { kind: "link" }
-  | { kind: "spotify" };
+  | { kind: "spotify" }
+  | { kind: "saved"; track: Track };
 // Feedback for a library change: what happened, to what, and a way back.
 export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean; warn?: boolean };
 

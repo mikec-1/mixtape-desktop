@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fetch } from "./http";
+import { fetch as appFetch, inApp } from "./http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { table, useAccount } from "./account";
@@ -14,7 +14,10 @@ import { searchKind, type Album, type Track } from "./yt";
 // and with an account the server fetches them too, even while Mixtape is closed (spotify_history).
 const CLIENT = "0e312a528cc34744b92021bed3f6edc9";
 const PORT = 43821;
-const REDIRECT = `http://127.0.0.1:${PORT}/callback`;
+// The web build comes back to its own page instead, in a popup (main.tsx draws nothing there), and Spotify
+// answers browsers directly, so no proxy.
+const REDIRECT = inApp ? `http://127.0.0.1:${PORT}/callback` : `${location.origin}/spotify/callback`;
+const fetch = inApp ? appFetch : globalThis.fetch;
 const SCOPES = "playlist-read-private playlist-read-collaborative user-library-read user-follow-read user-read-recently-played";
 
 // lastPlay: the newest play brought over, in ms. at: when this refresh token was handed out. linked: the
@@ -42,11 +45,17 @@ async function grant(body: Record<string, string>) {
 
 export async function connect() {
   const verifier = random(), state = random();
+  const popup = inApp ? undefined : openPopup();
   const challenge = b64(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
-  await invoke("oauth_start", { port: PORT });
-  await (await import("@tauri-apps/plugin-opener")).openUrl(`https://accounts.spotify.com/authorize?${new URLSearchParams({ client_id: CLIENT, response_type: "code", redirect_uri: REDIRECT, code_challenge_method: "S256", code_challenge: challenge, scope: SCOPES, state })}`);
-  const back = new URLSearchParams(await invoke<string>("oauth_wait"));
-  void (await import("@tauri-apps/api/window")).getCurrentWindow().setFocus().catch(() => {});
+  const url = `https://accounts.spotify.com/authorize?${new URLSearchParams({ client_id: CLIENT, response_type: "code", redirect_uri: REDIRECT, code_challenge_method: "S256", code_challenge: challenge, scope: SCOPES, state })}`;
+  let back: URLSearchParams;
+  if (popup) back = await cameBack(popup, url);
+  else {
+    await invoke("oauth_start", { port: PORT });
+    await (await import("@tauri-apps/plugin-opener")).openUrl(url);
+    back = new URLSearchParams(await invoke<string>("oauth_wait"));
+    void (await import("@tauri-apps/api/window")).getCurrentWindow().setFocus().catch(() => {});
+  }
   const code = back.get("code");
   if (!code || back.get("state") !== state) throw new Error(back.get("error") === "access_denied" ? "You didn’t allow it on Spotify" : "Signing in didn’t finish");
   await grant({ grant_type: "authorization_code", code, redirect_uri: REDIRECT, code_verifier: verifier });
@@ -54,6 +63,21 @@ export async function connect() {
   useSpotify.setState({ name: (await api("/me")).display_name, lastPlay: Date.now(), at: Date.now() });
   void link().catch(() => {});
 }
+// Web: opened on the click itself (later, the browser blocks it), then pointed at Spotify. Back on our own
+// page, its address carries the answer.
+export const openPopup = () => {
+  const w = window.open("", "spotify", "popup,width=480,height=720");
+  if (!w) throw new Error("Allow pop-ups for Mixtape, then try again");
+  return w;
+};
+const cameBack = (w: Window, url: string) => new Promise<URLSearchParams>((done, fail) => {
+  w.location.href = url;
+  const look = setInterval(() => {
+    let at = "";
+    try { at = w.location.origin === location.origin ? w.location.search : ""; } catch {}
+    if (at || w.closed) clearInterval(look), w.close(), at ? done(new URLSearchParams(at)) : fail(new Error("Signing in didn’t finish"));
+  }, 300);
+});
 // Everywhere: it's taken off your account too.
 export function disconnect() {
   const { linked } = useSpotify.getState();

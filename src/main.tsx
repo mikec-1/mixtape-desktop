@@ -13,7 +13,9 @@ try {
   // One page, three windows: the mini player (store.ts toggleMini) is labelled "mini" and draws only
   // mini.tsx, the menu bar player (startup.ts) "bar" and bar.tsx.
   const label = "__TAURI_INTERNALS__" in window && (await import("@tauri-apps/api/window")).getCurrentWindow().label;
-  if (label === "mini") Root = (await import("./mini")).default;
+  // The web's Spotify sign-in popup, back from Spotify: its opener reads the address and closes it.
+  if (window.opener && /[?&]state=/.test(location.search)) Root = () => null;
+  else if (label === "mini") Root = (await import("./mini")).default;
   else if (label === "bar") Root = (await import("./bar")).default;
   else {
     Root = (await import("./App")).default;

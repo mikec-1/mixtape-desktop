@@ -1,4 +1,4 @@
-import { fetch } from "./http";
+import { fetch, inApp } from "./http";
 import { md5 } from "js-md5";
 import { idbGet, idbPut, notify, usePrivate, useSettings } from "./store";
 import type { Track } from "./yt";
@@ -27,8 +27,12 @@ async function lastfm(params: Record<string, string>, post = true) {
 // Sign-in: Last.fm's desktop flow. Start opens its page in the browser; finish runs after you allow it there.
 export async function lastfmAuthStart() {
   if (!KEY || !SECRET) throw new Error("Last.fm isn't set up in this build");
-  const { token } = await lastfm({ method: "auth.getToken" }, false);
-  await (await import("@tauri-apps/plugin-opener")).openUrl(`https://www.last.fm/api/auth?api_key=${KEY}&token=${token}`);
+  // Web: a tab opened on the click itself, or the browser blocks it.
+  const tab = inApp ? undefined : window.open("", "_blank");
+  const { token } = await lastfm({ method: "auth.getToken" }, false).catch((e) => (tab?.close(), Promise.reject(e)));
+  const url = `https://www.last.fm/api/auth?api_key=${KEY}&token=${token}`;
+  if (tab) tab.location.href = url;
+  else await (await import("@tauri-apps/plugin-opener")).openUrl(url);
   return token as string;
 }
 export async function lastfmAuthFinish(token: string) {

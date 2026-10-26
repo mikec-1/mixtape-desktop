@@ -3497,11 +3497,9 @@ function LibraryPane() {
         ))}
       </dl>
       <div className={`${card} mt-6`}>
-        {canHaveFiles && (
-          <Row label="Import from Spotify" detail="Your playlists, liked songs, albums and artists, all at once">
-            <button onClick={() => useStore.setState({ dialog: { kind: "spotify" } })} className={quiet}><ArrowDownToLine size={16} /> Import…</button>
-          </Row>
-        )}
+        <Row label="Import from Spotify" detail="Your playlists, liked songs, albums and artists, all at once">
+          <button onClick={() => useStore.setState({ dialog: { kind: "spotify" } })} className={quiet}><ArrowDownToLine size={16} /> Import…</button>
+        </Row>
         <Row label="Import a Playlist" detail="A CSV file, or a link to a playlist on another service">
           <div className="flex gap-2">
             <button onClick={() => (canHaveFiles ? void pickPlaylists() : csvFile.current?.click())} className={quiet}><Upload size={16} /> File…</button>

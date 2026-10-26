@@ -3,7 +3,7 @@ import { ChevronLeft, House, Library as LibraryIcon, ListMusic, Maximize2, MicVo
 import { ROOTS, audio, back, cycleRepeat, go, next, prev, seekTo, setMuted, setVolume, sleepIn, subscribeAudio, toggle, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { actionFor, comboFrom, recording, searchTab } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
-import { Artist, Artists, SongName, LikeButton, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
+import { Artist, Artists, SongName, LikeButton, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, WebMenu, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
 import { handingOff, mustSignIn, publicProfile, setProfile, useAccount } from "./account";
 import { Welcome } from "./welcome";
 import { Hello } from "./hello";
@@ -173,6 +173,7 @@ export default function App() {
     {!locked && welcome && <Welcome preview={welcome === "preview"} onDone={() => setWelcome(false)} />}
     {/* Outside the frame, which goes inert under the welcome, so its buttons still answer there. */}
     <Toast />
+    <WebMenu />
     {(locked || leaving) && <Hello leaving={leaving} onSkip={mustSignIn || handingOff() ? undefined : () => useAccount.setState({ out: false })} />}
     {onWindows && <WindowButtons />}
     </>

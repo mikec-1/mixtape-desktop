@@ -220,9 +220,57 @@ export function Search() {
 const playCollection = (id: string) => collection(id).then((c) => play(c.tracks, 0), report);
 const count = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 
-// Right-click menus are the OS's own. ponytail: Tauri-only; the web build needs an HTML fallback.
-// Shown by lib.rs's popup, not Tauri's, which froze the app if the menu-bar icon changed while it was open.
-export const popup = (items: Entry[]) => withIcons(items).then((items) => Menu.new({ items })).then((m) => invoke("popup", { rid: m.rid }), report);
+// Right-click menus are the OS's own, shown by lib.rs's popup, not Tauri's, which froze the app if the menu-bar
+// icon changed while it was open. The browser has none, so the web build draws the same entries itself (WebMenu).
+export const popup = (items: Entry[]) => canHaveFiles ? withIcons(items).then((items) => Menu.new({ items })).then((m) => invoke("popup", { rid: m.rid }), report) : showMenu({ items, at: pointer });
+let pointer = [0, 0], showMenu: (m: { items: Entry[]; at: number[] } | undefined) => void = () => {};
+addEventListener("pointerdown", (e) => (pointer = [e.clientX, e.clientY]), true);
+export function WebMenu() {
+  const [menu, setMenu] = useState<{ items: Entry[]; at: number[] }>();
+  useEffect(() => ((showMenu = setMenu), () => void (showMenu = () => {})), []);
+  useEffect(() => {
+    if (!menu) return;
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && (e.stopPropagation(), setMenu(undefined));
+    addEventListener("keydown", esc, true);
+    return () => removeEventListener("keydown", esc, true);
+  }, [menu]);
+  if (!menu) return null;
+  const close = () => setMenu(undefined);
+  return (
+    <div className="fixed inset-0 z-[100]" onPointerDown={(e) => e.target === e.currentTarget && close()} onContextMenu={(e) => e.target === e.currentTarget && close()}>
+      <MenuList items={menu.items} close={close} at={menu.at} />
+    </div>
+  );
+}
+// Kept inside the window: it opens up or left of the pointer, and a submenu to the left, when there's no room.
+function MenuList({ items, close, at }: { items: Entry[]; close: () => void; at?: number[] }) {
+  const [open, setOpen] = useState<number>(), box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    if (!at) return void (el.getBoundingClientRect().right > innerWidth - 4 && (el.style.left = "auto", el.style.right = "100%", el.style.margin = "0 4px 0 0"));
+    el.style.left = `${Math.max(4, Math.min(at[0], innerWidth - el.offsetWidth - 4))}px`;
+    el.style.top = `${Math.max(4, at[1] + el.offsetHeight > innerHeight - 4 ? at[1] - el.offsetHeight : at[1])}px`;
+  }, [at]);
+  return (
+    <div ref={box} role="menu" className={`${at ? "fixed" : "absolute top-0 left-full ml-1"} min-w-52 rounded-xl border border-ink/10 bg-paper/95 p-1 text-[13px] text-ink shadow-2xl backdrop-blur-xl`}>
+      {items.map((e, i) => {
+        if (e.item === "Separator") return <div key={i} className="mx-2 my-1 h-px bg-ink/10" />;
+        const Icon = e.checked ? Check : e.icon, off = e.enabled === false;
+        return (
+          <div key={i} className="relative" onMouseEnter={() => setOpen(i)}>
+            <button role="menuitem" disabled={off} onClick={() => (e.items ? setOpen(i) : (close(), (e.action as (() => void) | undefined)?.()))} className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left enabled:hover:bg-ink/8 disabled:opacity-40">
+              {Icon ? <Icon size={15} className="shrink-0 text-ink/70" /> : <span className="w-[15px] shrink-0" />}
+              <span className="flex-1 truncate">{e.text as string}</span>
+              {e.items && <ChevronRight size={14} className="text-muted" />}
+            </button>
+            {e.items && open === i && <MenuList items={e.items} close={close} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 // An item's icon is lucide's, drawn twice size (the menu's is 18pt) in the menu's text colour, as the OS doesn't tint it.
 // Drawn once per look and kept; a menu of choices (sort order, a folder to pick) has none, like the OS's own.
 type Entry = { icon?: LucideIcon; items?: Entry[]; [k: string]: unknown };

@@ -1,12 +1,12 @@
 //! Signing in with Google or Apple from the app: the browser does the signing in, then sends you back to
 //! http://127.0.0.1:<port>/callback, where this is listening, with a code for account.ts to exchange.
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// The ports Sleeve's redirect URLs are registered for (docs/accounts.md), tried in turn. Spotify (spotify.ts)
+/// The ports Mixtape's redirect URLs are registered for (docs/accounts.md), tried in turn. Spotify (spotify.ts)
 /// asks for its own one port.
 const PORTS: [u16; 3] = [53682, 53683, 53684];
 static LISTENER: Mutex<Option<TcpListener>> = Mutex::new(None);
@@ -26,7 +26,7 @@ pub fn oauth_start(port: Option<u16>) -> Result<u16, String> {
 }
 
 /// Waits up to five minutes for the browser to come back, answers it with a page that says to go back
-/// to Sleeve, and returns the query string it brought (code and state, or error).
+/// to Mixtape, and returns the query string it brought (code and state, or error).
 #[tauri::command]
 pub async fn oauth_wait() -> Result<String, String> {
     let l = LISTENER.lock().unwrap().take().ok_or("Sign-in wasn't started")?;
@@ -46,21 +46,38 @@ fn wait(l: &TcpListener, timeout: Duration, cancelled: impl Fn() -> bool) -> Res
         };
         let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut r = BufReader::new(&stream);
         let mut line = String::new();
-        if BufReader::new(&stream).read_line(&mut line).is_err() {
+        if r.read_line(&mut line).is_err() {
             continue;
         }
         // "GET /callback?code=…&state=… HTTP/1.1"; anything else (a favicon) gets a 404 and we wait on.
+        // The website hands a session back as a POST instead, so its tokens stay out of the address bar and history.
         let path = line.split_whitespace().nth(1).unwrap_or("");
         let Some(rest) = path.strip_prefix("/callback") else {
             let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             continue;
         };
-        let query = rest.strip_prefix('?').unwrap_or("").to_string();
+        let mut body = String::new();
+        if line.starts_with("POST ") {
+            let (mut len, mut h) = (0, String::new());
+            while r.read_line(&mut h).is_ok_and(|n| n > 2) {
+                if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+                h.clear();
+            }
+            let mut b = vec![0; len.min(16_384)];
+            if r.read_exact(&mut b).is_err() {
+                continue;
+            }
+            body = String::from_utf8_lossy(&b).into_owned();
+        }
+        let query = if body.is_empty() { rest.strip_prefix('?').unwrap_or("").to_string() } else { body };
         let failed = query.split('&').any(|p| p.starts_with("error="));
+        let (title, says) = if failed { ("That didn’t work.", "Signing in didn’t finish. Go back to Mixtape to try again.") } else { ("You’re in.", "Mixtape is signed in. You can close this tab.") };
         let page = format!(
-            "<!doctype html><meta charset=utf-8><title>Sleeve</title><body style=\"font:600 20px/1.4 -apple-system,system-ui,sans-serif;display:grid;place-items:center;height:90vh;margin:0;color:#222\"><p>{}</p>",
-            if failed { "Signing in didn’t finish. Go back to Sleeve to try again." } else { "You’re signed in. You can close this tab and go back to Sleeve." }
+            "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\"><meta name=referrer content=no-referrer><title>Mixtape</title><body style=\"margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0b0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,system-ui,'Segoe UI',sans-serif\"><main style=\"padding:32px\"><h1 style=\"margin:0;font-size:clamp(48px,8vw,84px);line-height:.9;font-weight:900;letter-spacing:-.05em\">{title}</h1><p style=\"margin:20px 0 0;font-size:17px;color:rgba(255,255,255,.55)\">{says}</p></main><script>history.replaceState(null,'','/')</script>"
         );
         let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
         return Ok(query);
@@ -90,7 +107,20 @@ mod tests {
         assert_eq!(wait(&l, Duration::from_secs(5), || false).unwrap(), "code=abc-123&state=xyz");
         let (favicon, callback) = browser.join().unwrap();
         assert!(favicon.starts_with("HTTP/1.1 404"));
-        assert!(callback.starts_with("HTTP/1.1 200") && callback.contains("You’re signed in"));
+        assert!(callback.starts_with("HTTP/1.1 200") && callback.contains("You’re in"));
+    }
+
+    #[test]
+    fn takes_a_posted_session() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let body = "state=xyz&access_token=a&refresh_token=r";
+        std::thread::spawn(move || {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(s, "POST /callback HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+            let _ = s.read_to_string(&mut String::new());
+        });
+        assert_eq!(wait(&l, Duration::from_secs(5), || false).unwrap(), body);
     }
 
     #[test]

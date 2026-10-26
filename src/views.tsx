@@ -1184,7 +1184,7 @@ export function ProfilePage({ id }: { id: string }) {
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-muted">Profile</div>
           <h1 className={title(name)}>{name}</h1>
-          <div className="mt-2 text-muted">{plural(data.playlists.length, "public playlist")}</div>
+          <div className="mt-2 text-muted">{data.profile.handle && <span className="font-semibold text-ink">@{data.profile.handle} · </span>}{plural(data.playlists.length, "public playlist")}</div>
           <div className="mt-5 flex gap-2">
             <button onClick={() => copyLink(profileLink(id))} className={quiet}><Link size={16} /> Copy Link</button>
             {mine && <button onClick={() => (go("settings", true), useStore.setState({ pane: "account" }))} className={quiet}>Edit Profile</button>}
@@ -2966,7 +2966,7 @@ function AccountPane() {
         <input ref={picture} type="file" accept="image/*" hidden onChange={(e) => (e.target.files?.[0] && void coverFrom(e.target.files[0], 256).then((avatar) => setProfile({ avatar }), report), (e.target.value = ""))} />
         <div className="min-w-0 flex-1">
           <input value={profile?.name ?? ""} onChange={(e) => setProfile({ name: e.target.value })} placeholder="Your name" aria-label="Your name" name="profile-name" autoComplete="off" className="room w-full bg-transparent text-xl font-bold tracking-tight outline-none placeholder:text-muted" />
-          <div className="truncate text-[13px] text-muted">{user.email}</div>
+          <div className="truncate text-[13px] text-muted">{profile?.handle && `@${profile.handle} · `}{user.email}</div>
         </div>
       </div>
       <div className={`${card} mt-6`}>

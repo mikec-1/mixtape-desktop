@@ -489,6 +489,12 @@ input[type="range"].knob::-webkit-slider-thumb {
     filter: blur(10px);
   }
 }
+/* The sign-in's wall of covers (hello.tsx): each column is its covers twice, so half its height loops. */
+@keyframes wall {
+  to {
+    transform: translateY(-50%);
+  }
+}
 /* A line too long for its space slides across to show the rest, and back (bar.tsx Slide). */
 .slide {
   white-space: nowrap;

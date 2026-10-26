@@ -5,7 +5,7 @@ import type { GoTrueClient, User } from "@supabase/auth-js";
 import { artistKey, deliberate, idbGet, idbPut, notify, open, plays, useLibrary, useSettings, type Library, type Play, type Playlist, type View } from "./store";
 import { useMine, type Mine } from "./lyrics";
 
-// Accounts, all optional: Sleeve works the same without one. Signed in, your library syncs between your
+// Accounts: the desktop app needs one; the web works without. Signed in, your library syncs between your
 // devices through Supabase (supabase/migrations: one table of items and a sync function; docs/accounts.md
 // sets it up). It stays local-first: every change is made here at once and sent a moment later; changes
 // made offline go when you're back. The sign-in library loads only once you sign in.
@@ -14,10 +14,12 @@ const BASE = import.meta.env.VITE_SUPABASE_URL;
 // only ever goes in the apikey header; Authorization carries a signed-in user's token, or nothing.
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const canSignIn = !!(BASE && KEY);
-const inApp = "__TAURI_INTERNALS__" in window;
+export const inApp = "__TAURI_INTERNALS__" in window;
+// The app and the website won't open past sign-in without an account (when there are accounts to have).
+export const mustSignIn = canSignIn;
 
-export type Profile = { name: string; avatar?: string };
-type Account = { user?: { id: string; email?: string }; profile?: Profile; state: "idle" | "syncing" | "error"; synced?: number; error?: string };
+export type Profile = { name: string; handle?: string; avatar?: string };
+type Account = { user?: { id: string; email?: string }; profile?: Profile; out?: boolean; state: "idle" | "syncing" | "error"; synced?: number; error?: string };
 export const useAccount = create<Account>()(persist((): Account => ({ state: "idle" }), { name: "account", partialize: ({ user, profile, synced }) => ({ user, profile, synced }) }));
 export const setProfile = (p: Partial<Profile>) => useAccount.setState((s) => ({ profile: { name: "", ...s.profile, ...p } }));
 
@@ -35,6 +37,11 @@ function auth() {
   }));
 }
 
+// Another sign-up code, for when the first didn't come.
+export async function resendSignUp(email: string) {
+  const { error } = await (await auth()).resend({ type: "signup", email });
+  if (error) throw error;
+}
 // A code by email, six digits, for the address you typed; entering it signs you in (or up).
 export async function sendCode(email: string) {
   const { error } = await (await auth()).signInWithOtp({ email, options: { shouldCreateUser: true } });
@@ -53,6 +60,8 @@ export async function signInWithPassword(email: string, password: string) {
 export async function signUp(email: string, password: string) {
   const { data, error } = await (await auth()).signUp({ email, password });
   if (error) throw error;
+  // With Confirm email on, Supabase doesn't say the email is taken (so nobody can probe for accounts); it hands back a user with no identities instead.
+  if (data.user && !data.user.identities?.length) throw new Error("User already registered");
   return { confirm: !data.session };
 }
 // Google (or Apple), in your browser. In the app it comes back to src-tauri/src/account.rs, listening on
@@ -75,24 +84,75 @@ export async function signInWith(provider: "google" | "apple") {
   const { error: failed } = await c.exchangeCodeForSession(code);
   if (failed) throw failed;
 }
-// Signing out (or deleting your account) leaves your library on this computer.
+// Signing in on the website instead (the app with a site to go to): the site's own sign-in page, opened
+// with the port this app listens on and a one-off state. Signed in there, you press Continue and it sends
+// the session back to the listener (handBack), which checks the state.
+const SITE = import.meta.env.VITE_SHARE_URL?.replace(/\/$/, "");
+export const viaBrowser = inApp && !!SITE;
+export async function signInInBrowser() {
+  const c = await auth();
+  const port = await invoke<number>("oauth_start");
+  const state = crypto.randomUUID();
+  await (await import("@tauri-apps/plugin-opener")).openUrl(`${SITE}/?app=${port}&state=${state}`);
+  const back = new URLSearchParams(await invoke<string>("oauth_wait"));
+  void (await import("@tauri-apps/api/window")).getCurrentWindow().setFocus().catch(() => {});
+  if (back.get("state") !== state) throw new Error("Signing in didn’t finish");
+  const { error } = await c.setSession({ access_token: back.get("access_token") ?? "", refresh_token: back.get("refresh_token") ?? "" });
+  if (error) throw error;
+  // A refresh swaps the refresh token the website also had for one only this app has.
+  await c.refreshSession();
+}
+export const cancelBrowserSignIn = () => void invoke("oauth_start").catch(() => {}); // a new start gives up on the wait
+// The website's half: opened by the app (?app=<port>&state=…), it remembers that for this tab, through a
+// Google round trip too. Only Mixtape's own ports.
+const asked = new URLSearchParams(location.search);
+if (!inApp && /^5368[2-4]$/.test(asked.get("app") ?? "") && asked.get("state")) {
+  sessionStorage.handoff = JSON.stringify({ port: asked.get("app"), state: asked.get("state") });
+  history.replaceState(null, "", location.pathname + location.hash);
+}
+export const handingOff = (): { port: string; state: string } | undefined => (sessionStorage.handoff ? JSON.parse(sessionStorage.handoff) : undefined);
+export async function handBack() {
+  const h = handingOff();
+  const { data } = await (await auth()).getSession();
+  if (!h || !data.session) return;
+  delete sessionStorage.handoff;
+  // Posted, not put in the link, so the tokens never land in the address bar or the browser's history.
+  const form = Object.assign(document.createElement("form"), { method: "POST", action: `http://127.0.0.1:${h.port}/callback` });
+  for (const [name, value] of Object.entries({ state: h.state, access_token: data.session.access_token, refresh_token: data.session.refresh_token })) form.append(Object.assign(document.createElement("input"), { type: "hidden", name, value }));
+  document.body.append(form);
+  form.submit();
+}
+// Your @handle: lowercase letters, numbers, dots and underscores. Claimed in public.handles, which says
+// no when it's someone else's, then kept in your profile.
+export const cleanHandle = (h: string) => h.toLowerCase().replace(/^@/, "").replace(/[^a-z0-9_.]/g, "").slice(0, 24);
+export const handleFree = async (h: string) => !(await table<unknown[]>(`handles?select=user_id&handle=eq.${h}&user_id=neq.${useAccount.getState().user?.id}`)).length;
+export async function claimHandle(handle: string) {
+  const user_id = useAccount.getState().user?.id;
+  await table("handles", { method: "POST", headers: { prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ user_id, handle }) }).catch((e) => Promise.reject(e.code === "23505" ? new Error("Someone already has that one.") : e));
+  setProfile({ handle });
+}
+// Signing out (or deleting your account) leaves your library on this computer (or in this browser). On
+// the web, where an account is optional, it goes back to the sign-in (out), which you can skip.
+const here = inApp ? "on this computer" : "in this browser";
 export async function signOut() {
   await (await auth()).signOut({ scope: "local" });
   signedOut();
-  notify({ text: "Signed Out", detail: "Your library is still on this computer" });
+  useAccount.setState({ out: !inApp });
+  notify({ text: "Signed Out", detail: `Your library is still ${here}` });
 }
 export async function deleteAccount() {
   await rpc("delete_me", {}, await token());
   await (await auth()).signOut({ scope: "local" }).catch(() => {});
   signedOut();
-  notify({ text: "Account Deleted", detail: "Your library is still on this computer" });
+  useAccount.setState({ out: !inApp });
+  notify({ text: "Account Deleted", detail: `Your library is still ${here}` });
 }
 
 // Also on each token refresh (hourly), which changes nothing.
 function signedIn(user: User) {
   who = user;
   const was = useAccount.getState().user;
-  if (was?.id !== user.id || was.email !== user.email) useAccount.setState({ user: { id: user.id, email: user.email } });
+  if (was?.id !== user.id || was.email !== user.email) useAccount.setState({ user: { id: user.id, email: user.email }, out: false });
   if (watching && was?.id === user.id) return;
   watch();
   void syncNow();
@@ -321,7 +381,7 @@ export function syncNow(): Promise<void> {
       }
     } catch (e) {
       // Deleted from another device: signed out here too, library kept.
-      if ((e as { code?: string }).code === "SV001") void (await auth()).signOut({ scope: "local" }), signedOut(), notify({ text: "Your Account Was Deleted", detail: "Your library is still on this computer" });
+      if ((e as { code?: string }).code === "SV001") void (await auth()).signOut({ scope: "local" }), signedOut(), notify({ text: "Your Account Was Deleted", detail: `Your library is still ${here}` });
       // Lots went missing here without you removing them: forget they were here and read everything again,
       // which puts them back.
       else if ((e as { code?: string }).code === "SV002" && meta) {
@@ -356,7 +416,7 @@ function check() {
 
 // Sharing: a public playlist's link, and your profile's (with your public playlists). Anyone with one can
 // open it, signed in or not. A link opens the web build (VITE_SHARE_URL) when there is one; either way,
-// pasted into Search it opens in Sleeve.
+// pasted into Search it opens in Mixtape.
 const SHARE = import.meta.env.VITE_SHARE_URL?.replace(/\/$/, "") ?? (inApp ? undefined : location.origin + location.pathname.replace(/\/$/, ""));
 const linkTo = (path: string) => (SHARE ? `${SHARE}/#/${path}` : `sleeve:${path}`);
 export const sharedLink = (id: string) => linkTo(`list/${id}`); // id: "<owner>/<playlist>"
@@ -372,7 +432,7 @@ export type PublicProfile = { profile: Profile; playlists: { id: string; name: s
 export const sharedPlaylist = (id: string) => rpc<Shared | null>("shared_playlist", { owner: id.split("/")[0], list: id.split("/")[1] });
 export const publicProfile = (user: string) => rpc<PublicProfile | null>("public_profile", { owner: user });
 
-// Everything Sleeve keeps about you, as one file: library, your lyrics, history, settings, profile.
+// Everything Mixtape keeps about you, as one file: library, your lyrics, history, settings, profile.
 // Settings → Library → Restore takes it back.
 export async function exportAll() {
   const history: Play[] = [];
@@ -381,7 +441,7 @@ export async function exportAll() {
   const data = { exported: new Date().toISOString(), account: user?.email, profile, ...useLibrary.getState(), lyrics: useMine.getState().songs, history, settings: useSettings.getState() };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: "application/json" }));
-  a.download = `Sleeve Data ${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `Mixtape Data ${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   notify({ text: "Data Exported", detail: "Saved to your Downloads folder" });
@@ -389,7 +449,7 @@ export async function exportAll() {
 
 // Launch: back in if you were signed in (or coming back from Google in the web build). A shared link
 // the web build is opened with opens, and so does one followed in a tab that's already open.
-if (canSignIn && (useAccount.getState().user || Object.keys(localStorage).some((k) => k.startsWith(STORAGE)) || /[?&]code=/.test(location.search))) setTimeout(() => void auth(), 0);
+if (canSignIn && (useAccount.getState().user || Object.keys(localStorage).some((k) => k.startsWith(STORAGE)) || /[?&]code=/.test(location.search) || handingOff())) setTimeout(() => void auth(), 0);
 const openLinked = () => {
   const view = fromLink(location.hash);
   if (view) open(view), history.replaceState(null, "", location.pathname + location.search);

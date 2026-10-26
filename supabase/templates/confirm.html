@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Supabase → Authentication → Emails → Confirm sign up. Subject: {{ .Token }} is your Mixtape code
+     Same look as the sign-in screen: near-black, the system font, a heavy tight heading. Tables and inline styles so every mail app draws it the same. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
+<title>Your Mixtape code</title>
+</head>
+<body style="margin:0;padding:0;background:#0b0b0c;" bgcolor="#0b0b0c">
+<div style="display:none;max-height:0;overflow:hidden;">Enter it in Mixtape to confirm your email.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#0b0b0c" style="background:#0b0b0c;">
+<tr><td align="center" style="padding:72px 24px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:420px;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;color:#ffffff;">
+    <tr><td style="font-size:15px;font-weight:800;letter-spacing:-0.3px;color:#ffffff;">Mixtape</td></tr>
+    <tr><td style="padding-top:56px;font-size:17px;line-height:1.5;color:#8c8c8e;">Your code to confirm your email:</td></tr>
+    <tr><td style="padding-top:8px;font-size:56px;line-height:1;font-weight:900;letter-spacing:-1px;color:#ffffff;">{{ .Token }}</td></tr>
+    <tr><td style="padding-top:40px;font-size:14px;line-height:1.6;color:#6e6e70;">It expires in 10 minutes. If you didn’t sign up for Mixtape, ignore this email.</td></tr>
+  </table>
+</td></tr>
+</table>
+</body>
+</html>

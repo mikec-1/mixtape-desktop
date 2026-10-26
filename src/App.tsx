@@ -4,8 +4,9 @@ import { ROOTS, audio, back, cycleRepeat, go, next, prev, seekTo, setMuted, setV
 import { actionFor, comboFrom, recording, searchTab } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, SongName, LikeButton, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
-import { useAccount } from "./account";
+import { handingOff, mustSignIn, useAccount } from "./account";
 import { Welcome } from "./welcome";
+import { Hello } from "./hello";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { addFiles, canHaveFiles } from "./local";
@@ -29,6 +30,18 @@ function firstLaunch() {
 export default function App() {
   // Settings → About can show it again ("preview"), after a reload.
   const [welcome, setWelcome] = useState<boolean | "preview">(() => (sessionStorage.welcome ? (delete sessionStorage.welcome, "preview") : firstLaunch()));
+  const locked = useAccount((s) => (mustSignIn || s.out) && !s.user) || !!handingOff(); // the app, signed out: sign in before anything else (and the website, signing the app in)
+  // Just signed in: the sign-in says hi and fades into the app, rather than vanishing the moment the account lands.
+  const [leaving, setLeaving] = useState(false);
+  const wasLocked = useRef(locked);
+  useEffect(() => {
+    const go = wasLocked.current && !locked && !!useAccount.getState().user; // not when you skip it
+    wasLocked.current = locked;
+    if (!go) return;
+    setLeaving(true);
+    const t = setTimeout(() => setLeaving(false), 1100);
+    return () => clearTimeout(t);
+  }, [locked]);
   const stack = useStore((s) => s.stack);
   const tabs = useStore((s) => s.tabs);
   const covered = useStore((s) => !!s.sheet || !!s.dialog); // the sheet or a dialog is over the page
@@ -97,7 +110,7 @@ export default function App() {
     // The sidebar, one big page card and the queue side by side, the player under all three. The gaps drag the window.
     // The toasts centre on the window, over the play button, whatever's open. The welcome goes over all of it.
     <>
-    <div data-tauri-drag-region inert={!!welcome} className={`flex h-full flex-col gap-2 p-2 ${onWindows ? "pt-8" : ""}`}>
+    <div data-tauri-drag-region inert={!!welcome || locked} className={`flex h-full flex-col gap-2 p-2 ${onWindows ? "pt-8" : ""}`}>
       <div className="flex min-h-0 flex-1 gap-2">
         <Sidebar root={root} open={open} width={width} inert={covered} />
         <main inert={covered} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
@@ -135,7 +148,7 @@ export default function App() {
         </div>
       </div>
     )}
-    {welcome && <Welcome preview={welcome === "preview"} onDone={() => setWelcome(false)} />}
+    {locked || leaving ? <Hello leaving={leaving} onSkip={mustSignIn || handingOff() ? undefined : () => useAccount.setState({ out: false })} /> : welcome && <Welcome preview={welcome === "preview"} onDone={() => setWelcome(false)} />}
     {onWindows && <WindowButtons />}
     </>
   );

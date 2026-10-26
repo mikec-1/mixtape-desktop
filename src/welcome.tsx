@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, FolderPlus, Upload, type LucideIcon } from "lucide-react";
-import { follow, useLibrary } from "./store";
+import { Check, FileSpreadsheet, FolderPlus, Music2, Upload, type LucideIcon } from "lucide-react";
+import { follow, useLibrary, useStore } from "./store";
+import { pickPlaylists } from "./import";
 import { canSignIn, useAccount } from "./account";
 import { addFolder, canHaveFiles, useLocal } from "./local";
-import { quiet, restore, solid } from "./views";
+import { restore, solid } from "./views";
 import { Hello } from "./hello";
 import { art, findArtist } from "./yt";
 
-// The first time Sleeve opens: sign in or carry on without, pick a few artists, bring your music. Each
+// The first time it opens: sign in or carry on without, bring your music, pick a few artists. Each
 // can be skipped; none comes back (Settings has all of it).
 // preview: shown again from Settings → About, so it starts at sign-in even when you're signed in.
 export function Welcome({ onDone, preview }: { onDone: () => void; preview?: boolean }) {
@@ -18,12 +19,12 @@ export function Welcome({ onDone, preview }: { onDone: () => void; preview?: boo
   const finish = () => ((localStorage.onboarded = 1), onDone());
   if (step === 0) return <Hello onSkip={() => setStep(1)} />;
   return (
-    <div role="dialog" aria-modal aria-label="Welcome to Sleeve" data-tauri-drag-region className="fixed inset-0 z-50 flex flex-col items-center overflow-y-auto bg-paper px-8 pt-16 pb-10">
+    <div role="dialog" aria-modal aria-label="Welcome" data-tauri-drag-region className="fixed inset-0 z-50 flex flex-col items-center overflow-y-auto bg-paper px-8 pt-16 pb-10">
       <div key={step} className="flex w-full max-w-3xl animate-enter flex-col items-center text-center">
         {step === 1 ? (
-          <PickArtists onNext={() => setStep(2)} />
+          <BringMusic onNext={() => setStep(2)} onSpotify={() => (finish(), useStore.setState({ dialog: { kind: "spotify" } }))} />
         ) : (
-          <BringMusic onDone={finish} />
+          <PickArtists onNext={finish} />
         )}
       </div>
       <div aria-hidden className="mt-auto flex gap-2 pt-10">
@@ -54,6 +55,7 @@ function PickArtists({ onNext }: { onNext: () => void }) {
     for (const name of PICKS) findArtist(name).then((a) => setFound((f) => ({ ...f, [name]: a ?? null })), () => setFound((f) => ({ ...f, [name]: null })));
   }, []);
   const next = () => (follow(picked.flatMap((n) => (found[n] ? [found[n]!] : []))), onNext());
+  // Picking is the last step, so its buttons start the app.
   return (
     <Step title="Pick a few artists" about="They go in your library, so their music is never far away.">
       <ul className="grid w-full max-w-2xl grid-cols-6 gap-5">
@@ -77,25 +79,26 @@ function PickArtists({ onNext }: { onNext: () => void }) {
         })}
       </ul>
       <div className="mt-9 flex gap-3">
-        <button onClick={next} disabled={!picked.length} className={solid}>{picked.length ? `Follow ${picked.length}` : "Continue"}</button>
-        <button onClick={onNext} className={quiet}>Skip</button>
+        <button onClick={next} className={solid}>{picked.length ? `Follow ${picked.length} and Start Listening` : "Start Listening"}</button>
       </div>
     </Step>
   );
 }
 
-function BringMusic({ onDone }: { onDone: () => void }) {
+function BringMusic({ onNext, onSpotify }: { onNext: () => void; onSpotify: () => void }) {
   const file = useRef<HTMLInputElement>(null);
   const songs = useLocal((s) => Object.keys(s.files).length);
   const restored = useLibrary((s) => s.liked.length + s.playlists.length > 0);
   return (
-    <Step title="Bring your music" about="Play the songs on this computer alongside everything else, or pick up a library you exported from Sleeve.">
+    <Step title="Bring your music" about="Your playlists and liked songs from another app, or the songs on this computer. You can add more any time.">
       <div className="grid w-full max-w-lg gap-3 text-left">
+        {canHaveFiles && <Choice icon={Music2} title="Import from Spotify" detail="Playlists, liked songs, albums and artists" done={false} onClick={onSpotify} />}
+        {canHaveFiles && <Choice icon={FileSpreadsheet} title="Import Playlist Files" detail="CSVs from Apple Music, Deezer or Exportify" done={false} onClick={() => void pickPlaylists()} />}
         {canHaveFiles && <Choice icon={FolderPlus} title="Add Your Music Folder" detail={songs ? `${songs} songs in your Local Files` : "Its songs land in Local Files"} done={songs > 0} onClick={() => void addFolder()} />}
-        <Choice icon={Upload} title="Restore a Sleeve Export" detail={restored ? "Your library is back" : "Liked songs, playlists and more, from a file"} done={restored} onClick={() => file.current?.click()} />
+        <Choice icon={Upload} title="Restore an Export" detail={restored ? "Your library is back" : "Liked songs, playlists and more, from a file"} done={restored} onClick={() => file.current?.click()} />
       </div>
       <input ref={file} type="file" accept=".json,application/json" hidden onChange={(e) => (e.target.files?.[0] && void restore(e.target.files[0]), (e.target.value = ""))} />
-      <button onClick={onDone} className={`${solid} mt-10`}>Start Listening</button>
+      <button onClick={onNext} className={`${solid} mt-10`}>{songs || restored ? "Continue" : "Skip for Now"}</button>
     </Step>
   );
 }

@@ -3016,7 +3016,7 @@ export function Settings() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => (e.key === "Escape" && q ? (e.stopPropagation(), setQ("")) : e.key === "Enter" && shown[0] && find && pick(shown[0].id))}
-            placeholder="Search settings"
+            placeholder="Search settings" autoComplete="off"
             aria-label="Search settings"
             className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-muted"
           />
@@ -3186,7 +3186,7 @@ function LinkedAccountsPane() {
           <button onClick={() => set({ listenBrainzToken: "" })} className={quiet}>Disconnect</button>
         ) : (
           <div className="flex gap-2">
-            <input type="password" value={token} onChange={(e) => setToken(e.target.value.trim())} onKeyDown={(e) => e.key === "Enter" && linkBrainz()} placeholder="User token" aria-label="ListenBrainz user token" className="w-48 rounded-full bg-ink/[0.07] px-3.5 text-sm outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent" />
+            <input type="text" autoComplete="off" data-1p-ignore data-lpignore="true" value={token} onChange={(e) => setToken(e.target.value.trim())} onKeyDown={(e) => e.key === "Enter" && linkBrainz()} placeholder="User token" aria-label="ListenBrainz user token" className="w-48 [-webkit-text-security:disc] rounded-full bg-ink/[0.07] px-3.5 text-sm outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent" />
             <button onClick={linkBrainz} disabled={!token} className={solid}>Connect</button>
           </div>
         )}

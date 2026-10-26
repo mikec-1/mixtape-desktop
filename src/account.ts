@@ -116,9 +116,12 @@ if (!inApp && /^5368[2-4]$/.test(asked.get("app") ?? "") && asked.get("state")) 
 export const handingOff = (): { port: string; state: string } | undefined => (sessionStorage.handoff ? JSON.parse(sessionStorage.handoff) : undefined);
 export async function handBack() {
   const h = handingOff();
-  // Fresh tokens, not the stored ones: a tab that's been signed in a while can hold an expired session.
-  const { data } = await (await auth()).refreshSession();
-  if (!h || !data.session) return;
+  if (!h) throw new Error("This page wasn’t opened by the app. Press Sign in in Mixtape again.");
+  // Fresh tokens when it can (a tab signed in a while can hold an expired session), else the stored ones.
+  const c = await auth(), fresh = await c.refreshSession().catch(() => undefined);
+  const session = fresh?.data.session ?? (await c.getSession()).data.session;
+  if (!session) throw new Error("You’re not signed in here any more. Sign in again.");
+  const data = { session };
   delete sessionStorage.handoff;
   // Posted, not put in the link, so the tokens never land in the address bar or the browser's history.
   const form = Object.assign(document.createElement("form"), { method: "POST", action: `http://127.0.0.1:${h.port}/callback` });

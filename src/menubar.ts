@@ -28,7 +28,7 @@ async function build() {
       sub("View", [item("home", "Home"), item("searchTab", "Search"), item("library", "Library"), line(), item("goBack", "Back"), item("goForward", "Forward"), line(), item("sidebar", "Show or Hide Sidebar"), line(), item("zoomReset", "Actual Size"), item("zoomIn", "Zoom In"), item("zoomOut", "Zoom Out"), line(), PredefinedMenuItem.new({ item: "Fullscreen" })]),
       sub("Controls", [item("play", "Play or Pause"), item("next", "Next"), item("prev", "Previous"), line(), item("ahead5", "Forward 5 Seconds"), item("back5", "Back 5 Seconds"), line(), item("shuffle", "Shuffle"), item("repeat", "Repeat"), line(), item("louder", "Volume Up"), item("quieter", "Volume Down"), line(), item("like", "Like Song"), item("search", "Search…")]),
       sub("Window", [PredefinedMenuItem.new({ item: "Minimize" }), PredefinedMenuItem.new({ item: "Maximize" }), line(), run("Mini Player", toggleMini, "Alt+CmdOrCtrl+M"), line(), run("Bring All to Front", () => getCurrentWindow().setFocus())]),
-      sub("Help", [run("Mixtape on GitHub", () => openUrl("https://github.com/mikec-1/Sleeve")), run("Report a Problem", () => openUrl("https://github.com/mikec-1/Sleeve/issues/new"))]),
+      sub("Help", [run("Mixtape on GitHub", () => openUrl("https://github.com/mikec-1/mixtape-desktop")), run("Report a Problem", () => openUrl("https://github.com/mikec-1/mixtape-desktop/issues/new"))]),
     ]),
   });
   await menu.setAsAppMenu();

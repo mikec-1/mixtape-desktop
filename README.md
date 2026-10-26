@@ -2,7 +2,7 @@
 
 A free music player for Mac, Windows and the web. Bring the library you already have and keep listening.
 
-**[Download](https://github.com/mikec-1/Sleeve/releases/latest)** · **[Open in your browser](https://mixtaped.tech)**
+**[Download](https://github.com/mikec-1/mixtape-desktop/releases/latest)** · **[Open in your browser](https://mixtaped.tech)**
 
 ## What it does
 

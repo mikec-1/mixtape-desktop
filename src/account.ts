@@ -442,12 +442,12 @@ function check() {
 // open it, signed in or not. A link opens the web build (VITE_SHARE_URL) when there is one; either way,
 // pasted into Search it opens in Mixtape.
 const SHARE = import.meta.env.VITE_SHARE_URL?.replace(/\/$/, "") ?? (inApp ? undefined : location.origin + location.pathname.replace(/\/$/, ""));
-const linkTo = (path: string) => (SHARE ? `${SHARE}/#/${path}` : `sleeve:${path}`);
+const linkTo = (path: string) => (SHARE ? `${SHARE}/#/${path}` : `mixtape:${path}`);
 export const sharedLink = (id: string) => linkTo(`list/${id}`); // id: "<owner>/<playlist>"
 export const playlistLink = (id: string) => sharedLink(`${useAccount.getState().user?.id}/${id}`);
 export const profileLink = (user = useAccount.getState().user?.id) => linkTo(`u/${user}`);
 export function fromLink(text: string): View | undefined {
-  const m = /(?:#\/|sleeve:)(list|u)\/([0-9a-f-]{36})(?:\/([\w-]+))?/i.exec(text);
+  const m = /(?:#\/|mixtape:)(list|u)\/([0-9a-f-]{36})(?:\/([\w-]+))?/i.exec(text);
   if (m?.[1] === "list" && m[3]) return { name: "shared", id: `${m[2]}/${m[3]}` };
   if (m?.[1] === "u") return { name: "profile", id: m[2] };
 }

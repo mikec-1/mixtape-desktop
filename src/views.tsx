@@ -671,7 +671,7 @@ const LIBRARY_SORTS = [["recents", "Recents"], ["added", "Recently Added"], ["na
 const SONG_ORDER: Record<LibrarySort, TrackSort> = { recents: "custom", added: "custom", name: "title", creator: "artist" };
 const SONG_SORT_LABEL: Record<LibrarySort, string> = { recents: "Recently Added", added: "Recently Added", name: "Title", creator: "Artist" };
 
-// The big Liked Songs card, with the latest likes stacked like sleeves pulled from a crate.
+// The big Liked Songs card, with the latest likes stacked like records pulled from a crate.
 function LikedHero({ liked }: { liked: Track[] }) {
   return (
     <div className={`group relative isolate mt-8 flex min-h-[clamp(230px,30vh,320px)] items-end overflow-hidden rounded-3xl p-8 text-white @4xl:p-10 ${LIKED}`}>
@@ -751,10 +751,10 @@ function LibraryItems({ items, view }: { items: Item[]; view: "grid" | "list" })
           <li
             key={item.key}
             draggable={item.kind === "playlist"}
-            onDragStart={(e) => (e.dataTransfer.setData("sleeve/playlist", item.id), (e.dataTransfer.effectAllowed = "move"))}
-            onDragOver={(e) => drop && e.dataTransfer.types.includes("sleeve/playlist") && (e.preventDefault(), setOver(item.key))}
+            onDragStart={(e) => (e.dataTransfer.setData("mixtape/playlist", item.id), (e.dataTransfer.effectAllowed = "move"))}
+            onDragOver={(e) => drop && e.dataTransfer.types.includes("mixtape/playlist") && (e.preventDefault(), setOver(item.key))}
             onDragLeave={() => setOver(undefined)}
-            onDrop={(e) => (setOver(undefined), drop && moveToFolder(e.dataTransfer.getData("sleeve/playlist"), item.id))}
+            onDrop={(e) => (setOver(undefined), drop && moveToFolder(e.dataTransfer.getData("mixtape/playlist"), item.id))}
             onContextMenu={(e) => (e.preventDefault(), itemMenu(item))}
             className={`group relative rounded-xl transition-[background-color,box-shadow] ${view === "list" ? "flex items-center gap-3 p-2 hover:bg-ink/[0.04]" : ""} ${over === item.key ? "bg-accent/15 shadow-[0_0_0_2px_var(--color-accent)]" : ""}`}
           >
@@ -3787,8 +3787,8 @@ function About() {
         {canHaveFiles && <button onClick={look} disabled={update === "Checking…"} className={`${quiet} mt-4`}><RefreshCw size={15} className={update === "Checking…" ? "animate-spin" : ""} /> Check for Updates</button>}
         {update && <p className="mt-2 text-xs text-muted">{update}</p>}
         <div className="mt-5 flex flex-wrap justify-center gap-2">
-          <button onClick={() => openLink("https://github.com/mikec-1/Sleeve")} className={quiet}><CodeXml size={15} /> GitHub</button>
-          <button onClick={() => openLink("https://github.com/mikec-1/Sleeve/issues")} className={quiet}><LifeBuoy size={15} /> Report a Problem</button>
+          <button onClick={() => openLink("https://github.com/mikec-1/mixtape-desktop")} className={quiet}><CodeXml size={15} /> GitHub</button>
+          <button onClick={() => openLink("https://github.com/mikec-1/mixtape-desktop/issues")} className={quiet}><LifeBuoy size={15} /> Report a Problem</button>
           <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={quiet}>Show the Welcome Again</button>
         </div>
       </div>

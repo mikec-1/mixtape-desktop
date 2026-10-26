@@ -1,6 +1,6 @@
--- What Sleeve takes from Mixtape's backend: the guard against a device wiping your library, and Spotify
+-- What this app takes from the iOS app's backend: the guard against a device wiping your library, and Spotify
 -- following your account, with the server bringing your Spotify plays into History every half hour.
--- Run after 20261019000000_sleeve.sql. The cron job at the end calls the spotify_history function, so
+-- Run after 20261019000000_mixtape.sql. The cron job at the end calls the spotify_history function, so
 -- deploy that too. See docs/accounts.md.
 
 -- sync() as before, plus bulk: the app sets it when you removed lots on purpose.

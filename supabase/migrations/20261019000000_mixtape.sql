@@ -1,4 +1,4 @@
--- Sleeve's whole backend: one table of library items and four functions. Run it once in a new Supabase
+-- Mixtape's whole backend: one table of library items and four functions. Run it once in a new Supabase
 -- project (SQL Editor, or `supabase db push`). See docs/accounts.md.
 
 -- Every synced thing is one row: a liked song, a saved album, a playlist (with its songs), a folder,

@@ -1,7 +1,7 @@
 [package]
 name = "Mixtape"
 version = "0.1.0"
-description = "Sleeve"
+description = "Mixtape"
 authors = ["you"]
 edition = "2024"
 

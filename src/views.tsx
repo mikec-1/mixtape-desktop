@@ -1900,7 +1900,7 @@ export function NowPlaying() {
             ) : (
               <div role="tabpanel" aria-label="Up Next" className="flex min-h-0 flex-1 flex-col">
                 {upNext.length ? (
-                  <div className="min-h-0 overflow-y-auto">
+                  <div data-scroller className="min-h-0 overflow-y-auto">
                     <TrackList tracks={upNext} header={false} onPlay={(i) => jump(index + 1 + i)} />
                   </div>
                 ) : (
@@ -4046,7 +4046,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   const held = useRef<number>(undefined);
   const list = useRef<HTMLOListElement>(null);
   const run = (a: number, b: number) => new Set(Array.from({ length: Math.abs(b - a) + 1 }, (_, k) => Math.min(a, b) + k));
-  // Only the rows in view and a screenful either side are drawn (start–stop, moved ten rows at a time), so a
+  // Only the rows in view (of the page, or a data-scroller such as Up Next) and a screenful either side are drawn (start–stop, moved ten rows at a time), so a
   // list of thousands scrolls smoothly; the rest is empty space as tall as they'd be. rowH: a row's height,
   // measured. Songs on screen without a cover get theirs first.
   const [[start, stop], setShown] = useState([0, 60]);
@@ -4054,7 +4054,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   const now = useRef(tracks);
   now.current = tracks;
   useLayoutEffect(() => {
-    const page = list.current?.closest<HTMLElement>("main > div");
+    const page = list.current?.closest<HTMLElement>("main > div, [data-scroller]");
     if (!page) return setShown([0, Infinity]);
     const update = () => {
       rowH.current = list.current?.querySelector("li")?.getBoundingClientRect().height || rowH.current;
@@ -4072,7 +4072,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   }, []);
   // Row i brought into view, drawn or not.
   const reveal = (i: number) => {
-    const page = list.current?.closest<HTMLElement>("main > div"), o = list.current?.getBoundingClientRect();
+    const page = list.current?.closest<HTMLElement>("main > div, [data-scroller]"), o = list.current?.getBoundingClientRect();
     if (!page || !o) return;
     const p = page.getBoundingClientRect(), top = o.top + i * rowH.current - p.top;
     page.scrollTop += top < 0 ? top : Math.max(0, top + rowH.current - p.height);
@@ -4092,7 +4092,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
       if (row && list.current?.contains(row)) setSel(run(anchor.current, (lead.current = +row.dataset.i!)));
     };
     const away = (e: PointerEvent) => {
-      const t = e.target as Element, page = list.current?.closest<HTMLElement>("main > div");
+      const t = e.target as Element, page = list.current?.closest<HTMLElement>("main > div, [data-scroller]");
       if (list.current?.contains(t) || t.closest?.("[role=menu]")) return;
       // Empty space on this list's page, level with it or below it (and below no later list): a box.
       const empty = e.button === 0 && page?.contains(t) && !t.closest("button, a, input, textarea, select, li, [role=separator]") && [...page.querySelectorAll("ol[data-rows]")].filter((o) => o.getBoundingClientRect().top <= e.clientY).pop() === list.current;

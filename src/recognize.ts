@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./http";
 import type { Found, SongEdit } from "./local";
 import { stripVersion } from "./yt";
 

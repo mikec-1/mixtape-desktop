@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as choose } from "@tauri-apps/plugin-dialog";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./http";
 import { searchKind, searchYouTube, parseSecs, SEP, type Track } from "./yt";
 import { likeAll, newPlaylist, notify, open, plural, useLibrary, useStore, type View } from "./store";
 import { covers, length, playlist as dzPlaylist } from "./deezer";

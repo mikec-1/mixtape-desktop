@@ -17,8 +17,8 @@ try {
   else if (label === "bar") Root = (await import("./bar")).default;
   else {
     Root = (await import("./App")).default;
-    void import("./startup").catch(console.error); // never holds the window up
-    if (/Mac/.test(navigator.userAgent)) void import("./menubar").catch(console.error);
+    if (label !== false) void import("./startup").catch(console.error); // never holds the window up
+    if (label !== false && /Mac/.test(navigator.userAgent)) void import("./menubar").catch(console.error);
     // Draw once the library, your own lyrics, what's downloaded and your files are read (a few ms), so none
     // flashes in late, and offline the first covers come from disk. A store that can't be read (it never
     // says it's done) doesn't hold the window up past a second.

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { fetch as tauriFetch } from "./http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { audio, idb, idbDelete, idbGet, idbKeys, idbPut, notify, setLyricLine, songBytes, subscribeAudio, useOnline, useSettings, useStore } from "./store";
@@ -21,7 +21,7 @@ export type Line = { time: number; end?: number; text: string; words?: Word[]; b
 export type Lyrics = { lines: Line[]; synced: boolean; source: string; instrumental?: boolean; writers?: string; slid?: number; alt?: Line[] };
 
 // In the app requests go through Rust like YouTube's (yt.ts), so CORS never matters; a browser uses its own.
-const http: typeof fetch = "__TAURI_INTERNALS__" in window ? tauriFetch : (input, init) => fetch(input, init);
+const http = tauriFetch;
 const timeout = (ms = 10_000) => {
   const c = new AbortController();
   setTimeout(() => c.abort(), ms);

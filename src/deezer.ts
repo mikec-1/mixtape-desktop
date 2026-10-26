@@ -1,4 +1,4 @@
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./http";
 import { create } from "zustand";
 import { findSong, latin, rowOf } from "./import";
 import { heard } from "./recognize";

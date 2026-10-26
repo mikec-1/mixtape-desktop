@@ -1,4 +1,4 @@
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./http";
 import { md5 } from "js-md5";
 import { idbGet, idbPut, notify, usePrivate, useSettings } from "./store";
 import type { Track } from "./yt";

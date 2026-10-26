@@ -188,7 +188,7 @@ function signedOut() {
   void idbPut("sync", undefined);
   useAccount.setState({ user: undefined, profile: undefined, synced: undefined, state: "idle", error: undefined });
 }
-async function token() {
+export async function token() {
   const { data, error } = await (await auth()).getSession();
   if (error || !data.session) throw error ?? new Error("You’re signed out");
   return data.session.access_token;

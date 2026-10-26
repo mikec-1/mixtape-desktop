@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { heard } from "./recognize";

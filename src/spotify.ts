@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { table, useAccount } from "./account";

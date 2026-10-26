@@ -1,5 +1,5 @@
 import { Innertube, Misc, Parser, Platform, YTMusic, YTNodes } from "youtubei.js/web";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch, inApp, web, webHeaders } from "./http";
 import { emitTo, listen } from "@tauri-apps/api/event";
 
 // youtubei.js needs a JS evaluator to decipher stream URLs; the webview is one.
@@ -386,6 +386,7 @@ const CHUNK = 1 << 20; // googlevideo 403s ranges much bigger than ~1 MB
 
 // Fire all 1 MB range requests in parallel; playback starts as soon as the first one lands.
 export async function fetchAudio(id: string, quality: Quality = "high") {
+  if (!inApp) return webAudio(id);
   const { url, mime, size, duration, loudness } = await stream(id, quality);
   const chunks: Promise<ArrayBuffer>[] = [];
   for (let start = 0; start < size; start += CHUNK) {
@@ -505,9 +506,25 @@ export async function hear(audio: HTMLAudioElement, data: ArrayBuffer, key?: str
 
 // YouTube serves fragmented (DASH) MP4, which WebKit can't play from a plain src, so feed it via MSE.
 // start resumes partway in (after a relaunch). autoplay false only buffers it (the next track, for gapless).
-export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duration }: Awaited<ReturnType<typeof fetchAudio>>, start = 0, autoplay = true, key?: string) {
-  const ms = new MediaSource();
+// The browser build: a signed link to the song through the resolver (supabase/functions/web), which
+// <audio> streams itself. No bytes here, so no beat or word timings on the web.
+async function webAudio(id: string) {
+  const { token } = await import("./account");
+  const r = await globalThis.fetch(`${web}?play=${id}`, { headers: webHeaders(await token()) });
+  if (!r.ok) throw new Error(r.status === 401 ? "Sign in to play songs on the web" : `Couldn’t play this song (${r.status})`);
+  const { url, duration } = await r.json();
+  return { chunks: [] as Promise<ArrayBuffer>[], mime: "audio/mp4", duration: duration as number, loudness: 0, url: url as string };
+}
+
+export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duration, url }: Awaited<ReturnType<typeof fetchAudio>> & { url?: string }, start = 0, autoplay = true, key?: string) {
   URL.revokeObjectURL(audio.src); // each player's own last one
+  if (url) {
+    audio.src = url;
+    audio.currentTime = start;
+    if (autoplay) await audio.play();
+    return;
+  }
+  const ms = new MediaSource();
   audio.src = URL.createObjectURL(ms);
   await new Promise((r) => ms.addEventListener("sourceopen", r, { once: true }));
   const sb = ms.addSourceBuffer(mime);

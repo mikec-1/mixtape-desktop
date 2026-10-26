@@ -759,7 +759,7 @@ function LibraryItems({ items, view }: { items: Item[]; view: "grid" | "list" })
             className={`group relative rounded-xl transition-[background-color,box-shadow] ${view === "list" ? "flex items-center gap-3 p-2 hover:bg-ink/[0.04]" : ""} ${over === item.key ? "bg-accent/15 shadow-[0_0_0_2px_var(--color-accent)]" : ""}`}
           >
             <button onClick={() => open(itemView(item))} aria-label={`Open ${item.title}`} className="hit" />
-            <div className={`pointer-events-none relative shrink-0 overflow-hidden bg-ink/[0.06] ${item.kind === "artist" ? "rounded-full" : view === "grid" ? "rounded-xl" : "rounded-lg"} ${view === "grid" ? "aspect-square w-full shadow-sm" : "size-12"}`}>
+            <div className={`pointer-events-none relative shrink-0 overflow-hidden bg-disc ${item.kind === "artist" ? "rounded-full" : view === "grid" ? "rounded-xl" : "rounded-lg"} ${view === "grid" ? "aspect-square w-full shadow-sm" : "size-14"}`}>
               <ItemCover item={item} />
             </div>
             <div className={`pointer-events-none min-w-0 ${view === "grid" ? "mt-2.5" : "flex-1"}`}>
@@ -796,7 +796,7 @@ async function itemTracks(i: Item): Promise<Track[]> {
   if (i.kind === "local") return localTracks();
   if (i.kind === "playlist") return l.playlists.find((p) => p.id === i.id)?.tracks ?? [];
   if (i.kind === "folder") return l.playlists.filter((p) => p.folder === i.id).flatMap((p) => p.tracks);
-  if (i.kind === "artist") return (await loadArtist(i.id).full).songs;
+  if (i.kind === "artist") return (await loadArtist(i.id).covered).songs;
   return (await collection(i.id)).tracks;
 }
 
@@ -1479,7 +1479,7 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
         <li key={t.id + i} {...warmSong(t)} onContextMenu={(e) => (e.preventDefault(), trackMenu(t))} className="group relative flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-ink/[0.04]">
           <button onClick={() => play(tracks, i)} aria-label={`Play ${t.title}`} className="hit" />
           {numbered && <span className="w-7 shrink-0 text-center text-xl font-extrabold tracking-tight text-muted tabular-nums">{i + 1}</span>}
-          <div className="pointer-events-none relative size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06]">
+          <div className="pointer-events-none relative size-14 shrink-0 overflow-hidden rounded-lg bg-disc">
             <img src={art(t.thumb, 120)} alt="" loading="lazy" className="size-full object-cover" />
             <div className={`absolute inset-0 grid place-items-center bg-black/35 text-white transition-opacity duration-150 ${on(t) ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
               {on(t) ? <AudioLines size={18} /> : <Play size={16} className="fill-current" />}
@@ -1502,20 +1502,27 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
 // Artist pages, each fetched once per launch: page is YT Music's own (five songs, no lengths), full adds
 // their top ten once that comes too: Deezer's, like Mixtape, or YT Music's if Deezer hasn't five.
 type ArtistPage = Awaited<ReturnType<typeof artist>>;
-const artistPages = new Map<string, { page: Promise<ArtistPage>; full: Promise<ArtistPage> }>();
-function loadArtist(id: string) {
+const artistPages = new Map<string, { page: Promise<ArtistPage>; full: Promise<ArtistPage>; covered: Promise<ArtistPage> }>();
+// A name already known (the link's, or the page's own) starts Deezer's top ten alongside the page, not after
+// it. full has the titles; covered adds their covers once the album lists are read.
+function loadArtist(id: string, name?: string) {
   if (!artistPages.has(id)) {
     const page = artist(id);
-    const full = page.then(async (p) => { const [dz, yt] = await Promise.all([dzTop(p.name).catch(() => []), p.more ? topSongs(p.more).catch(() => []) : []]); const top = dz.length >= 5 ? dz : yt; return top.length ? { ...p, songs: top } : p; });
-    artistPages.set(id, { page, full });
-    full.catch(() => artistPages.delete(id));
+    const none = { songs: [] as Track[], albums: Promise.resolve([] as Track[]) };
+    const early = name ? dzTop(name).catch(() => none) : undefined;
+    const dz = page.then((p) => (early && name!.toLowerCase() === p.name.toLowerCase() ? early : dzTop(p.name).catch(() => none)));
+    // YT Music's own top only when Deezer hasn't five.
+    const full = page.then(async (p) => { const d = await dz; const top = d.songs.length >= 5 ? d.songs : p.more ? await topSongs(p.more).catch(() => []) : []; return top.length ? { ...p, songs: top } : p; });
+    const covered = full.then(async (f) => { const d = await dz; return d.songs.length >= 5 ? { ...f, songs: await d.albums.catch(() => d.songs) } : f; });
+    artistPages.set(id, { page, full, covered });
+    covered.catch(() => artistPages.delete(id));
   }
   return artistPages.get(id)!;
 }
 // Resting on a link to an artist starts loading their page, so it's mostly there by the click.
 let resting: ReturnType<typeof setTimeout> | undefined;
 const warm = (a: { id?: string; name: string }) => ({
-  onPointerEnter: () => (resting = setTimeout(() => (a.id && !isDeezer(a.id) ? Promise.resolve(a.id) : artistByName(a.name)).then((id) => void (id && loadArtist(id).full)).catch(() => {}), 120)),
+  onPointerEnter: () => (resting = setTimeout(() => (a.id && !isDeezer(a.id) ? Promise.resolve(a.id) : artistByName(a.name)).then((id) => void (id && loadArtist(id, a.name).covered)).catch(() => {}), 120)),
   onPointerLeave: () => clearTimeout(resting),
 });
 // Resting on a song starts fetching it, so a click plays at once (Settings → Audio → Fetch While Browsing).
@@ -1532,8 +1539,11 @@ export function Artist({ id: linked, by }: { id: string; by?: string }) {
   const { data: kept } = useAsync(() => idbGet<ArtistPage & { id: string }>(key).catch(() => undefined), [key]);
   const { data: found, error: lost } = useAsync(() => (yt ? undefined : artistByName(by ?? "").then((id) => id ?? Promise.reject("none"))), [yt, by]);
   const id = yt || found || kept?.id || "";
-  const { data: page, error } = useAsync(() => (id ? loadArtist(id).page : undefined), [id]);
-  const { data: full } = useAsync(() => (id ? loadArtist(id).full.then((p) => (idbPut(key, { ...p, id }).catch(() => {}), p)) : undefined), [id]);
+  const { data: page, error } = useAsync(() => (id ? loadArtist(id, by ?? kept?.name).page : undefined), [id]);
+  const { data: titled } = useAsync(() => (id ? loadArtist(id, by ?? kept?.name).full : undefined), [id]);
+  const { data: covered } = useAsync(() => (id ? loadArtist(id, by ?? kept?.name).covered.then((p) => (idbPut(key, { ...p, id }).catch(() => {}), p)) : undefined), [id]);
+  // A kept copy has covers, so it stays until the fresh one has them too.
+  const full = covered ?? (kept ? undefined : titled);
   const data = full ?? kept ?? page;
   const [all, setAll] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -1598,7 +1608,8 @@ export function Artist({ id: linked, by }: { id: string; by?: string }) {
       </header>
 
       <div className="px-8">
-        {data.songs.length > 0 && (
+        {/* Waits for the final top ten rather than showing YT Music's five and swapping them; the space stays so nothing jumps. */}
+        {!(full ?? kept) ? <Section title="Popular Songs"><div role="status" className="flex h-[355px] animate-pulse flex-col gap-3 px-2 pt-2"><span className="sr-only">Loading…</span>{[0, 1, 2, 3, 4].map((i) => <div key={i} className="flex items-center gap-3"><div className="size-14 rounded-lg bg-disc" /><div className="flex flex-col gap-2"><div className="h-3 w-48 rounded-full bg-white/8" /><div className="h-3 w-28 rounded-full bg-white/5" /></div></div>)}</div></Section> : data.songs.length > 0 && (
           <Section title="Popular Songs" action={data.songs.length > 5 && <button onClick={() => setAll(!all)} className={LINK}>{all ? "Show Less" : "Show More"}</button>}>
             <TrackList tracks={all ? data.songs : data.songs.slice(0, 5)} numbered header={false} onPlay={(i) => play(data.songs, i, from)} />
           </Section>
@@ -1723,6 +1734,12 @@ export function ReleasesPage() {
 // just the lyrics, big, on the artwork's colour. Always mounted so it can slide both ways; transitions,
 // not keyframes, so a quick open-close reverses from wherever it is. Its contents go once it's down,
 // so a closed sheet costs nothing.
+// The player bar's outline, which the sheet opens out of and folds back into.
+function from() {
+  const r = document.querySelector("[data-player]")?.getBoundingClientRect();
+  return r ? `inset(${r.top}px ${innerWidth - r.right}px ${innerHeight - r.bottom}px ${r.left}px round 16px)` : "inset(100% 0 0 0)";
+}
+
 export function NowPlaying() {
   const sheet = useStore((s) => s.sheet);
   // Which one it was stays while it slides away, so it doesn't change on the way down.
@@ -1733,7 +1750,7 @@ export function NowPlaying() {
   if (open && !drawn) setDrawn(true);
   useEffect(() => {
     if (open) return;
-    const t = setTimeout(() => setDrawn(false), 320);
+    const t = setTimeout(() => setDrawn(false), 420);
     return () => clearTimeout(t);
   }, [open]);
   const big = (sheet ?? last) === "lyrics";
@@ -1765,9 +1782,10 @@ export function NowPlaying() {
       aria-label={big ? "Lyrics" : "Now Playing"}
       className={`fixed inset-0 z-30 overflow-clip ${big ? "bg-accent-vivid" : "bg-accent-deep"} ${
         open
-          ? "visible translate-y-0 [transition:transform_450ms_var(--ease-drawer),background-color_300ms]"
-          : "invisible translate-y-full [transition:transform_300ms_var(--ease-drawer),visibility_0s_300ms]"
+          ? "visible [clip-path:inset(0_round_0)] [transition:clip-path_550ms_var(--ease-drawer),background-color_300ms]"
+          : "invisible [clip-path:var(--from)] [transition:clip-path_400ms_var(--ease-drawer),visibility_0s_400ms]"
       }`}
+      style={{ "--from": from() } as CSSProperties}
     >
       {drawn && track && <img src={art(track.thumb, 120)} alt="" className={`absolute inset-0 size-full scale-125 object-cover blur-3xl saturate-150 transition-opacity duration-300 ${big ? "opacity-0" : "opacity-35"}`} />}
       {drawn && big && karaoke && <Drift moving={open && !still} />}
@@ -1795,7 +1813,7 @@ export function NowPlaying() {
           <LyricLines track={track} lyrics={lyrics} extras={extras} live={open} size="big" />
         </div>
       ) : (
-        <div key="playing" className="relative grid h-full animate-enter grid-cols-2 gap-16 px-16 pt-20 pb-32 text-white [--color-accent:white] [--color-ink:white] [--color-muted:rgb(255_255_255/0.68)]">
+        <div key="playing" className="relative grid h-full animate-enter grid-cols-2 gap-16 px-16 pt-20 pb-32 text-white [--color-accent:white] [--color-ink:white] [--color-paper:black] [--color-muted:rgb(255_255_255/0.68)]">
           <div className="flex min-h-0 flex-col justify-end">
             {track ? (
               <>
@@ -1832,10 +1850,10 @@ export function NowPlaying() {
                 <LyricLines track={track} lyrics={lyrics} extras={extras} live={sheet === "playing"} />
               </div>
             ) : (
-              <div role="tabpanel" aria-label="Up Next" className="flex min-h-0 flex-1 flex-col justify-end">
+              <div role="tabpanel" aria-label="Up Next" className="flex min-h-0 flex-1 flex-col">
                 {upNext.length ? (
                   <div className="min-h-0 overflow-y-auto">
-                    <TrackList tracks={upNext} onPlay={(i) => jump(index + 1 + i)} />
+                    <TrackList tracks={upNext} header={false} onPlay={(i) => jump(index + 1 + i)} />
                   </div>
                 ) : (
                   <p className="text-muted">Nothing queued.</p>
@@ -3459,7 +3477,7 @@ function LibraryPane() {
           <div className={card}>
             {hidden.map((t) => (
               <div key={t.id} className="flex h-14 items-center gap-3">
-                <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-10 rounded-lg bg-ink/[0.06] object-cover" />
+                <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-12 rounded-lg bg-disc object-cover" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-semibold">{t.title}</div>
                   <div className="truncate text-xs text-muted">{t.artists.map((a) => a.name).join(", ")}</div>
@@ -3840,6 +3858,8 @@ export function QueuePanel() {
     : from.startsWith("folder:") ? l.folders.find((f) => f.id === id)?.name : from.startsWith("album:") ? l.saved.find((a) => a.id === id)?.title ?? queue[0]?.album
     : from.startsWith("artist:") ? l.followed.find((a) => a.id === id)?.name ?? queue[0]?.artists[0]?.name : undefined;
   const isRadio = useStore((s) => s.radio), title = isRadio ? `${fromName ?? queue[0]?.title} Radio` : fromName; // as Spotify says "Next from: … Radio"
+  // Songs from a CSV come without covers; the next few are looked up like a list's on screen.
+  useEffect(() => coversFor(queue.slice(index, index + 30), true), [queue, index]);
   const cut = isRadio ? -1 : rest.findIndex((t) => t.auto), next = cut < 0 ? rest : rest.slice(0, cut), auto = cut < 0 ? [] : rest.slice(cut); // what Autoplay added goes under its own heading, as in Spotify
 
   const row = (t: Track, i: number) => (
@@ -3858,7 +3878,7 @@ export function QueuePanel() {
     >
       <button onClick={() => jump(i)} aria-label={`Play ${t.title}`} className="hit" />
       <div className="relative shrink-0">
-        <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-10 rounded-md bg-ink/[0.06] object-cover" />
+        <img src={art(t.thumb, 96)} alt="" loading="lazy" className="size-12 rounded-md bg-disc object-cover" />
         {t.rec && (
           <span className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full bg-accent text-paper ring-2 ring-paper">
             <Sparkle size={11} aria-label="Recommended" className="fill-current" />
@@ -4141,7 +4161,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
               <button onClick={(e) => e.detail === 0 && onPlay(i)} onDoubleClick={() => (useSettings.getState().doubleClick === "queue" ? enqueue([t], false) : onPlay(i))} aria-label={`Play ${t.title}`} className="hit" />
               {num && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
               <div className="flex min-w-0 items-center gap-3">
-                {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" draggable={false} className={`size-10 shrink-0 rounded-lg bg-ink/[0.06] object-cover ${dim ? "opacity-40" : ""}`} />}
+                {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" draggable={false} className={`size-12 shrink-0 rounded-lg bg-disc object-cover ${dim ? "opacity-40" : ""}`} />}
                 <div className={`min-w-0 ${dim ? "opacity-45" : ""}`}>
                   <div className={`truncate font-semibold ${on(t) ? "text-accent" : ""}`}>
                     {off && <EyeOff size={14} aria-label="Hidden" className="mr-1.5 inline -translate-y-px text-muted" />}
@@ -4149,6 +4169,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
                   </div>
                   <div className="truncate text-sm text-muted">
                     {saved[t.id] && <CircleArrowDown size={14} aria-label="Downloaded" className="mr-1 inline -translate-y-px fill-accent text-paper" />}
+                    {t.rec && <Sparkle size={14} aria-label="Recommended" className="mr-1.5 inline -translate-y-px fill-accent text-accent drop-shadow-[0_0_4px_var(--color-accent)]" />}
                     {t.explicit && <Explicit />}
                     <Artists list={t.artists} />
                   </div>

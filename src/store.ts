@@ -604,7 +604,9 @@ export function startRadio(t: Track) {
 // An artist's or playlist's radio: the "watch next" mixes of a few of its songs, taken in turn.
 async function mix(seeds: Track[], skip = new Set<string>()) {
   const mixes = await Promise.all(seeds.map((t) => youtubeId(t).then(radio).catch(() => [])));
-  return mixes.flatMap((m) => m.map((t, i) => [i, t] as const)).sort((a, b) => a[0] - b[0]).flatMap(([, t]) => (skip.has(t.id) || skipped(t) ? [] : (skip.add(t.id), [t])));
+  const list = mixes.flatMap((m) => m.map((t, i) => [i, t] as const)).sort((a, b) => a[0] - b[0]).flatMap(([, t]) => (skip.has(t.id) || skipped(t) ? [] : (skip.add(t.id), [t])));
+  void original(list.slice(0, 20)); // radio titles are Latin too ("Isterichka" for "Истеричка")
+  return list;
 }
 export async function radioFrom(tracks: Track[], from?: string) {
   const list = await mix(shuffled(tracks.filter((t) => !skipped(t))).slice(0, 3));
@@ -826,7 +828,8 @@ async function recommend() {
   const at = now.index + 1 + now.added;
   // A recommendation after your second track, then after every third. Leaving Smart Shuffle drops them: they aren't in original.
   const rest = now.queue.slice(at).flatMap((t, i) => (i % 3 === 1 && recs.length ? [t, { ...recs.shift()!, rec: true as const }] : [t]));
-  set({ queue: [...now.queue.slice(0, at), ...rest] });
+  const tail = now.queue.length - at < 2 ? recs.map((t) => ({ ...t, rec: true as const })) : []; // a queue too short to mix into gets them all after it
+  set({ queue: [...now.queue.slice(0, at), ...rest, ...tail] });
 }
 
 // Off, Shuffle, Smart Shuffle, as in Spotify. It's also the setting of the list that's playing.

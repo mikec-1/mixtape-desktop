@@ -13,12 +13,16 @@ let slot = 0;
 const cache = new Map<string, { at: number; body: Promise<any> }>();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // lang: the language to ask in; Deezer titles a song in it where the label gave one (see topSongs).
-async function get(path: string, tries = 0, lang?: string): Promise<any> {
+// soon: a cover on screen, which goes in its own line rather than behind an artist page's album lists
+// (a burst over the quota is turned away and goes again).
+let soonSlot = 0;
+async function get(path: string, tries = 0, lang?: string, soon = false): Promise<any> {
   const key = `${lang ?? ""}${path}`, hit = cache.get(key);
   if (!hit || Date.now() - hit.at > 60_000) {
     if (cache.size >= 240) cache.clear();
-    const wait = Math.max(0, slot - Date.now());
-    slot = Date.now() + wait + 110;
+    const wait = Math.max(0, (soon ? soonSlot : slot) - Date.now());
+    if (soon) soonSlot = Date.now() + wait + 110;
+    else slot = Date.now() + wait + 110;
     cache.set(key, { at: Date.now(), body: sleep(wait).then(() => fetch(`https://api.deezer.com/${path}`, lang ? { headers: { "accept-language": lang } } : undefined)).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Deezer ${r.status}`)))) });
   }
   const data = await cache.get(key)!.body.catch((e) => (cache.delete(key), Promise.reject(e)));
@@ -26,7 +30,7 @@ async function get(path: string, tries = 0, lang?: string): Promise<any> {
   cache.delete(key);
   // Deezer answers errors with a 200: code 4 is the quota, 700 is busy. Anything else fails the same again.
   const { code, message = "" } = data.error;
-  if ((code === 4 || code === 700 || /quota/i.test(message)) && tries < 3) return sleep(2 ** tries * 700 + Math.random() * 300).then(() => get(path, tries + 1, lang));
+  if ((code === 4 || code === 700 || /quota/i.test(message)) && tries < 3) return sleep(2 ** tries * 700 + Math.random() * 300).then(() => get(path, tries + 1, lang, soon));
   throw new Error(message || "Deezer couldn’t answer");
 }
 
@@ -66,16 +70,21 @@ function explicitFirst(tracks: DzTrack[]) {
 // "Lampochki"); other songs read the same either way.
 // ponytail: Russian only; other scripts' originals need Apple Music (it keeps them whatever the country).
 const bare = (s: string) => latin(s).replace(/[^\p{L}\p{N}]+/gu, "");
-export async function topSongs(name: string): Promise<Track[]> {
+// Titles come back as soon as the top is in, and covers (with album lists to read) after, as albums.
+export async function topSongs(name: string): Promise<{ songs: Track[]; albums: Promise<Track[]> }> {
   const found = ((await get(`search/artist?q=${encodeURIComponent(name)}&limit=25`)).data ?? []) as (DzArtist & { nb_fan?: number })[];
   const a = found.filter((x) => bare(x.name) === bare(name)).sort((x, y) => (y.nb_fan ?? 0) - (x.nb_fan ?? 0))[0];
-  if (!a) return [];
-  const [top, albums] = await Promise.all([get(`artist/${a.id}/top?limit=100`, 0, "ru").then((r): DzTrack[] => r.data ?? []), get(`artist/${a.id}/albums?limit=100`).then((r): DzAlbum[] => (r.data ?? []).filter((x: DzAlbum) => x.record_type === "album").reverse())]);
+  if (!a) return { songs: [], albums: Promise.resolve([]) };
+  const albumsOf = get(`artist/${a.id}/albums?limit=100`).then((r): DzAlbum[] => (r.data ?? []).filter((x: DzAlbum) => x.record_type === "album").reverse());
+  const top = explicitFirst(((await get(`artist/${a.id}/top?limit=100`, 0, "ru")).data ?? [] as DzTrack[]).sort((x: DzTrack, y: DzTrack) => (y.rank ?? 0) - (x.rank ?? 0))).slice(0, 10) as DzTrack[];
   // Like Spotify, a single that later made an album shows that album (its first, if several).
-  const lists = await Promise.all(albums.map((al) => get(`album/${al.id}/tracks?limit=100`, 0, "ru").then((r): DzTrack[] => r.data ?? [], () => [])));
-  const on = new Map<string, DzAlbum>();
-  lists.forEach((ts, i) => ts.forEach((t) => on.has(t.title.toLowerCase()) || on.set(t.title.toLowerCase(), albums[i])));
-  return explicitFirst(top.sort((x, y) => (y.rank ?? 0) - (x.rank ?? 0))).slice(0, 10).map((t) => toTrack(t, on.get(t.title.toLowerCase())));
+  const albums = albumsOf.then(async (albums) => {
+    const lists = await Promise.all(albums.map((al) => get(`album/${al.id}/tracks?limit=100`, 0, "ru").then((r): DzTrack[] => r.data ?? [], () => [])));
+    const on = new Map<string, DzAlbum>();
+    lists.forEach((ts, i) => ts.forEach((t) => on.has(t.title.toLowerCase()) || on.set(t.title.toLowerCase(), albums[i])));
+    return top.map((t) => toTrack(t, on.get(t.title.toLowerCase())));
+  });
+  return { songs: top.map((t) => ({ ...toTrack(t), album: "", albumId: undefined, thumb: undefined })), albums };
 }
 
 // Its songs name only the lead artist; withGuests adds the rest.
@@ -167,7 +176,8 @@ async function coverNext() {
     if (!t) break;
     if (tried.has(t.id)) continue;
     tried.add(t.id);
-    const d: DzTrack | undefined = await get(`track/isrc:${t.isrc}`).catch(() => undefined);
+    // A call that failed (offline, the quota) is tried again next time the song is on screen.
+    const d: DzTrack | undefined = await get(`track/isrc:${t.isrc}`, 0, undefined, soon).catch(() => void tried.delete(t.id));
     if (d?.album?.cover_xl) got.set(t.id, { thumb: d.album.cover_xl, ...(!t.duration && d.duration && { duration: length(d.duration) }) }), save(soon ? 150 : 5000);
   }
   workers--;

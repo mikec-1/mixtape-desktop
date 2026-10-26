@@ -4,6 +4,7 @@
 @theme {
   /* Every colour is light-dark(): the root's color-scheme (system, or Settings' choice) picks one. */
   /* The rail, the page and the player (paper) sit on a slightly darker base with gaps between them. */
+  --color-brand: #ff6b00; /* Mixtape orange, from the iOS app's logo; never follows the artwork */
   --color-base: light-dark(#e9e9ec, #000);
   --color-paper: light-dark(#fbf9f5, #141416);
   --color-ink: light-dark(#121212, #f5f5f7);
@@ -420,9 +421,12 @@ input {
     outline: none;
   }
 }
-* {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklab, var(--color-ink) 20%, transparent) transparent;
+/* In the base layer, so a [scrollbar-width:none] utility (the lyrics, the rows) can still hide one. */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--color-ink) 20%, transparent) transparent;
+  }
 }
 
 /* Hairline scrubber; the filled part is driven by --p. */
@@ -535,11 +539,16 @@ input[type="range"].knob::-webkit-slider-thumb {
   }
 }
 
-/* A song with no artwork: a faint outline of where it would be, not WebKit's broken-image outline. */
+/* Artwork still loading, or none: a faint record on a see-through square, in the page's own shade. */
+.bg-disc,
+img:not([src]),
+img[src=""] {
+  background: radial-gradient(circle, transparent 0 9%, color-mix(in oklab, var(--color-ink) 7%, transparent) 9.5% 15%, transparent 15.5% 19%, color-mix(in oklab, var(--color-ink) 7%, transparent) 19.5% 42%, transparent 42.5%);
+}
+/* A song with no artwork: that, outlined, not WebKit's broken-image outline. */
 img:not([src]),
 img[src=""] {
   content: url("data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==");
-  background-color: transparent;
   outline: 1px solid color-mix(in oklab, var(--color-ink) 16%, transparent);
   outline-offset: -1px;
 }

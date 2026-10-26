@@ -260,6 +260,7 @@ function PlayerBar() {
   const repeat = useStore((s) => s.repeat);
   const sleep = useStore((s) => s.sleep);
   const lyrics = useStore((s) => s.sheet === "lyrics");
+  const open = useStore((s) => !!s.sheet); // over Now Playing or lyrics: the same bar, white in a faint glass box
   const queue = useSettings((s) => s.queue);
   const icon = "press grid size-8 shrink-0 place-items-center rounded-full text-ink/60 hover:text-ink";
   const roomy = icon.replace("grid", "hidden @2xl:grid"); // only when the bar has room
@@ -269,10 +270,14 @@ function PlayerBar() {
   // Stays above the Now Playing sheet, so it keeps working while the sheet is up. Narrow, it lets go of
   // the volume slider (mute and ⌘↑/↓ stay), then of Mini Player and Full Screen (the artwork opens it too).
   return (
-    <div data-player className="@container relative isolate z-40 shrink-0 overflow-hidden rounded-2xl bg-paper">
+    <div data-player className={`@container relative isolate z-40 shrink-0 overflow-hidden rounded-2xl ${open ? "text-white [--color-accent:white] [--color-ink:white] [--color-muted:rgb(255_255_255/0.6)] [--color-paper:black]" : ""}`}>
+      {/* Over the sheet the card turns to a faint glass box, so it never vanishes or leaves a cream rim. */}
+      <div className={`absolute inset-0 -z-20 rounded-2xl transition-[background-color,box-shadow] duration-300 ease-out ${open ? "bg-white/10 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.14)]" : "bg-[light-dark(#fbf9f5,#141416)]"}`} />
       {/* The artwork's colour washes the bar, strongest behind the artwork. */}
-      <div className="absolute inset-0 -z-10 bg-linear-to-r from-accent/30 via-accent/12 to-accent/5 transition-opacity duration-500" style={{ opacity: track ? 1 : 0 }} />
-      <div className="grid grid-cols-[1fr_minmax(0,1.5fr)_1fr] items-center gap-6 py-2.5 pr-4 pl-2.5">
+      <div className="absolute inset-0 -z-10 bg-linear-to-r from-accent/30 via-accent/12 to-accent/5 transition-opacity duration-500" style={{ opacity: track && !open ? 1 : 0 }} />
+      {/* And fills it as the song plays: the artwork's colour follows the song, under a lighter trail running ahead at twice the speed. */}
+      <div className="absolute inset-0 -z-10 rounded-2xl transition-opacity duration-500" style={{ opacity: track && !open ? 1 : 0, background: ((p) => `linear-gradient(to right, color-mix(in oklch, var(--color-accent-vivid) 22%, transparent) ${p}%, transparent calc(${p}% + 6%)), linear-gradient(to right, color-mix(in oklch, var(--color-accent-vivid) 9%, transparent) ${Math.min(100, p * 2)}%, transparent calc(${Math.min(100, p * 2)}% + 12%))`)(duration ? (time / duration) * 100 : 0) }} />
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)] items-center gap-6 py-2.5 pr-4 pl-2.5">
         <div onContextMenu={(e) => track && (e.preventDefault(), trackMenu(track))} className="flex min-w-0 items-center gap-3">
           <button onClick={() => toggleSheet("playing")} aria-label="Now Playing" disabled={!track} className="press size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] shadow-md shadow-black/15">
             {track && <img src={art(track.thumb, 120)} alt="" className="size-full object-cover" />}
@@ -280,7 +285,7 @@ function PlayerBar() {
           <div className="min-w-0 flex-1">
             <div className="truncate font-semibold">{track ? <SongName t={track} /> : "Not playing"}</div>
             <div aria-live="polite" className="truncate text-sm text-muted">{track && <>{error && <span title={error} className="font-semibold text-[#ff453a]">Unavailable · </span>}{track.explicit && <Explicit />}<Artists list={track.artists} /></>}</div>
-            {track && !error && <Peek track={track} />}
+            {track && !error && !open && <Peek track={track} />}
           </div>
           {track && <LikeButton track={track} />}
         </div>
@@ -311,12 +316,12 @@ function PlayerBar() {
           <button onClick={sleepMenu} aria-label="Sleep Timer" title={sleep === "track" ? "Sleep Timer: end of track" : sleep ? `Sleep Timer: ${Math.ceil((sleep - Date.now()) / 60_000)} min left` : "Sleep Timer"} className={mode(!!sleep)}>
             <Moon size={17} />
           </button>
-          <button onClick={() => toggleSheet("lyrics")} aria-label="Lyrics" aria-pressed={lyrics} title="Lyrics" className={mode(lyrics)}>
+          {!open && <button onClick={() => toggleSheet("lyrics")} aria-label="Lyrics" aria-pressed={lyrics} title="Lyrics" className={mode(lyrics)}>
             <MicVocal size={17} />
-          </button>
-          <button onClick={() => useSettings.setState({ queue: !queue })} aria-label="Queue" aria-pressed={queue} title="Queue" className={mode(queue)}>
+          </button>}
+          {!open && <button onClick={() => useSettings.setState({ queue: !queue })} aria-label="Queue" aria-pressed={queue} title="Queue" className={mode(queue)}>
             <ListMusic size={18} />
-          </button>
+          </button>}
           <button onClick={() => setMuted(!muted)} aria-label={muted ? "Unmute" : "Mute"} className={icon}>
             {muted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
@@ -324,9 +329,9 @@ function PlayerBar() {
           <button onClick={toggleMini} aria-label="Mini Player" title="Mini Player" className={roomy}>
             <PictureInPicture2 size={17} />
           </button>
-          <button onClick={() => toggleSheet("playing")} aria-label="Full screen" title="Full screen" className={roomy}>
+          {!open && <button onClick={() => toggleSheet("playing")} aria-label="Full screen" title="Full screen" className={roomy}>
             <Maximize2 size={17} />
-          </button>
+          </button>}
         </div>
       </div>
     </div>

@@ -32,7 +32,7 @@ export function Welcome({ onDone, preview }: { onDone: () => void; preview?: boo
   if (bye)
     return (
       <div data-tauri-drag-region className={`fixed inset-0 z-50 grid place-items-center bg-paper ${bye === "out" ? "animate-[fade_450ms_var(--ease-out)_reverse_both]" : ""}`}>
-        <h1 className="animate-[rise_600ms_var(--ease-out)_both] text-center text-[clamp(48px,7vw,96px)] leading-[0.9] font-black tracking-[-0.05em]">Welcome to <span className="text-accent">Mixtape</span>.</h1>
+        <h1 className="animate-[rise_600ms_var(--ease-out)_both] text-center text-[clamp(48px,7vw,96px)] leading-[0.9] font-black tracking-[-0.05em]">Welcome to <span className="text-brand">Mixtape</span>.</h1>
       </div>
     );
   return (

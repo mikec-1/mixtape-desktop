@@ -1,20 +1,18 @@
 import { listen } from "@tauri-apps/api/event";
-import { audio, back, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, toggle, toggleLike, toggleShuffle, useSettings, useStore } from "./store";
+import { back, seekBy, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, toggle, toggleLike, toggleShuffle, useSettings, useStore } from "./store";
 
 // Every shortcut, in one table: App.tsx runs them, Settings → Shortcuts lists them and remaps them
 // (useSettings keymap, by id; "" is none). Combos are "mod+" (⌘, Ctrl on Windows) and the key, lowercase.
-// Find on this page if it has a search field (or its button), else the Search tab.
+// The Search tab's start, its field ready to type in (⌘K). top false: the tab as you left it (the sidebar's Search).
+export const searchTab = (top = true) => (go("search", top), requestAnimationFrame(() => document.querySelector<HTMLInputElement>("input[name=q]")?.select()));
+// Find on this page if it has a search field (or its button), else the Search tab (⌘F, as in Spotify).
 export const findSearch = () => {
   // Every page in the stack stays mounted: the one showing is the one with a layout box.
   const el = [...document.querySelectorAll<HTMLElement>("[data-find]")].find((x) => x.offsetParent);
   if (el instanceof HTMLInputElement) el.select();
   else if (el) el.click();
-  else {
-    go("search");
-    requestAnimationFrame(() => document.querySelector<HTMLInputElement>("input[name=q]")?.select());
-  }
+  else searchTab();
 };
-const seek = (by: number) => (audio.currentTime = Math.min(audio.duration || 0, Math.max(0, audio.currentTime + by)));
 export const ZOOMS = [0.9, 1, 1.1, 1.25];
 const zoomBy = (step: number) => useSettings.setState((s) => {
   const i = ZOOMS.indexOf(s.zoom);
@@ -36,12 +34,12 @@ export const KEYS: { id: string; label: string; combo: string; run: () => unknow
     const { queue, index } = useStore.getState();
     if (queue[index]) toggleLike(queue[index]);
   } },
-  { id: "search", label: "Search", combo: "mod+k", run: findSearch },
-  { id: "find", label: "Search, again", combo: "mod+f", run: findSearch },
+  { id: "search", label: "Search", combo: "mod+k", run: () => searchTab() },
+  { id: "find", label: "Find on This Page", combo: "mod+f", run: findSearch },
   { id: "goBack", label: "Go back", combo: "mod+[", run: back },
   { id: "goForward", label: "Go forward", combo: "mod+]", run: forward },
   { id: "home", label: "Home", combo: "mod+1", run: () => go("home") },
-  { id: "searchTab", label: "Search tab", combo: "mod+2", run: findSearch },
+  { id: "searchTab", label: "Search tab", combo: "mod+2", run: () => searchTab(useStore.getState().stack[0].name === "search") },
   { id: "library", label: "Library", combo: "mod+3", run: () => go("library") },
   { id: "new", label: "New playlist", combo: "mod+n", run: () => open({ name: "playlist", id: newPlaylist() }) },
   { id: "settings", label: "Settings", combo: "mod+,", run: () => go("settings") },

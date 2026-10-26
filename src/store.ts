@@ -19,6 +19,7 @@ export type View =
 type State = {
   stack: View[];
   ahead: View[]; // what Back left, for Forward
+  tabs: Partial<Record<Root, { stack: View[]; ahead: View[] }>>; // the other sidebar tabs' pages, as you left them
   sheet?: "playing" | "lyrics"; // the full-screen sheet over everything but the player bar: Now Playing, or just the lyrics
   dialog?: Dialog;
   pane?: string; // the Settings pane showing
@@ -30,6 +31,7 @@ type State = {
   source?: string; // the library key of the list the queue was started from, whose Play turns to Pause
   radio?: true; // the queue is a radio: of that list, or of its first song when there isn't one
   shuffle: boolean | "smart"; // Smart Shuffle mixes recommended tracks (rec) into Up Next
+  shuffles: Record<string, boolean | "smart">; // each list's own Shuffle, by library key: playing from a list uses its setting
   repeat: "off" | "all" | "one";
   sleep?: number | "track"; // when the sleep timer pauses: a time, or the end of this track
   loading: boolean;
@@ -54,8 +56,8 @@ export type Toast = { id: number; text: string; detail?: string; thumb?: string;
 // The queue and modes survive a relaunch; where you were in the track is in localStorage.resume.
 export const useStore = create<State>()(
   persist(
-    (): State => ({ stack: [{ name: "home" }], ahead: [], query: "", queue: [], index: -1, added: 0, shuffle: false, repeat: "off", loading: false, error: "" }),
-    { name: "player", partialize: ({ queue, index, added, original, source, radio, shuffle, repeat }) => ({ queue, index, added, original, source, radio, shuffle, repeat }) },
+    (): State => ({ stack: [{ name: "home" }], ahead: [], tabs: {}, query: "", queue: [], index: -1, added: 0, shuffle: false, shuffles: {}, repeat: "off", loading: false, error: "" }),
+    { name: "player", partialize: ({ queue, index, added, original, source, radio, shuffle, shuffles, repeat }) => ({ queue, index, added, original, source, radio, shuffle, shuffles, repeat }) },
   ),
 );
 const { setState: set, getState: get } = useStore;
@@ -72,7 +74,12 @@ export const viewKey = (v: View) =>
   : v.name === "collection" ? libraryKey("album", v.id) : v.id === "liked" ? libraryKey("liked") : libraryKey(v.name, v.id);
 export const back = () => set((s) => (s.stack.length > 1 ? { stack: s.stack.slice(0, -1), ahead: [s.stack.at(-1)!, ...s.ahead] } : s));
 export const forward = () => set((s) => (s.ahead.length ? { stack: [...s.stack, s.ahead[0]], ahead: s.ahead.slice(1) } : s));
-export const go = (name: Root) => set({ stack: [{ name }], ahead: [], sheet: undefined });
+// A sidebar tab comes back as you left it (a search's artist page stays open); going to the tab you're on, or
+// top, takes it back to its start, keeping what you'd searched for.
+export const go = (name: Root, top = false) => set((s) => {
+  const now = s.stack[0].name as Root, was = now === name || top ? undefined : s.tabs[name];
+  return { tabs: { ...s.tabs, [now]: { stack: s.stack, ahead: s.ahead }, [name]: undefined }, stack: was?.stack ?? [{ name }], ahead: was?.ahead ?? [], sheet: undefined };
+});
 // Opens that sheet, or closes it if it's the one showing.
 export const toggleSheet = (sheet: State["sheet"]) => set((s) => ({ sheet: s.sheet === sheet ? undefined : sheet }));
 export const report = (e: unknown) => set({ error: e instanceof Error ? e.message : String(e), loading: false });
@@ -554,21 +561,21 @@ async function playFile(el: HTMLAudioElement, path: string, start = 0, autoplay 
 }
 
 // Start playing a list (an album, a playlist, search results) from one of its tracks. from: the library
-// key of what it's from, for the Library's Recents order. A song you pick plays even if it's hidden.
-export function play(queue: Track[], index: number, from?: string) {
+// key of what it's from, for the Library's Recents order, and whose own Shuffle setting it plays with.
+// A song you pick plays even if it's hidden.
+export function play(queue: Track[], index: number, from?: string, shuffle = from ? (get().shuffles[from] ?? false) : get().shuffle) {
   if (!queue[index]) return;
   if (from) touch(from);
-  const original = get().shuffle ? queue : undefined;
+  const original = shuffle ? queue : undefined;
   if (original) (queue = [queue[index], ...shuffled(queue.filter((_, i) => i !== index))]), (index = 0);
-  set({ queue, original, added: 0, source: from, radio: undefined, more: undefined });
+  set({ queue, original, shuffle, added: 0, source: from, radio: undefined, more: undefined });
   const loading = load(index); // sets index before its first await, which recommend() reads
   if (get().shuffle === "smart") void recommend();
   return loading;
 }
 export function shufflePlay(tracks: Track[], from?: string) {
   const ok = tracks.flatMap((t, i) => (playable(t) ? [i] : []));
-  set({ shuffle: true });
-  return play(tracks, ok.length ? ok[Math.floor(Math.random() * ok.length)] : 0, from);
+  return play(tracks, ok.length ? ok[Math.floor(Math.random() * ok.length)] : 0, from, (from ? get().shuffles[from] : get().shuffle) || true); // Smart Shuffle stays smart
 }
 // Where a list starts when you press its Play: its first song you haven't hidden.
 export const firstPlayable = (tracks: Track[]) => Math.max(0, tracks.findIndex(playable));
@@ -587,8 +594,7 @@ async function mix(seeds: Track[], skip = new Set<string>()) {
 export async function radioFrom(tracks: Track[], from?: string) {
   const list = await mix(shuffled(tracks.filter((t) => !skipped(t))).slice(0, 3));
   if (!list.length) return notify({ warn: true, text: "No radio for this one" });
-  set({ shuffle: false });
-  play(list, 0, from);
+  play(list, 0, from, false);
   set({ radio: true });
 }
 
@@ -808,9 +814,9 @@ async function recommend() {
   set({ queue: [...now.queue.slice(0, at), ...rest] });
 }
 
-// Off, Shuffle, Smart Shuffle, as in Spotify.
+// Off, Shuffle, Smart Shuffle, as in Spotify. It's also the setting of the list that's playing.
 export const toggleShuffle = () => {
-  const { shuffle, queue, index, added, original } = get();
+  const { shuffle, queue, index, added, original, source, radio } = get();
   const keep = queue.slice(0, index + 1 + added); // played, current, and what you queued stay put
   if (!shuffle) set({ shuffle: true, original: queue, queue: [...keep, ...shuffled(queue.slice(keep.length))] });
   else if (shuffle === true) set({ shuffle: "smart" }), void recommend();
@@ -820,7 +826,15 @@ export const toggleShuffle = () => {
     const rest = original ? original.slice(original.findIndex((t) => t.id === at) + 1) : queue.slice(keep.length);
     set({ shuffle: false, original: undefined, queue: [...keep, ...rest.filter((t) => !ids.has(t.id) && !t.rec)] });
   }
+  if (source && !radio) set((s) => ({ shuffles: { ...s.shuffles, [source]: s.shuffle } }));
   prefetch();
+};
+// A list's Shuffle button: while the queue plays from that list it's the player's Shuffle, otherwise only the list's setting.
+export const toggleListShuffle = (key: string) => {
+  const { source, radio, shuffles } = get();
+  if (source === key && !radio) return toggleShuffle();
+  const now = shuffles[key];
+  set({ shuffles: { ...shuffles, [key]: !now ? true : now === true ? "smart" : false } });
 };
 export const cycleRepeat = () => set((s) => ({ repeat: s.repeat === "off" ? "all" : s.repeat === "all" ? "one" : "off" }));
 

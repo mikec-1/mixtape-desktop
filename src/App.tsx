@@ -30,6 +30,7 @@ export default function App() {
   // Settings → About can show it again ("preview"), after a reload.
   const [welcome, setWelcome] = useState<boolean | "preview">(() => (sessionStorage.welcome ? (delete sessionStorage.welcome, "preview") : firstLaunch()));
   const stack = useStore((s) => s.stack);
+  const tabs = useStore((s) => s.tabs);
   const covered = useStore((s) => !!s.sheet || !!s.dialog); // the sheet or a dialog is over the page
   const root = stack[0].name;
   const open = useSettings((s) => s.sidebar);
@@ -96,14 +97,14 @@ export default function App() {
         <Sidebar root={root} open={open} width={width} inert={covered} />
         <main inert={covered} className="@container relative min-h-0 flex-1 overflow-hidden rounded-2xl bg-paper">
           <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-11" />
-          {/* Every view in the stack stays mounted, so going back keeps its results and scroll position. */}
-          {stack.map((view, i) => (
-            <div key={i + view.name + ("id" in view ? view.id : "")} hidden={i !== stack.length - 1} className="absolute inset-0 overflow-x-hidden overflow-y-auto pb-10">
+          {/* Every view in every tab's stack stays mounted, so going back, or to another tab and back, keeps its results and scroll position. */}
+          {ROOTS.flatMap((tab) => (tab === root ? stack : (tabs[tab]?.stack ?? [])).map((view, i, list) => (
+            <div key={tab + i + view.name + ("id" in view ? view.id : "")} hidden={tab !== root || i !== list.length - 1} className="absolute inset-0 overflow-x-hidden overflow-y-auto pb-10">
               {"id" in view ? (
                 view.name === "artist" ? <Artist id={view.id} by={view.by} /> : view.name === "discography" ? <DiscographyPage id={view.id} params={view.params} artist={view.artist} /> : view.name === "playlist" ? <PlaylistPage id={view.id} /> : view.name === "folder" ? <FolderPage id={view.id} /> : view.name === "shared" ? <SharedPage id={view.id} /> : view.name === "profile" ? <ProfilePage id={view.id} /> : <CollectionPage id={view.id} />
               ) : view.name === "home" ? <Home /> : view.name === "search" ? <Search /> : view.name === "settings" ? <Settings /> : view.name === "history" ? <HistoryPage /> : view.name === "local" ? <LocalPage /> : view.name === "charts" ? <ChartsPage /> : view.name === "releases" ? <ReleasesPage /> : view.name === "wrapped" ? <WrappedPage /> : <Library />}
             </div>
-          ))}
+          )))}
           {stack.length > 1 && (
             <button onClick={back} className="press absolute top-4 left-4 z-30 flex h-9 items-center gap-1 rounded-full bg-black/60 pr-3.5 pl-2 text-sm font-semibold text-white backdrop-blur-md hover:bg-black/75">
               <ChevronLeft size={18} strokeWidth={2.4} /> Back
@@ -167,7 +168,7 @@ function Sidebar({ root, open, width, inert }: { root: string; open: boolean; wi
   return (
     <nav inert={inert} data-tauri-drag-region style={{ width: open ? width : RAIL }} className={`relative flex shrink-0 flex-col gap-1 rounded-2xl bg-paper px-4 pb-3 ${onWindows ? "pt-3" : "pt-12"} ${dragging ? "" : "transition-[width] duration-300 ease-drawer"}`}>
       <SideButton icon={House} label="Home" active={root === "home"} open={open} onClick={() => go("home")} />
-      <SideButton icon={SearchIcon} label="Search" active={root === "search"} open={open} onClick={findSearch} />
+      <SideButton icon={SearchIcon} label="Search" active={root === "search"} open={open} onClick={() => searchTab(root === "search")} />
       <SideButton icon={LibraryIcon} label="Library" active={root === "library"} open={open} onClick={() => go("library")} />
       <div className="mt-auto flex flex-col gap-1">
         <SideButton icon={open ? PanelLeftClose : PanelLeftOpen} label={open ? "Hide Sidebar" : "Show Sidebar"} open={open} onClick={() => toggleSidebar()} />

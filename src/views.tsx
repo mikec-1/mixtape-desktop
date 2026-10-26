@@ -370,18 +370,18 @@ function Masthead({ cover, bg, fill = "bg-neutral-800", title, sub, meta, childr
 const pill = "press flex h-10 items-center gap-2 rounded-full px-5 font-semibold";
 // radio false: no Radio button (Local Files: radio comes from YouTube Music, which doesn't have them).
 // Play turns to Pause only on the list that started the queue, not on every list holding the song.
+// Shuffle is a switch, as in Spotify (Off, On, Smart), and each list has its own; with it on, Play starts on a random song.
+const playList = (tracks: Track[], from?: string) => ((from ? useStore.getState().shuffles[from] : useStore.getState().shuffle) ? shufflePlay(tracks, from) : play(tracks, firstPlayable(tracks), from));
 function PlayButtons({ tracks, from, radio = true }: { tracks: Track[]; from?: string; radio?: boolean }) {
-  const here = useStore((s) => !!from && s.source === from && s.index >= 0);
+  const here = useStore((s) => !!from && s.source === from && !s.radio && s.index >= 0);
   const { paused } = useAudio();
   const pausing = here && !paused;
   return (
     <>
-      <button onClick={() => (here ? toggle() : play(tracks, firstPlayable(tracks), from))} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
+      <button onClick={() => (here ? toggle() : playList(tracks, from))} disabled={!tracks.length} className={`${pill} bg-white text-black hover:bg-white/85 disabled:opacity-50`}>
         {pausing ? <Pause size={16} className="fill-current" /> : <Play size={16} className="fill-current" />} {pausing ? "Pause" : "Play"}
       </button>
-      <button onClick={() => shufflePlay(tracks, from)} disabled={!tracks.length} className={`${pill} bg-white/20 hover:bg-white/30 disabled:opacity-50`}>
-        <Shuffle size={16} /> Shuffle
-      </button>
+      <ShuffleButton from={from} className="bg-white/20 hover:bg-white/30 aria-pressed:bg-white aria-pressed:text-black" />
       {radio && (
         <button onClick={() => radioFrom(tracks, from)} disabled={!tracks.length} aria-label="Radio" title="Radio" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30 disabled:opacity-50">
           <Radio size={16} />
@@ -391,8 +391,19 @@ function PlayButtons({ tracks, from, radio = true }: { tracks: Track[]; from?: s
   );
 }
 
-// Download a list to play offline (offline.ts): an arrow; while it downloads, a ring filling up; once it's
-// all here, a solid arrow, which offers to remove it. about: what to keep with it, asked for on the press.
+function ShuffleButton({ from, className }: { from?: string; className: string }) {
+  const shuffle = useStore((s) => (from ? s.shuffles[from] : s.shuffle));
+  const label = shuffle === "smart" ? "Smart Shuffle" : shuffle ? "Shuffle On" : "Shuffle";
+  return (
+    <button onClick={() => (from ? toggleListShuffle(from) : toggleShuffle())} aria-pressed={!!shuffle} aria-label={label} title={label} className={`press relative grid size-10 place-items-center rounded-full transition-colors ${className}`}>
+      <Shuffle size={17} />
+      {shuffle === "smart" && <Sparkle size={9} className="absolute top-1.5 right-1.5 fill-current" />}
+    </button>
+  );
+}
+
+// Download a list to play offline (offline.ts): an arrow; while it downloads, a ring filling up round a stop
+// square; once it's all here, a solid arrow. Pressing it again stops or removes the download, as in Spotify. about: what to keep with it, asked for on the press.
 function DownloadButton({ id, about }: { id: string; about: () => Parameters<typeof download>[1] }) {
   const state = useOffline();
   useLibrary((l) => l.playlists), useLibrary((l) => l.liked); // a playlist growing moves the ring back
@@ -667,7 +678,7 @@ function LikedHero({ liked }: { liked: Track[] }) {
         <h2 className="mt-4 text-[clamp(36px,6cqw,76px)] leading-[0.92] font-extrabold tracking-[-0.04em]">Liked Songs</h2>
         <div className="mt-2 text-lg text-white/80">{liked.length ? count(liked.length) : "Tap the heart on any song."}</div>
         {liked.length > 0 && (
-          <button onClick={() => play(liked, firstPlayable(liked), "liked")} className={`${pill} pointer-events-auto mt-6 bg-white text-black hover:bg-white/85`}>
+          <button onClick={() => playList(liked, "liked")} className={`${pill} pointer-events-auto mt-6 bg-white text-black hover:bg-white/85`}>
             <Play size={16} className="fill-current" /> Play
           </button>
         )}
@@ -757,7 +768,7 @@ function LibraryItems({ items, view }: { items: Item[]; view: "grid" | "list" })
             </div>
             {item.kind !== "folder" && (
               <button
-                onClick={() => void itemTracks(item).then((t) => (t.length ? play(t, firstPlayable(t), item.key) : notify({ text: "Nothing to Play", detail: item.title })), report)}
+                onClick={() => void itemTracks(item).then((t) => (t.length ? playList(t, item.key) : notify({ text: "Nothing to Play", detail: item.title })), report)}
                 aria-label={`Play ${item.title}`}
                 className={`grid place-items-center rounded-full bg-accent text-paper shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:opacity-100 focus-visible:opacity-100 active:scale-95 ${
                   view === "grid" ? "absolute right-2 bottom-[62px] size-11 translate-y-1 opacity-0 group-hover:translate-y-0" : "relative size-9 shrink-0 opacity-0"
@@ -826,8 +837,8 @@ function itemMenu(i: Item) {
   const pinned = l.pinned.includes(i.key);
   const folder = l.playlists.find((p) => p.id === i.id)?.folder;
   popup([
-    ...(i.kind !== "folder" ? [{ text: "Play", action: () => void itemTracks(i).then((t) => play(t, firstPlayable(t), i.key), report) }] : []),
-    ...(i.kind !== "liked" ? [{ text: pinned ? "Unpin" : "Pin to Top", action: () => togglePin(i.key) }] : []),
+    ...(i.kind !== "folder" ? [{ text: "Play", icon: Play, action: () => void itemTracks(i).then((t) => playList(t, i.key), report) }] : []),
+    ...(i.kind !== "liked" ? [{ text: pinned ? "Unpin" : "Pin to Top", icon: pinned ? PinOff : Pin, action: () => togglePin(i.key) }] : []),
     { item: "Separator" as const },
     ...(i.kind === "playlist"
       ? [
@@ -1169,7 +1180,7 @@ export function ProfilePage({ id }: { id: string }) {
           <div className="mt-2 text-muted">{plural(data.playlists.length, "public playlist")}</div>
           <div className="mt-5 flex gap-2">
             <button onClick={() => copyLink(profileLink(id))} className={quiet}><Link size={16} /> Copy Link</button>
-            {mine && <button onClick={() => (go("settings"), useStore.setState({ pane: "account" }))} className={quiet}>Edit Profile</button>}
+            {mine && <button onClick={() => (go("settings", true), useStore.setState({ pane: "account" }))} className={quiet}>Edit Profile</button>}
           </div>
         </div>
       </div>
@@ -1555,15 +1566,13 @@ export function Artist({ id: linked, by }: { id: string; by?: string }) {
             </p>
           )}
           <div className="mt-6 flex gap-2.5">
-            <button onClick={() => play(data.songs, firstPlayable(data.songs), from)} disabled={!data.songs.length} className={`${pill} bg-accent text-paper disabled:opacity-50`}>
+            <button onClick={() => playList(data.songs, from)} disabled={!data.songs.length} className={`${pill} bg-accent text-paper disabled:opacity-50`}>
               <Play size={16} className="fill-current" /> Play
             </button>
             <button onClick={() => toggleFollow(followed ?? { ...me, thumb: data.banner })} aria-pressed={!!followed} className={`${pill} bg-ink/[0.08] px-4 hover:bg-ink/[0.14]`}>
               {followed ? <UserCheck size={16} /> : <UserPlus size={16} />} {followed ? "Following" : "Follow"}
             </button>
-            <button onClick={() => shufflePlay(data.songs, from)} disabled={!data.songs.length} aria-label="Shuffle" title="Shuffle" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
-              <Shuffle size={17} />
-            </button>
+            <ShuffleButton from={from} className="bg-ink/[0.08] hover:bg-ink/[0.14] aria-pressed:bg-ink aria-pressed:text-paper" />
             <button onClick={() => radioFrom(data.songs, from)} disabled={!data.songs.length} aria-label="Artist radio" title="Artist radio" className="press grid size-10 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14] disabled:opacity-50">
               <Radio size={17} />
             </button>

@@ -258,7 +258,7 @@ function PlayerBar() {
             </button>
             <button onClick={prev} aria-label="Previous" className="press grid size-10 place-items-center rounded-full"><SkipBack size={20} className="fill-current" /></button>
             <button onClick={toggle} aria-label={loading ? "Loading…" : paused ? "Play" : "Pause"} className="press grid size-10 place-items-center rounded-full bg-accent text-paper">
-              {loading ? <LoaderCircle size={18} className="animate-[spin_0.6s_linear_infinite]" /> : paused ? <Play size={18} className="ml-0.5 fill-current" /> : <Pause size={18} className="fill-current" />}
+              {loading ? <span className="spinner size-[18px]" /> : paused ? <Play size={18} className="ml-0.5 fill-current" /> : <Pause size={18} className="fill-current" />}
             </button>
             <button onClick={next} aria-label="Next" className="press grid size-10 place-items-center rounded-full"><SkipForward size={20} className="fill-current" /></button>
             <button onClick={cycleRepeat} aria-label={repeat === "one" ? "Repeat one" : repeat === "all" ? "Repeat all" : "Repeat"} aria-pressed={repeat !== "off"} title={repeat === "one" ? "Repeat One" : repeat === "all" ? "Repeat All" : "Repeat"} className={mode(repeat !== "off")}>

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { LoaderCircle, Music, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
+import { Music, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import type { MiniState, Remote } from "./store";
 import { art } from "./yt";
 
@@ -54,7 +54,7 @@ export default function Mini() {
         <div className="flex items-center justify-center gap-3">
           <button onClick={() => send("prev")} aria-label="Previous" className={side}><SkipBack size={18} className="fill-current" /></button>
           <button onClick={() => send("toggle")} aria-label={s?.loading ? "Loading…" : playing ? "Pause" : "Play"} className="press grid size-10 place-items-center rounded-full bg-accent text-paper">
-            {s?.loading ? <LoaderCircle size={18} className="animate-spin" /> : playing ? <Pause size={17} className="fill-current" /> : <Play size={17} className="ml-0.5 fill-current" />}
+            {s?.loading ? <span className="spinner size-[18px]" /> : playing ? <Pause size={17} className="fill-current" /> : <Play size={17} className="ml-0.5 fill-current" />}
           </button>
           <button onClick={() => send("next")} aria-label="Next" className={side}><SkipForward size={18} className="fill-current" /></button>
         </div>

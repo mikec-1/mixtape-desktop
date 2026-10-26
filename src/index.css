@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "@fontsource-variable/geist";
 
 @theme {
   /* Every colour is light-dark(): the root's color-scheme (system, or Settings' choice) picks one. */
@@ -20,11 +19,9 @@
   /* Full-screen lyrics: the artwork's colour at its brightest that still holds big white type (3:1
      and up). */
   --color-accent-vivid: oklch(from var(--accent-raw) clamp(0.5, l, 0.58) min(c, 0.16) h);
-  /* Geist, bundled, so it looks the same on Mac and Windows. Mono is only for keys. */
-  --font-sans: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* Mixtape’s font: the system’s own (SF Pro on a Mac, Segoe UI on Windows). Mono is only for keys. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
-  /* Settings uses Mixtape’s font: the system’s own (SF Pro on a Mac, Segoe UI on Windows). */
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
 
   /* Sized to the page card (main is a container), not the window. */
   --text-display: clamp(44px, 8cqw, 104px);
@@ -520,4 +517,18 @@ img[src=""] {
   background-color: transparent;
   outline: 1px solid color-mix(in oklab, var(--color-ink) 16%, transparent);
   outline-offset: -1px;
+}
+
+/* A ring, not a spinning SVG: WebKit re-rasterises a rotating SVG every frame and its centre wobbles; a bordered box turns as one bitmap. Size it with size-*. */
+.spinner {
+  display: inline-block;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: turn 0.8s linear infinite;
+  will-change: transform;
+}
+@keyframes turn {
+  to { transform: rotate(1turn); }
 }

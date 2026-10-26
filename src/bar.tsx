@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, ty
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { currentMonitor, Effect, EffectState, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
-import { ArrowUpRight, ChevronDown, Heart, ListPlus, LoaderCircle, Moon, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search, Shuffle, SkipBack, SkipForward, Sparkle, Volume1, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Heart, ListPlus, Moon, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search, Shuffle, SkipBack, SkipForward, Sparkle, Volume1, Volume2, VolumeX, X } from "lucide-react";
 import type { MiniState, Remote } from "./store";
 import { art, type Track } from "./yt";
 
@@ -189,7 +189,7 @@ export default function Bar() {
           </button>
           <button onClick={() => send("prev")} aria-label="Previous" className={side}><SkipBack size={20} className="fill-current" /></button>
           <button onClick={() => send("toggle")} aria-label={s?.loading ? "Loading…" : playing ? "Pause" : "Play"} className="press grid size-12 place-items-center rounded-full bg-accent text-paper shadow-lg shadow-accent/30">
-            {s?.loading ? <LoaderCircle size={20} className="animate-spin" /> : playing ? <Pause size={20} className="fill-current" /> : <Play size={20} className="ml-0.5 fill-current" />}
+            {s?.loading ? <span className="spinner size-5" /> : playing ? <Pause size={20} className="fill-current" /> : <Play size={20} className="ml-0.5 fill-current" />}
           </button>
           <button onClick={() => send("next")} aria-label="Next" className={side}><SkipForward size={20} className="fill-current" /></button>
           <button onClick={() => send("repeat")} aria-label={s?.repeat === "one" ? "Repeat One" : s?.repeat === "all" ? "Repeat All" : "Repeat"} aria-pressed={s?.repeat !== "off"} className={mode(!!s && s.repeat !== "off")}>
@@ -209,7 +209,7 @@ export default function Bar() {
         {q ? (
           <div className="flex items-center justify-between px-4 pt-3 pb-1 text-[13px] font-bold">
             Songs
-            {searching && <LoaderCircle size={13} className="animate-spin text-muted" />}
+            {searching && <span className="spinner size-[13px] text-muted" />}
           </div>
         ) : (
           // Folds away (and stays folded) for a smaller player; folded, it still names the next song.

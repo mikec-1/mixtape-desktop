@@ -218,7 +218,37 @@ const count = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 
 // Right-click menus are the OS's own. ponytail: Tauri-only; the web build needs an HTML fallback.
 // Shown by lib.rs's popup, not Tauri's, which froze the app if the menu-bar icon changed while it was open.
-export const popup = (items: MenuOptions["items"]) => Menu.new({ items }).then((m) => invoke("popup", { rid: m.rid }), report);
+export const popup = (items: Entry[]) => withIcons(items).then((items) => Menu.new({ items })).then((m) => invoke("popup", { rid: m.rid }), report);
+// An item's icon is lucide's, drawn twice size (the menu's is 18pt) in the menu's text colour, as the OS doesn't tint it.
+// Drawn once per look and kept; a menu of choices (sort order, a folder to pick) has none, like the OS's own.
+type Entry = { icon?: LucideIcon; items?: Entry[]; [k: string]: unknown };
+// A submenu is made first: Tauri reads an entry with an icon as a plain item, so an inline one with an icon lost its items.
+const withIcons = (items: Entry[]): Promise<MenuOptions["items"]> => Promise.all(items.map(async ({ icon, items: sub, ...e }) => {
+  const entry = { ...e, ...(icon && { icon: await drawIcon(icon) }) };
+  return sub ? Submenu.new({ ...entry, items: await withIcons(sub) } as never) : entry;
+})) as never;
+const drawn = [new Map<LucideIcon, Promise<Uint8Array>>(), new Map<LucideIcon, Promise<Uint8Array>>()];
+function drawIcon(Icon: LucideIcon) {
+  const dark = +matchMedia("(prefers-color-scheme: dark)").matches, kept = drawn[dark].get(Icon);
+  if (kept) return kept;
+  const box = document.createElement("div"), root = createRoot(box);
+  flushSync(() => root.render(<Icon size={32} strokeWidth={1.9} color={dark ? "rgb(255 255 255 / 0.85)" : "rgb(0 0 0 / 0.85)"} />));
+  const svg = box.innerHTML;
+  root.unmount();
+  const png = new Promise<Uint8Array>((ok, no) => {
+    const img = new Image(36, 36);
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 36;
+      c.getContext("2d")!.drawImage(img, 2, 2, 32, 32);
+      c.toBlob((b) => (b ? b.arrayBuffer().then((a) => ok(new Uint8Array(a)), no) : no(Error("No icon"))), "image/png");
+    };
+    img.onerror = no;
+    img.src = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  });
+  drawn[dark].set(Icon, png);
+  return png;
+}
 
 // Anything that deletes asks first (Warning): what goes, and a red button that Return presses.
 export const warn = (title: string, yes: string, then: () => void, text = "") => useStore.setState({ dialog: { kind: "warn", title, text, yes, then } });
@@ -238,70 +268,72 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
   popup([
     ...(q < 0
       ? [
-          { text: "Play Next", action: () => enqueue([t], true) },
-          { text: "Add to Queue", action: () => enqueue([t], false) },
+          { text: "Play Next", icon: ListStart, action: () => enqueue([t], true) },
+          { text: "Add to Queue", icon: ListEnd, action: () => enqueue([t], false) },
         ]
       : [
-          ...(q > index + 1 ? [{ text: "Move Up", action: () => moveInQueue(q, q - 1) }] : []),
-          ...(q < queue.length - 1 ? [{ text: "Move Down", action: () => moveInQueue(q, q + 1) }] : []),
-          { text: "Remove from Queue", action: () => removeFromQueue(q) },
+          ...(q > index + 1 ? [{ text: "Move Up", icon: ArrowUp, action: () => moveInQueue(q, q - 1) }] : []),
+          ...(q < queue.length - 1 ? [{ text: "Move Down", icon: ArrowDown, action: () => moveInQueue(q, q + 1) }] : []),
+          { text: "Remove from Queue", icon: ListX, action: () => removeFromQueue(q) },
         ]),
-    ...(t.file ? [] : [{ text: "Start Radio", action: () => startRadio(t) }, { text: "Wrong Version…", action: () => useStore.setState({ dialog: { kind: "versions", track: t } }) }]),
+    ...(t.file ? [] : [{ text: "Start Radio", icon: Radio, action: () => startRadio(t) }, { text: "Wrong Version? Re-resolve", icon: RefreshCw, action: () => useStore.setState({ dialog: { kind: "versions", track: t } }) }]),
     ...(t.file
       ? [
-          { text: "Edit Song Info…", action: () => useStore.setState({ dialog: { kind: "songs", paths: [t.file!], editing: true } }) },
-          { text: "Remove from Sleeve", action: () => unfile([t]) },
+          { text: "Edit Song Info…", icon: PencilLine, action: () => useStore.setState({ dialog: { kind: "songs", paths: [t.file!], editing: true } }) },
+          { text: "Remove from Sleeve", icon: Trash2, action: () => unfile([t]) },
         ]
       : []),
-    { text: "Edit Lyrics…", action: () => editLyrics(t) },
+    { text: "Edit Lyrics…", icon: MicVocal, action: () => editLyrics(t) },
     { item: "Separator" as const },
-    liked.some((x) => x.id === t.id) ? { text: "Remove from Liked Songs", action: () => unlike([t]) } : { text: "Add to Liked Songs", action: () => toggleLike(t) },
+    likedAs(t, liked) ? { text: "Remove from Liked Songs", icon: HeartOff, action: () => unlike([t]) } : { text: "Add to Liked Songs", icon: Heart, action: () => toggleLike(t) },
     {
       text: "Add to Playlist",
+      icon: ListPlus,
       items: [
-        { text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist([t]) }) },
+        { text: "New Playlist", icon: Plus, action: () => open({ name: "playlist", id: newPlaylist([t]) }) },
         ...(playlists.length ? [{ item: "Separator" as const }] : []),
-        ...playlists.map((p) => ({ text: p.name, action: () => addToPlaylist(p.id, [t]) })),
+        ...playlists.map((p) => ({ text: p.name, icon: ListMusic, action: () => addToPlaylist(p.id, [t]) })),
       ],
     },
-    ...(from && "playlist" in from ? [{ text: "Remove from This Playlist", action: () => unlist(from.playlist, [from.index], [t]) }] : []),
-    { text: hidden.some((x) => x.id === t.id) ? "Unhide Song" : "Hide Song", action: () => toggleHide(t) },
+    ...(from && "playlist" in from ? [{ text: "Remove from This Playlist", icon: ListMinus, action: () => unlist(from.playlist, [from.index], [t]) }] : []),
+    { text: hidden.some((x) => x.id === t.id) ? "Unhide Song" : "Hide Song", icon: hidden.some((x) => x.id === t.id) ? Eye : EyeOff, action: () => toggleHide(t) },
     ...(by.length ? [{ item: "Separator" as const }] : []),
-    ...(by.length === 1 ? [{ text: `Go to ${by[0].name}`, action: () => goToArtist(by[0]) }] : by.length ? [{ text: "Go to Artist", items: by.map((a) => ({ text: a.name, action: () => goToArtist(a) })) }] : []),
-    ...(t.album ? [{ text: "Go to Album", action: () => goToAlbum(t) }] : []),
+    ...(by.length === 1 ? [{ text: `Go to ${by[0].name}`, icon: UserRound, action: () => goToArtist(by[0]) }] : by.length ? [{ text: "Go to Artist", icon: UserRound, items: by.map((a) => ({ text: a.name, icon: UserRound, action: () => goToArtist(a) })) }] : []),
+    ...(t.album ? [{ text: "Go to Album", icon: Disc3, action: () => goToAlbum(t) }] : []),
   ]);
 }
 
 // Several songs picked in a list at once: what applies to all of them. at: their places in a playlist.
 function tracksMenu(ts: Track[], playlist?: { id: string; at: number[] }) {
   const { liked, playlists } = useLibrary.getState();
-  const allLiked = ts.every((t) => liked.some((x) => x.id === t.id));
+  const allLiked = ts.every((t) => likedAs(t, liked));
   const files = ts.every((t) => t.file);
   popup([
-    { text: "Play Next", action: () => enqueue(ts, true) },
-    { text: "Add to Queue", action: () => enqueue(ts, false) },
-    ...(files ? [{ text: "Edit Song Info…", action: () => useStore.setState({ dialog: { kind: "songs", paths: ts.map((t) => t.file!), editing: true } }) }] : []),
+    { text: "Play Next", icon: ListStart, action: () => enqueue(ts, true) },
+    { text: "Add to Queue", icon: ListEnd, action: () => enqueue(ts, false) },
+    ...(files ? [{ text: "Edit Song Info…", icon: PencilLine, action: () => useStore.setState({ dialog: { kind: "songs", paths: ts.map((t) => t.file!), editing: true } }) }] : []),
     { item: "Separator" as const },
-    allLiked ? { text: "Remove from Liked Songs", action: () => unlike(ts) } : { text: "Add to Liked Songs", action: () => likeAll(ts, true) },
+    allLiked ? { text: "Remove from Liked Songs", icon: HeartOff, action: () => unlike(ts) } : { text: "Add to Liked Songs", icon: Heart, action: () => likeAll(ts, true) },
     {
       text: "Add to Playlist",
+      icon: ListPlus,
       items: [
-        { text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist(ts) }) },
+        { text: "New Playlist", icon: Plus, action: () => open({ name: "playlist", id: newPlaylist(ts) }) },
         ...(playlists.length ? [{ item: "Separator" as const }] : []),
-        ...playlists.map((p) => ({ text: p.name, action: () => addToPlaylist(p.id, ts) })),
+        ...playlists.map((p) => ({ text: p.name, icon: ListMusic, action: () => addToPlaylist(p.id, ts) })),
       ],
     },
-    ...(playlist ? [{ text: "Remove from This Playlist", action: () => unlist(playlist.id, playlist.at, ts) }] : []),
-    ...(files ? [{ text: "Remove from Sleeve", action: () => unfile(ts) }] : []),
+    ...(playlist ? [{ text: "Remove from This Playlist", icon: ListMinus, action: () => unlist(playlist.id, playlist.at, ts) }] : []),
+    ...(files ? [{ text: "Remove from Sleeve", icon: Trash2, action: () => unfile(ts) }] : []),
   ]);
 }
 
 const albumMenu = (a: Album) =>
   popup([
-    { text: "Play", action: () => playCollection(a.id) },
-    { text: "Play Next", action: () => collection(a.id).then((c) => enqueue(c.tracks, true), report) },
-    { text: "Add to Queue", action: () => collection(a.id).then((c) => enqueue(c.tracks, false), report) },
-    useLibrary.getState().saved.some((x) => x.id === a.id) ? { text: "Remove from Library", action: () => warn(`Remove “${a.title}” from your library?`, "Remove", () => toggleSave(a)) } : { text: "Add to Library", action: () => toggleSave(a) },
+    { text: "Play", icon: Play, action: () => playCollection(a.id) },
+    { text: "Play Next", icon: ListStart, action: () => collection(a.id).then((c) => enqueue(c.tracks, true), report) },
+    { text: "Add to Queue", icon: ListEnd, action: () => collection(a.id).then((c) => enqueue(c.tracks, false), report) },
+    useLibrary.getState().saved.some((x) => x.id === a.id) ? { text: "Remove from Library", icon: CircleMinus, action: () => warn(`Remove “${a.title}” from your library?`, "Remove", () => toggleSave(a)) } : { text: "Add to Library", icon: CirclePlus, action: () => toggleSave(a) },
   ]);
 
 const LIKED = "bg-linear-to-br from-[#ff375f] to-[#b80f3c]";
@@ -596,7 +628,7 @@ export function Library() {
           <button onClick={() => open({ name: "history" })} aria-label="History" title="History" className={round2}>
             <HistoryIcon size={17} />
           </button>
-          <button onClick={() => popup([{ text: "New Playlist", action: () => open({ name: "playlist", id: newPlaylist() }) }, { text: "New Folder", action: () => open({ name: "folder", id: newFolder() }) }, { text: "Import from Link…", action: () => useStore.setState({ dialog: { kind: "link" } }) }, ...(canHaveFiles ? [{ text: "Import from Spotify…", action: () => useStore.setState({ dialog: { kind: "spotify" } }) }] : [])])} aria-label="New" title="New Playlist or Folder" className={round2}>
+          <button onClick={() => popup([{ text: "New Playlist", icon: Plus, action: () => open({ name: "playlist", id: newPlaylist() }) }, { text: "New Folder", icon: FolderPlus, action: () => open({ name: "folder", id: newFolder() }) }, { text: "Import from Link…", icon: Link, action: () => useStore.setState({ dialog: { kind: "link" } }) }, ...(canHaveFiles ? [{ text: "Import from Spotify…", icon: Import, action: () => useStore.setState({ dialog: { kind: "spotify" } }) }] : [])])} aria-label="New" title="New Playlist or Folder" className={round2}>
             <Plus size={18} />
           </button>
         </div>
@@ -795,6 +827,7 @@ function itemMenu(i: Item) {
       ? [
           {
             text: "Move to Folder",
+            icon: FolderInput,
             items: [
               { text: "New Folder", action: () => void newFolder([i.id]) },
               ...(l.folders.length ? [{ item: "Separator" as const }] : []),
@@ -802,13 +835,13 @@ function itemMenu(i: Item) {
               ...(folder ? [{ item: "Separator" as const }, { text: "Remove from Folder", action: () => moveToFolder(i.id) }] : []),
             ],
           },
-          { text: "Duplicate", action: () => void duplicatePlaylist(i.id) },
-          { text: "Delete Playlist", action: () => warn(`Delete “${i.title}”?`, "Delete", () => deletePlaylist(i.id)) },
+          { text: "Duplicate", icon: Copy, action: () => void duplicatePlaylist(i.id) },
+          { text: "Delete Playlist", icon: Trash2, action: () => warn(`Delete “${i.title}”?`, "Delete", () => deletePlaylist(i.id)) },
         ]
       : []),
-    ...(i.kind === "folder" ? [{ text: "Delete Folder", action: () => warn(`Delete “${i.title}”?`, "Delete", () => deleteFolder(i.id), "Its playlists stay in your library.") }] : []),
-    ...(i.kind === "album" ? [{ text: "Remove from Library", action: () => warn(`Remove “${i.title}” from your library?`, "Remove", () => toggleSave({ id: i.id, title: i.title })) }] : []),
-    ...(i.kind === "artist" ? [{ text: "Unfollow", action: () => toggleFollow({ id: i.id, name: i.title }) }] : []),
+    ...(i.kind === "folder" ? [{ text: "Delete Folder", icon: Trash2, action: () => warn(`Delete “${i.title}”?`, "Delete", () => deleteFolder(i.id), "Its playlists stay in your library.") }] : []),
+    ...(i.kind === "album" ? [{ text: "Remove from Library", icon: CircleMinus, action: () => warn(`Remove “${i.title}” from your library?`, "Remove", () => toggleSave({ id: i.id, title: i.title })) }] : []),
+    ...(i.kind === "artist" ? [{ text: "Unfollow", icon: UserMinus, action: () => toggleFollow({ id: i.id, name: i.title }) }] : []),
   ]);
 }
 
@@ -923,23 +956,24 @@ export function PlaylistPage({ id }: { id: string }) {
       { item: "Separator" as const },
       {
         text: "Move to Folder",
+        icon: FolderInput,
         items: [
           { text: "New Folder", action: () => void newFolder([id]) },
           ...useLibrary.getState().folders.map((f) => ({ text: f.name, checked: playlist?.folder === f.id, action: () => moveToFolder(id, f.id) })),
           ...(playlist?.folder ? [{ item: "Separator" as const }, { text: "Remove from Folder", action: () => moveToFolder(id) }] : []),
         ],
       },
-      { text: "Duplicate", action: () => open({ name: "playlist", id: duplicatePlaylist(id)! }) },
+      { text: "Duplicate", icon: Copy, action: () => open({ name: "playlist", id: duplicatePlaylist(id)! }) },
       // Sharing needs an account: the link is to your copy on the server.
       ...(playlist && signedIn
         ? [
             { item: "Separator" as const },
-            { text: "Copy Link", action: () => (playlist.public || setPublic(id, true), copyLink(playlistLink(id), playlist.public ? undefined : "Anyone with it can see this playlist")) },
-            ...(playlist.public ? [{ text: "Make Private", action: () => setPublic(id, false) }] : []),
+            { text: "Copy Link", icon: Link, action: () => (playlist.public || setPublic(id, true), copyLink(playlistLink(id), playlist.public ? undefined : "Anyone with it can see this playlist")) },
+            ...(playlist.public ? [{ text: "Make Private", icon: Lock, action: () => setPublic(id, false) }] : []),
           ]
         : []),
       { item: "Separator" as const },
-      { text: "Delete Playlist", action: () => warn(`Delete “${playlist?.name}”?`, "Delete", () => (back(), deletePlaylist(id))) },
+      { text: "Delete Playlist", icon: Trash2, action: () => warn(`Delete “${playlist?.name}”?`, "Delete", () => (back(), deletePlaylist(id))) },
     ]);
 
   return (
@@ -1178,7 +1212,7 @@ export function FolderPage({ id }: { id: string }) {
       >
         <PlayButtons tracks={tracks} from={key} />
         <button
-          onClick={() => popup([{ text: useLibrary.getState().pinned.includes(key) ? "Unpin" : "Pin to Top", action: () => togglePin(key) }, { text: "New Playlist in Folder", action: () => open({ name: "playlist", id: newPlaylist([], id) }) }, { item: "Separator" }, { text: "Delete Folder", action: () => warn(`Delete “${folder.name}”?`, "Delete", () => (back(), deleteFolder(id)), "Its playlists stay in your library.") }])}
+          onClick={() => popup([{ text: useLibrary.getState().pinned.includes(key) ? "Unpin" : "Pin to Top", icon: useLibrary.getState().pinned.includes(key) ? PinOff : Pin, action: () => togglePin(key) }, { text: "New Playlist in Folder", icon: Plus, action: () => open({ name: "playlist", id: newPlaylist([], id) }) }, { item: "Separator" }, { text: "Delete Folder", icon: Trash2, action: () => warn(`Delete “${folder.name}”?`, "Delete", () => (back(), deleteFolder(id)), "Its playlists stay in your library.") }])}
           aria-label="More"
           title="More"
           aria-haspopup="menu"
@@ -1207,7 +1241,7 @@ export function LocalPage() {
     <div className="animate-enter">
       <Masthead cover={<LocalCover />} fill="bg-linear-135 from-[#5e5ce6] to-[#30d158]" title={<h1 className={title("Local Files")}>Local Files</h1>} meta={`On this Mac · ${count(tracks.length)} · ${plural(folders.length, "folder")}${scanning ? " · Looking for changes…" : ""}`}>
         <PlayButtons tracks={shown} from="local" radio={false} />
-        <button onClick={() => popup([{ text: "Add Folder…", action: () => void addFolder() }, { text: "Look for New Songs", action: () => void rescan() }])} aria-label="More" title="More" aria-haspopup="menu" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
+        <button onClick={() => popup([{ text: "Add Folder…", icon: FolderPlus, action: () => void addFolder() }, { text: "Look for New Songs", icon: RefreshCw, action: () => void rescan() }])} aria-label="More" title="More" aria-haspopup="menu" className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
           <Ellipsis size={20} />
         </button>
       </Masthead>
@@ -1522,7 +1556,7 @@ export function Artist({ id: linked, by }: { id: string; by?: string }) {
               <Radio size={17} />
             </button>
             <button
-              onClick={() => popup([...(followed ? [{ text: useLibrary.getState().pinned.includes(from) ? "Unpin" : "Pin to Top", action: () => togglePin(from) }] : []), { text: blocked ? "Allow This Artist" : "Don’t Play This Artist", action: () => toggleBlock(blocked ?? me) }])}
+              onClick={() => popup([...(followed ? [{ text: useLibrary.getState().pinned.includes(from) ? "Unpin" : "Pin to Top", icon: useLibrary.getState().pinned.includes(from) ? PinOff : Pin, action: () => togglePin(from) }] : []), { text: blocked ? "Allow This Artist" : "Don’t Play This Artist", icon: blocked ? CircleCheck : Ban, action: () => toggleBlock(blocked ?? me) }])}
               aria-label="More"
               title="More"
               aria-haspopup="menu"
@@ -2323,7 +2357,7 @@ function SpotifyImport() {
           })}
         </ul>
       ) : (
-        name && !error && <LoaderCircle size={20} className="mx-auto my-8 animate-spin text-muted" />
+        name && !error && <span className="spinner mx-auto my-8 block size-5 text-muted" />
       )}
       {error && <p className="px-6 pt-3 text-sm text-[#ff375f]">{error}</p>}
       <footer className="flex items-center gap-2 px-6 py-4">
@@ -2775,7 +2809,7 @@ export function Settings() {
     <span aria-hidden className="grid size-[22px] shrink-0 place-items-center rounded-[6px]" style={{ background: `color-mix(in oklab, ${p.tint} 22%, transparent)`, color: p.tint }}><p.icon size={13} strokeWidth={2.25} /></span>
   );
   return (
-    <div className="absolute inset-0 flex animate-enter font-ui">
+    <div className="absolute inset-0 flex animate-enter">
       <nav aria-label="Settings" className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-ink/[0.06] bg-ink/[0.025] px-3 pt-16 pb-6 @max-2xl:w-48">
         <h1 className="px-2 text-[22px] font-bold tracking-tight">Settings</h1>
         <label className="mt-3 mb-4 flex h-8 shrink-0 items-center gap-2 rounded-lg bg-ink/[0.07] px-2.5 text-muted transition-colors focus-within:bg-ink/[0.1]">

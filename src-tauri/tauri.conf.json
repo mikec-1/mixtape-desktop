@@ -44,6 +44,15 @@
     ],
     "resources": [
       "icons/tray.png"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYzM0JERTg4MEQwRkJBNTYKUldSV3VnOE5pTjQ3ODRLalgyRDFZYjNSd3d0VFd4aStoOS9BczdGVVgyMmE0bnFyaGNCQmRiV1UK",
+      "endpoints": [
+        "https://github.com/mikec-1/Sleeve/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

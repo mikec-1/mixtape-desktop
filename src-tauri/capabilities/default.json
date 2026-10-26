@@ -25,6 +25,8 @@
     "core:app:allow-default-window-icon",
     "core:menu:default",
     "autostart:default",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "http:default",
       "allow": [

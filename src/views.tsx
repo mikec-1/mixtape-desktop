@@ -3773,6 +3773,8 @@ const LICENCES: [string, string][] = [
 const openLink = (url: string) => void (canHaveFiles ? import("@tauri-apps/plugin-opener").then((o) => o.openUrl(url)) : window.open(url, "_blank", "noopener"));
 
 function About() {
+  const [update, setUpdate] = useState<string>();
+  const look = () => (setUpdate("Checking…"), import("./update").then((u) => u.checkForUpdate()).then(setUpdate, () => setUpdate("Couldn't check. Try again later.")));
   return (
     <div>
       <div className="flex flex-col items-center rounded-2xl bg-ink/[0.04] px-6 py-8 text-center">
@@ -3782,6 +3784,8 @@ function About() {
           <span className="flex items-center gap-1.5 rounded-full bg-ink/[0.07] px-2 py-0.5 text-xs font-semibold tabular-nums"><span className="size-1.5 rounded-full bg-[#30d158]" />v{version} Beta</span>
         </div>
         <p className="mt-1 text-[13px] text-muted">Your library from anywhere, in one free player.</p>
+        {canHaveFiles && <button onClick={look} disabled={update === "Checking…"} className={`${quiet} mt-4`}><RefreshCw size={15} className={update === "Checking…" ? "animate-spin" : ""} /> Check for Updates</button>}
+        {update && <p className="mt-2 text-xs text-muted">{update}</p>}
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           <button onClick={() => openLink("https://github.com/mikec-1/Sleeve")} className={quiet}><CodeXml size={15} /> GitHub</button>
           <button onClick={() => openLink("https://github.com/mikec-1/Sleeve/issues")} className={quiet}><LifeBuoy size={15} /> Report a Problem</button>

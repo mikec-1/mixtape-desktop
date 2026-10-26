@@ -97,6 +97,9 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Settings → About and the check at launch (startup.ts): signed updates from the GitHub release.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // Settings → Startup. Opened at login it starts hidden; main.tsx shows it unless you chose otherwise.
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--login"])))
         // WebKit holds pages to 60 frames a second; let go of that so every window moves at 120 on ProMotion screens.

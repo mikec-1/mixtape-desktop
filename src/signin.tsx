@@ -48,9 +48,23 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
     return () => void (on = false);
   }, [user?.id, profile?.handle]);
   const run = (what: string, fn: () => Promise<unknown>) => {
+    if (["password", "code", "email", "google"].includes(what)) sessionStorage.justIn = 1; // kept through Google's round trip
     setBusy(what), setError(""), setNote("");
     fn().catch((e) => (/email not confirmed/i.test(e?.message) ? (setSent(email.trim()), setMode("code"), resendSignUp(email.trim()).then(() => setWait(30)), setNote("Confirm your email first: we sent you a new code.")) : setError(say(e)))).finally(() => setBusy(undefined));
   };
+  // Signed in with a username: straight back to the app, no button to press (it stays, in case that fails).
+  const sentBack = useRef(false);
+  useEffect(() => {
+    if (!handingOff() || !user || !(profile?.handle || named) || sentBack.current) return;
+    sentBack.current = true;
+    run("back", handBack);
+  }, [user?.id, profile?.handle, named]);
+  // Signed in just now, for the app: straight back to it. Already signed in here, you confirm the account first.
+  useEffect(() => {
+    if (!sessionStorage.justIn || !handingOff() || !user || !(profile?.handle || named)) return;
+    delete sessionStorage.justIn;
+    run("back", handBack);
+  }, [user?.id, profile?.handle, named]);
   const to = (m: Mode) => (setMode(m), setError(""), setNote(""));
   const verify = (c: string) => sent && run("code", () => enterCode(sent, c).catch((e) => (setCode(""), Promise.reject(e))));
   const submit = () =>

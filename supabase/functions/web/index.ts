@@ -1,7 +1,7 @@
 // web: what the browser build can't do itself. ?u=<url> passes a call to one of the sites the app talks to
 // (the browser blocks them cross-origin; the desktop app goes through Rust instead). ?play=<video id> fetches
 // a signed link to the song for a signed-in user, and ?stream= plays it through the resolver
-// (resolver.mixtaped.tech), as mixtape-web does: <audio> can't send a sign-in, so the link is good for
+// (resolver.mixtaped.tech), as mixtape-web does, without waiting for the resolver's download (live=1): <audio> can't send a sign-in, so the link is good for
 // that one song for 6 hours. Secrets: RESOLVER_URL, RESOLVER_TOKEN (the token never leaves here).
 
 const HOSTS = /(^|\.)(youtube\.com|google\.com|googleapis\.com|ytimg\.com|deezer\.com|itunes\.apple\.com|music\.apple\.com|rss\.marketingtools\.apple\.com|lrclib\.net|lrc\.red|binimum\.org|music\.163\.com|shazam\.com|listenbrainz\.org|audioscrobbler\.com)$/;
@@ -21,7 +21,7 @@ Deno.serve(async (req) => {
     const user = await fetch(`${Deno.env.get("SUPABASE_URL")}/auth/v1/user`, { headers: { apikey: Deno.env.get("SUPABASE_ANON_KEY")!, Authorization: req.headers.get("authorization") ?? "" } });
     if (!user.ok) return new Response("sign in to play", { status: 401, headers: cors });
     const { base, auth } = resolver();
-    const resolved = await fetch(`${base}/resolve?${new URLSearchParams({ q: vid, vid, dur: "0", explicit: "0" })}`, { headers: auth, signal: AbortSignal.timeout(20000) });
+    const resolved = await fetch(`${base}/resolve?${new URLSearchParams({ q: vid, vid, dur: "0", explicit: "0", live: "1" })}`, { headers: auth, signal: AbortSignal.timeout(20000) });
     if (!resolved.ok) return new Response("not found", { status: resolved.status, headers: cors });
     const { videoID, duration } = await resolved.json(), exp = String(Math.floor(Date.now() / 1000) + 6 * 3600);
     const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/web?${new URLSearchParams({ stream: videoID, exp, sig: await sign(videoID, exp) })}`;
@@ -32,7 +32,10 @@ Deno.serve(async (req) => {
   if (stream) {
     if (!/^[\w-]{11}$/.test(stream) || Number(exp) * 1000 < Date.now() || q.get("sig") !== (await sign(stream, exp))) return new Response("expired", { status: 403, headers: cors });
     const { base, auth } = resolver(), range = req.headers.get("range");
-    const audio = await fetch(`${base}/stream/${stream}.m4a`, { headers: range ? { ...auth, range } : auth });
+    // A song played before comes from the resolver's cache; a new one straight from YouTube while it's cached behind.
+    const get = (path: string) => fetch(`${base}/${path}/${stream}.m4a`, { headers: range ? { ...auth, range } : auth });
+    let audio = await get("stream");
+    if (audio.status === 404) audio = await get("live");
     const out = new Headers(cors);
     for (const h of ["content-type", "content-length", "content-range", "accept-ranges"]) audio.headers.get(h) && out.set(h, audio.headers.get(h)!);
     if (!out.has("content-type")) out.set("content-type", "audio/mp4");

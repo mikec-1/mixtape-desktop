@@ -36,3 +36,7 @@ Some features need keys in a `.env` file: `VITE_SUPABASE_URL` and `VITE_SUPABASE
 `pnpm tauri build` makes an installer for the platform you're on. Releases are built by GitHub Actions when a `v*` tag is pushed.
 
 Built with Tauri 2, React, TypeScript and Rust.
+
+## License
+
+All rights reserved. The code is here to read, not to reuse. See [LICENSE](LICENSE).

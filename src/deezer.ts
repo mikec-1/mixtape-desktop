@@ -12,26 +12,27 @@ import { parseSecs, type Artist, type Collection, type Track } from "./yt";
 let slot = 0;
 const cache = new Map<string, { at: number; body: Promise<any> }>();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function get(path: string, tries = 0): Promise<any> {
-  const hit = cache.get(path);
+// lang: the language to ask in; Deezer titles a song in it where the label gave one (see topSongs).
+async function get(path: string, tries = 0, lang?: string): Promise<any> {
+  const key = `${lang ?? ""}${path}`, hit = cache.get(key);
   if (!hit || Date.now() - hit.at > 60_000) {
     if (cache.size >= 240) cache.clear();
     const wait = Math.max(0, slot - Date.now());
     slot = Date.now() + wait + 110;
-    cache.set(path, { at: Date.now(), body: sleep(wait).then(() => fetch(`https://api.deezer.com/${path}`)).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Deezer ${r.status}`)))) });
+    cache.set(key, { at: Date.now(), body: sleep(wait).then(() => fetch(`https://api.deezer.com/${path}`, lang ? { headers: { "accept-language": lang } } : undefined)).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Deezer ${r.status}`)))) });
   }
-  const data = await cache.get(path)!.body.catch((e) => (cache.delete(path), Promise.reject(e)));
+  const data = await cache.get(key)!.body.catch((e) => (cache.delete(key), Promise.reject(e)));
   if (!data?.error) return data;
-  cache.delete(path);
+  cache.delete(key);
   // Deezer answers errors with a 200: code 4 is the quota, 700 is busy. Anything else fails the same again.
   const { code, message = "" } = data.error;
-  if ((code === 4 || code === 700 || /quota/i.test(message)) && tries < 3) return sleep(2 ** tries * 700 + Math.random() * 300).then(() => get(path, tries + 1));
+  if ((code === 4 || code === 700 || /quota/i.test(message)) && tries < 3) return sleep(2 ** tries * 700 + Math.random() * 300).then(() => get(path, tries + 1, lang));
   throw new Error(message || "Deezer couldn’t answer");
 }
 
 type DzArtist = { id: number; name: string };
 type DzAlbum = { id: number; title: string; cover_xl?: string; release_date?: string; record_type?: string; artist?: DzArtist; contributors?: DzArtist[] };
-type DzTrack = { id: number; title: string; duration?: number; explicit_lyrics?: boolean; artist: DzArtist; album?: DzAlbum; contributors?: DzArtist[] };
+type DzTrack = { id: number; title: string; duration?: number; rank?: number; explicit_lyrics?: boolean; artist: DzArtist; album?: DzAlbum; contributors?: DzArtist[] };
 
 export const isDeezer = (id: string) => id.startsWith("dz:");
 const who = (a: DzArtist): Artist => ({ id: `dz:artist:${a.id}`, name: a.name });
@@ -55,6 +56,26 @@ function explicitFirst(tracks: DzTrack[]) {
     if (!had || (!had.explicit_lyrics && t.explicit_lyrics)) best.set(key, t);
   }
   return [...best.values()];
+}
+
+// An artist's ten most played songs, as Mixtape's artist pages have them: ranked by streams rather than
+// YouTube views. Deezer's own top is its plays of late, so its 100 are ranked again by its all-time score,
+// which comes close to Spotify's Popular (8 of ANNA ASTI's 10). The artist is the one with this exact name
+// and the most fans. Labels give Russian songs a
+// Latin title for every other language, so asked in Russian they come back as released ("Лампочки", not
+// "Lampochki"); other songs read the same either way.
+// ponytail: Russian only; other scripts' originals need Apple Music (it keeps them whatever the country).
+const bare = (s: string) => latin(s).replace(/[^\p{L}\p{N}]+/gu, "");
+export async function topSongs(name: string): Promise<Track[]> {
+  const found = ((await get(`search/artist?q=${encodeURIComponent(name)}&limit=25`)).data ?? []) as (DzArtist & { nb_fan?: number })[];
+  const a = found.filter((x) => bare(x.name) === bare(name)).sort((x, y) => (y.nb_fan ?? 0) - (x.nb_fan ?? 0))[0];
+  if (!a) return [];
+  const [top, albums] = await Promise.all([get(`artist/${a.id}/top?limit=100`, 0, "ru").then((r): DzTrack[] => r.data ?? []), get(`artist/${a.id}/albums?limit=100`).then((r): DzAlbum[] => (r.data ?? []).filter((x: DzAlbum) => x.record_type === "album").reverse())]);
+  // Like Spotify, a single that later made an album shows that album (its first, if several).
+  const lists = await Promise.all(albums.map((al) => get(`album/${al.id}/tracks?limit=100`, 0, "ru").then((r): DzTrack[] => r.data ?? [], () => [])));
+  const on = new Map<string, DzAlbum>();
+  lists.forEach((ts, i) => ts.forEach((t) => on.has(t.title.toLowerCase()) || on.set(t.title.toLowerCase(), albums[i])));
+  return explicitFirst(top.sort((x, y) => (y.rank ?? 0) - (x.rank ?? 0))).slice(0, 10).map((t) => toTrack(t, on.get(t.title.toLowerCase())));
 }
 
 // Its songs name only the lead artist; withGuests adds the rest.
@@ -94,6 +115,9 @@ const finding = new Map<string, Promise<string>>();
 const keep = (id: string, yt: string) => ((found[id] = yt), (localStorage.youtubeIds = JSON.stringify(found)));
 // The YouTube song an imported one was found as, if it has been.
 export const known = (id: string): string | undefined => found[id];
+// The recording a song plays: its YouTube upload once found, else itself (a file of yours is its own). What
+// per-recording things are kept under (lyrics, timings, where the sound starts), so a song saved twice shares them.
+export const recording = (t: Track) => (t.file ? t.id : (found[t.id] ?? t.id));
 export const foundWhenPlayed = (id: string) => /^(dz|sp|csv):/.test(id);
 // A song from your files is looked up the same way, for its radio.
 export function youtubeId(t: Track): Promise<string> {

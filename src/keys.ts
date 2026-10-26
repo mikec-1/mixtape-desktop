@@ -24,8 +24,8 @@ const toggleSidebar = () => useSettings.setState((s) => ({ sidebar: !s.sidebar }
 
 export const KEYS: { id: string; label: string; combo: string; run: () => unknown }[] = [
   { id: "play", label: "Play or pause", combo: " ", run: toggle },
-  { id: "back5", label: "Back 5 seconds", combo: "arrowleft", run: () => seek(-5) },
-  { id: "ahead5", label: "Forward 5 seconds", combo: "arrowright", run: () => seek(5) },
+  { id: "back5", label: "Back 5 seconds", combo: "arrowleft", run: () => seekBy(-5) },
+  { id: "ahead5", label: "Forward 5 seconds", combo: "arrowright", run: () => seekBy(5) },
   { id: "prev", label: "Previous song", combo: "mod+arrowleft", run: prev },
   { id: "next", label: "Next song", combo: "mod+arrowright", run: next },
   { id: "quieter", label: "Volume down", combo: "arrowdown", run: () => nudgeVolume(-0.1) },

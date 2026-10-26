@@ -474,29 +474,38 @@ export function albumByName(name: string, artist = "") {
 
 // The menu-bar bars (startup.ts): how loud the bass, low mids, high mids and treble are, 30 times a second through
 // a song, worked out once it's all here. WebKit hands streamed songs to Web Audio as silence, so it can't listen live.
-export const beats = new WeakMap<HTMLAudioElement, { src: string; bands: Float32Array[] }>();
-export async function hear(audio: HTMLAudioElement, data: ArrayBuffer) {
+// Also where the sound starts and stops (seconds), so silence at either end can be skipped, as Mixtape trims it.
+export const beats = new WeakMap<HTMLAudioElement, { src: string; bands: Float32Array[]; from: number; to: number }>();
+// Where each recording's sound starts and stops, kept so it plays trimmed from the first second next time.
+export const edges: Record<string, { from: number; to: number }> = JSON.parse(localStorage.edges ?? "{}");
+export async function hear(audio: HTMLAudioElement, data: ArrayBuffer, key?: string) {
   const src = audio.src, buf = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(data);
   const x = buf.getChannelData(0), rate = buf.sampleRate, step = Math.round(rate / 30), n = Math.ceil(x.length / step);
-  const bands = [0, 1, 2, 3].map(() => new Float32Array(n)), [k1, k2, k3] = [150, 600, 3000].map((f) => 1 - Math.exp((-2 * Math.PI * f) / rate));
+  const bands = [0, 1, 2, 3].map(() => new Float32Array(n)), all = new Float32Array(n), [k1, k2, k3] = [150, 600, 3000].map((f) => 1 - Math.exp((-2 * Math.PI * f) / rate));
   // Split at 150 Hz, 600 Hz and 3 kHz with simple low-pass filters, and add up each part's power per frame.
   for (let i = 0, a = 0, b = 0, c = 0; i < x.length; i++) {
     const v = x[i], f = (i / step) | 0;
     (a += k1 * (v - a)), (b += k2 * (v - b)), (c += k3 * (v - c));
-    (bands[0][f] += a * a), (bands[1][f] += (b - a) ** 2), (bands[2][f] += (c - b) ** 2), (bands[3][f] += (v - c) ** 2);
+    (bands[0][f] += a * a), (bands[1][f] += (b - a) ** 2), (bands[2][f] += (c - b) ** 2), (bands[3][f] += (v - c) ** 2), (all[f] += v * v);
   }
+  // Silence is quieter than -50 dB; a fade-out's tail is kept.
+  const loud = (p: number) => Math.sqrt(p / step) > 0.003, first = all.findIndex(loud);
+  let last = n - 1;
+  while (last >= 0 && !loud(all[last])) last--;
   // Each band against its own loud parts, so quiet treble still moves, and peaks stand out.
   for (const band of bands) {
     band.forEach((p, i) => (band[i] = Math.sqrt(p / step)));
     const top = [...band].sort((p, q) => p - q)[Math.floor(n * 0.95)] || 1;
     band.forEach((p, i) => (band[i] = Math.min(1, p / top) ** 1.5));
   }
-  if (audio.src === src) beats.set(audio, { src, bands });
+  const sound = { from: first < 0 ? 0 : first / 30, to: last < 0 ? Infinity : (last + 1) / 30 };
+  if (audio.src === src) beats.set(audio, { src, bands, ...sound });
+  if (key && last >= 0) (edges[key] = sound), (localStorage.edges = JSON.stringify(edges));
 }
 
 // YouTube serves fragmented (DASH) MP4, which WebKit can't play from a plain src, so feed it via MSE.
 // start resumes partway in (after a relaunch). autoplay false only buffers it (the next track, for gapless).
-export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duration }: Awaited<ReturnType<typeof fetchAudio>>, start = 0, autoplay = true) {
+export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duration }: Awaited<ReturnType<typeof fetchAudio>>, start = 0, autoplay = true, key?: string) {
   const ms = new MediaSource();
   URL.revokeObjectURL(audio.src); // each player's own last one
   audio.src = URL.createObjectURL(ms);
@@ -517,11 +526,14 @@ export async function playAudio(audio: HTMLAudioElement, { chunks, mime, duratio
       sb.addEventListener("updateend", onEnd, { once: true });
       sb.addEventListener("error", onErr, { once: true });
     });
-    if (i === 0 && !autoplay) continue;
+    if (i === 0 && !autoplay) {
+      audio.currentTime = start; // buffered to start where the sound does
+      continue;
+    }
     if (i === 0 && !start) await audio.play();
     // Seeking past the first chunk makes play() wait for data that this loop hasn't appended yet.
     else if (i === 0) (audio.currentTime = start), audio.play().catch(() => {});
   }
   ms.endOfStream();
-  void Promise.all(chunks).then((all) => new Blob(all).arrayBuffer()).then((b) => hear(audio, b)).catch((e) => console.warn("Couldn't read the beat", e));
+  void Promise.all(chunks).then((all) => new Blob(all).arrayBuffer()).then((b) => hear(audio, b, key)).catch((e) => console.warn("Couldn't read the beat", e));
 }

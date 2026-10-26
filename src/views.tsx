@@ -1458,7 +1458,7 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
   return (
     <ol className="-mx-8 grid auto-cols-[clamp(260px,31%,360px)] grid-flow-col grid-rows-4 gap-x-3 overflow-x-auto px-6 pb-2 [scrollbar-width:none]">
       {tracks.map((t, i) => (
-        <li key={t.id + i} onContextMenu={(e) => (e.preventDefault(), trackMenu(t))} className="group relative flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-ink/[0.04]">
+        <li key={t.id + i} {...warmSong(t)} onContextMenu={(e) => (e.preventDefault(), trackMenu(t))} className="group relative flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-ink/[0.04]">
           <button onClick={() => play(tracks, i)} aria-label={`Play ${t.title}`} className="hit" />
           {numbered && <span className="w-7 shrink-0 text-center text-xl font-extrabold tracking-tight text-muted tabular-nums">{i + 1}</span>}
           <div className="pointer-events-none relative size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06]">
@@ -1482,13 +1482,13 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
 }
 
 // Artist pages, each fetched once per launch: page is YT Music's own (five songs, no lengths), full adds
-// their top ten once that comes too.
+// their top ten once that comes too: Deezer's, like Mixtape, or YT Music's if Deezer hasn't five.
 type ArtistPage = Awaited<ReturnType<typeof artist>>;
 const artistPages = new Map<string, { page: Promise<ArtistPage>; full: Promise<ArtistPage> }>();
 function loadArtist(id: string) {
   if (!artistPages.has(id)) {
     const page = artist(id);
-    const full = page.then((p) => (p.more ? topSongs(p.more).then((top) => (top.length ? { ...p, songs: top } : p), () => p) : p));
+    const full = page.then(async (p) => { const [dz, yt] = await Promise.all([dzTop(p.name).catch(() => []), p.more ? topSongs(p.more).catch(() => []) : []]); const top = dz.length >= 5 ? dz : yt; return top.length ? { ...p, songs: top } : p; });
     artistPages.set(id, { page, full });
     full.catch(() => artistPages.delete(id));
   }
@@ -1500,6 +1500,9 @@ const warm = (a: { id?: string; name: string }) => ({
   onPointerEnter: () => (resting = setTimeout(() => (a.id && !isDeezer(a.id) ? Promise.resolve(a.id) : artistByName(a.name)).then((id) => void (id && loadArtist(id).full)).catch(() => {}), 120)),
   onPointerLeave: () => clearTimeout(resting),
 });
+// Resting on a song starts fetching it, so a click plays at once (Settings → Audio → Fetch While Browsing).
+const browsing = (t: Track) => useSettings.getState().browse && fetchAhead(t);
+const warmSong = (t: Track) => ({ onPointerEnter: () => (resting = setTimeout(() => browsing(t), 120)), onPointerLeave: () => clearTimeout(resting) });
 
 // The banner runs edge to edge and fades into the page; the about text floats on it.
 const LINK = "press text-sm font-semibold text-muted hover:text-ink";
@@ -2790,7 +2793,7 @@ export async function restore(file: File) {
 // Grouped as what you'd tune, then the app itself. tint colours the icon's chip; find: extra words the search matches.
 const PANES: { group: string; id: string; tint: string; label: string; icon: LucideIcon; about: string; find: string; view: () => ReactNode }[] = [
   { group: "Preferences", id: "playback", tint: "#ff9f0a", label: "Playback", icon: ListMusic, about: "What plays next, and what clicks do.", find: "autoplay double-click queue resume startup crossfade headphones device", view: Playback },
-  { group: "Preferences", id: "audio", tint: "#ff375f", label: "Audio", icon: SlidersHorizontal, about: "Streaming quality, volume and the equalizer.", find: "quality data saver normalise normalize loudness eq equalizer bass treble", view: AudioPane },
+  { group: "Preferences", id: "audio", tint: "#ff375f", label: "Audio", icon: SlidersHorizontal, about: "Streaming quality, volume and the equalizer.", find: "quality data saver fetch ahead prefetch preload browsing hover normalise normalize loudness eq equalizer bass treble", view: AudioPane },
   { group: "Preferences", id: "lyrics", tint: "#bf5af2", label: "Lyrics", icon: MicVocal, about: "Where lyrics come from and how they move.", find: "translate romanise word by word sources player bar", view: LyricsPane },
   { group: "Preferences", id: "appearance", tint: "#0a84ff", label: "Appearance", icon: SunMoon, about: "Theme, colour and size.", find: "theme dark light colour color accent artwork motion zoom size", view: Appearance },
   { group: "Preferences", id: "shortcuts", tint: "#8e8e93", label: "Shortcuts", icon: Command, about: "Keyboard shortcuts, and changing them.", find: "keys keyboard hotkeys", view: Shortcuts },
@@ -3106,7 +3109,7 @@ function Playback() {
 }
 
 function AudioPane() {
-  const { quality, normalize, eq } = useSettings();
+  const { quality, ahead, browse, normalize, eq } = useSettings();
   const set = useSettings.setState;
   const preset = Object.entries(EQ_PRESETS).find(([, g]) => g.every((v, i) => v === eq[i]))?.[0];
   return (
@@ -3114,6 +3117,12 @@ function AudioPane() {
       <div className={`${card} mb-8`}>
         <Row label="Streaming Quality" detail={quality === "high" ? "The best stream there is for each song" : "Smaller streams, for slow or metered connections"}>
           <Segments label="Streaming Quality" value={quality} onPick={(quality) => set({ quality })} options={[["high", "High"], ["low", "Data Saver"]]} />
+        </Row>
+        <Row label="Fetch Ahead" detail="How many upcoming songs load while this one plays">
+          <Segments label="Fetch Ahead" value={ahead} onPick={(ahead) => set({ ahead })} options={[[0, "Off"], [1, "1"], [3, "3"], [5, "5"], [25, "All"]]} />
+        </Row>
+        <Row label="Fetch While Browsing" detail="Songs you rest on start loading. Off saves data">
+          <Switch label="Fetch While Browsing" on={browse} onChange={(browse) => set({ browse })} />
         </Row>
         <Row label="Normalise Volume" detail="Turns loud songs down to the level of the rest">
           <Switch label="Normalise Volume" on={normalize} onChange={(normalize) => set({ normalize })} />
@@ -3849,6 +3858,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   const saved = useOffline((s) => s.songs);
   useOffline((s) => s.art); // a cover just kept is drawn from disk
   const cols = useSettings((s) => s.trackCols);
+  useEffect(() => void (tracks[0] && browsing(tracks[0])), [tracks[0]?.id]); // the song a page opens on is the one most likely played
   const [drag, setDrag] = useState<number>();
   const [over, setOver] = useState<number>();
   // Picked rows, as in Finder: click one, ⌘-click to add or take away, shift-click or drag for a run, or
@@ -4014,6 +4024,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
               // Not mid-sweep: the row a press just picked would start a move in place of the sweep.
               draggable={!!onMove && sel.has(i) && !sweeping}
               onPointerDown={(e) => pick(e, i)}
+              {...warmSong(t)}
               onClick={(e) => e.detail === 1 && held.current === i && setSel(new Set([i]))}
               data-i={i}
               onDragStart={(e) => ((e.dataTransfer.effectAllowed = "move"), setDrag(i))}

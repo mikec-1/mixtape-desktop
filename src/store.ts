@@ -457,10 +457,18 @@ export function setVolume(v: number) {
 export const nudgeVolume = (by: number) => setVolume(vol + by);
 export const setMuted = (m: boolean) => ((muted = m), players.forEach(level), emit(), save());
 
+// Where the playing song's sound starts and stops: heard from this stream, or kept from the last time.
+const sound = () => ((b, t) => (b?.src === audio.src ? b : (t && edges[recording(t)]) || { from: 0, to: Infinity }))(beats.get(audio), get().queue[get().index]);
+const lead = (t: Track) => edges[recording(t)]?.from ?? 0;
+// Before the song's loaded (just relaunched), seeking moves where it'll start.
+export const seekTo = (s: number) => void (audio.src ? (audio.currentTime = s + sound().from) : ((resume.time = s + sound().from), emit()));
 // Live player state, snapshotted on each media event. useSyncExternalStore needs a stable snapshot:
 // reading audio.currentTime directly changes between calls and loops React.
-const read = () => ({ paused: audio.paused, time: audio.currentTime, duration: audio.duration, volume: vol, muted });
+// Time and length leave out silence at either end (yt.ts hear), like Mixtape: 0:00 is where the sound starts.
+// Until the song's loaded (a relaunch, or still fetching), they're where it'll start and its listed length.
+const read = () => ((s, src) => ({ paused: audio.paused, time: Math.max(0, (src ? audio.currentTime : (resume.time ?? 0)) - s.from), duration: Math.min(src ? audio.duration : (parseSecs(get().queue[get().index]?.duration) ?? NaN), s.to + 0.3) - s.from, volume: vol, muted }))(sound(), !!audio.src);
 let snapshot = read();
+export const seekBy = (by: number) => ((s) => seekTo(Math.min(s.duration || 0, Math.max(0, s.time + by))))(read());
 const listeners = new Set<() => void>();
 const emit = () => ((snapshot = read()), listeners.forEach((l) => l()));
 const on = (e: string, fn: () => void) => players.forEach((p) => p.addEventListener(e, () => p === audio && fn()));
@@ -480,16 +488,17 @@ export const files: { has?: (path: string) => boolean } = {};
 export const unavailable = (t: Track) => (t.file ? files.has?.(t.file) === false : !navigator.onLine && !downloads.has?.(t.id));
 const playable = (t: Track) => !skipped(t) && !unavailable(t);
 
-// Instant skip: the next track's audio is fetched while this one plays, and recent ones are kept.
-// ponytail: last 4 tracks in memory (~20 MB).
+// Instant skip: the songs coming up are fetched while this one plays, and recent ones are kept.
+// ponytail: in memory (~5 MB a song), the songs ahead plus 4, so a whole queue is ~125 MB; a disk cache if that bites.
 const cache = new Map<string, ReturnType<typeof fetchAudio>>();
 function fetchCached({ id, ...t }: Track) {
   const dl = downloads.read?.(id);
-  const stream = () => youtubeId({ id, ...t }).then((y) => fetchAudio(y, useSettings.getState().quality));
+  const q = useSettings.getState().quality;
+  const stream = () => youtubeId({ id, ...t }).then(async (y) => { const got = await fetchAudio(y, q), cut = y === id && got.duration && (await releasedCut({ id, ...t }, got.duration)); return cut ? fetchAudio(cut, q) : got; });
   const p = cache.get(id) ?? (dl ? dl.catch(stream) : stream());
   cache.delete(id);
   cache.set(id, p);
-  if (cache.size > 4) cache.delete(cache.keys().next().value!);
+  if (cache.size > useSettings.getState().ahead + 4) cache.delete(cache.keys().next().value!);
   p.catch(() => cache.delete(id));
   return p;
 }
@@ -500,9 +509,27 @@ export function replay(id: string) {
   if (ready?.id === id) ready = undefined;
   if (get().queue[get().index]?.id === id) void load(get().index, audio.currentTime);
 }
+// Fetching ahead (the queue, a song you rest on, a page you open) takes at most 2 downloads at once (3 when
+// fetching 5 or more ahead), so the song you press play on never waits behind them, and a song that failed
+// sits out 5 minutes. Mixtape's rules.
+let busy = 0;
+const failed = new Map<string, number>();
+export function warm(t: Track) {
+  if (t.file || cache.has(t.id) || busy >= (useSettings.getState().ahead >= 5 ? 3 : 2) || Date.now() - (failed.get(t.id) ?? 0) < 300_000 || unavailable(t)) return;
+  busy++;
+  fetchCached(t).catch(() => failed.set(t.id, Date.now())).finally(() => (busy--, prefetch()));
+}
+// The songs ahead in the queue, as many as Settings says. Ones already fetched are touched, so songs
+// you only rested on drop out of the cache before them.
 const prefetch = () => {
-  const t = get().queue[nextIndex(get().index)];
-  if (t && !t.file) fetchCached(t).catch(() => {});
+  const { queue, index } = get();
+  for (let n = 0, i = index; n < useSettings.getState().ahead; n++) {
+    i = nextIndex(i);
+    const t = queue[i];
+    if (!t || i === index) break;
+    if (cache.has(t.id)) void fetchCached(t);
+    else warm(t);
+  }
 };
 // How loud the bass, low mids, high mids and treble are right now, 0 to 1 (the menu-bar bars, startup.ts).
 export function spectrum() {
@@ -513,7 +540,7 @@ export function spectrum() {
 // A song file on this computer plays from disk through the asset protocol: no stream to fetch, and it
 // seeks like any file. A webview that won't stream that into a player (WebKitGTK, on Linux) gets the file
 // read whole and played from memory instead. start resumes partway in; autoplay false only loads it.
-async function playFile(el: HTMLAudioElement, path: string, start = 0, autoplay = true) {
+async function playFile(el: HTMLAudioElement, path: string, start = 0, autoplay = true, key?: string) {
   URL.revokeObjectURL(el.src);
   el.src = convertFileSrc(path);
   const loads = await new Promise<boolean>((ok) => {
@@ -521,7 +548,7 @@ async function playFile(el: HTMLAudioElement, path: string, start = 0, autoplay 
     el.addEventListener("loadedmetadata", done), el.addEventListener("error", done);
   });
   if (!loads) el.src = URL.createObjectURL(await (await fetch(convertFileSrc(path))).blob());
-  void fetch(el.src).then((r) => r.arrayBuffer()).then((b) => hear(el, b)).catch(() => {});
+  void fetch(el.src).then((r) => r.arrayBuffer()).then((b) => hear(el, b, key)).catch(() => {});
   if (start) el.currentTime = start;
   if (autoplay) await el.play();
 }
@@ -587,6 +614,8 @@ async function load(index: number, start = 0, fade = 0) {
   set((s) => ({ index, added: index > s.index ? Math.max(0, s.added - (index - s.index)) : 0, loading: true, error: "" }));
   const old = audio;
   const buffered = ready?.id === track.id && !start;
+  start ||= lead(track); // a song heard before starts where its sound does
+  resume.time = start;
   audio = buffered ? ready!.el : other();
   ready = undefined;
   clearInterval(ramp);
@@ -605,12 +634,12 @@ async function load(index: number, start = 0, fade = 0) {
   if (nextIndex(index, false) === get().queue.length && get().repeat === "off" && useSettings.getState().autoplay) extend(track); // autoplay
   try {
     if (buffered) await audio.play();
-    else if (track.file) loudness.set(audio, 0), level(audio), await playFile(audio, track.file, start);
+    else if (track.file) loudness.set(audio, 0), level(audio), await playFile(audio, track.file, start, true, track.id);
     else {
       const data = await fetchCached(track);
       if (me !== latest) return;
       loudness.set(audio, data.loudness), level(audio);
-      await playAudio(audio, data, start);
+      await playAudio(audio, data, start, true, recording(track));
     }
     if (me !== latest) return;
     prefetch();
@@ -644,20 +673,25 @@ async function preload(t: Track) {
   if (!el.paused) return; // still fading out
   ready = { id: t.id, el };
   try {
-    if (t.file) return loudness.set(el, 0), await playFile(el, t.file, 0, false);
+    if (t.file) return loudness.set(el, 0), await playFile(el, t.file, lead(t), false, t.id);
     const data = await fetchCached(t);
     if (ready?.el !== el || ready.id !== t.id) return;
     loudness.set(el, data.loudness);
-    await playAudio(el, data, 0, false);
+    await playAudio(el, data, lead(t), false, recording(t));
   } catch {
     if (ready?.el === el) ready = undefined;
   }
 }
 on("timeupdate", () => {
+  // A quiet end ends the song. A song heard for the first time steps past its quiet start once that's
+  // worked out (a second or so in); after that it starts there.
+  const { from, to } = sound();
+  if (!audio.paused && from > 0.5 && audio.currentTime < from - 0.25) audio.currentTime = from;
+  else if (!audio.paused && audio.currentTime > to + 0.3) audio.currentTime = audio.duration;
   const { queue, index, repeat, sleep, loading } = get();
   const t = queue[nextIndex(index)];
   if (!t || loading || repeat === "one" || sleep === "track") return;
-  const left = audio.duration - audio.currentTime;
+  const left = Math.min(audio.duration, to + 0.3) - audio.currentTime;
   const fade = useSettings.getState().crossfade;
   if (left < fade + 20 && ready?.id !== t.id) void preload(t);
   if (fade && left <= fade) advance(fade); // load() swaps audio, so this fires once
@@ -699,12 +733,12 @@ export function prev() {
   const { queue, index } = get();
   let i = index - 1;
   while (i >= 0 && !playable(queue[i])) i--;
-  return audio.currentTime > 3 || i < 0 ? (audio.currentTime = 0) : load(i);
+  return read().time > 3 || i < 0 ? seekTo(0) : load(i);
 }
 on("ended", () => {
   const { sleep, repeat } = get();
   if (sleep === "track") return sleepIn();
-  if (repeat === "one") (audio.currentTime = 0), listened(0), audio.play();
+  if (repeat === "one") seekTo(0), listened(0), audio.play();
   else next();
 });
 
@@ -738,7 +772,7 @@ on("timeupdate", () => {
 
 on("play", () => {
   const t = get().queue[get().index];
-  if (t) sendNowPlaying(t, audio.duration || undefined, audio.currentTime);
+  if (t) ((s) => sendNowPlaying(t, s.duration || undefined, s.time))(read());
 });
 on("pause", () => clearDiscordRpc());
 usePrivate.subscribe((s) => s.on && clearDiscordRpc());
@@ -870,7 +904,7 @@ export const TRACK_COLS: [number, number, number] = [5, 3, 2];
 export type LibraryFilter = "playlists" | "albums" | "artists" | "songs" | "downloaded";
 type Settings = {
   theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number;
-  quality: Quality; normalize: boolean; crossfade: number; eq: number[];
+  quality: Quality; ahead: number; browse: boolean; normalize: boolean; crossfade: number; eq: number[];
   lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean;
   libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort; trackCols: [number, number, number];
   autoplay: boolean; reduceMotion: boolean; zoom: number; lyricsOff: LyricsSource[]; history: boolean;
@@ -893,7 +927,7 @@ export const useSettings = create<Settings>()(
   persist(
     (): Settings => ({
       theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320,
-      quality: "high", normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
+      quality: "high", ahead: 1, browse: true, normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
       lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
       libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom", trackCols: TRACK_COLS,
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "icon",
@@ -980,7 +1014,7 @@ if ("mediaSession" in navigator) {
   ms.setActionHandler("pause", pause);
   ms.setActionHandler("nexttrack", next);
   ms.setActionHandler("previoustrack", prev);
-  ms.setActionHandler("seekto", (d) => (audio.currentTime = d.seekTime ?? 0));
+  ms.setActionHandler("seekto", (d) => seekTo(d.seekTime ?? 0));
 }
 
 // The restored queue's track shows (and colours the app) before anything plays.
@@ -1013,7 +1047,7 @@ async function find(q: string) {
 const remote = {
   ready: share, toggle, next, prev, jump, shuffle: toggleShuffle, repeat: cycleRepeat, mini: () => void toggleMini(), find,
   like: () => void (get().queue[get().index] && toggleLike(get().queue[get().index])),
-  seek: (s: number) => void (audio.currentTime = s),
+  seek: seekTo,
   volume: setVolume, mute: setMuted,
   sleep: (m?: number | "track") => sleepIn(m),
   // Play Now starts a radio from the song, as Start Radio does; soon puts it next instead.

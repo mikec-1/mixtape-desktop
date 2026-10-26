@@ -262,7 +262,7 @@ function PlayerBar() {
           </div>
           <div className="flex w-full items-center gap-3 text-[11px] font-medium text-muted tabular-nums">
             <span className="w-9 text-right">{fmt(time)}</span>
-            <input type="range" aria-label="Seek" min={0} max={duration || 0} step={0.1} value={time} onChange={(e) => (audio.currentTime = +e.target.value)} style={fill(time, duration)} className="flex-1" />
+            <input type="range" aria-label="Seek" min={0} max={duration || 0} step={0.1} value={time} onChange={(e) => seekTo(+e.target.value)} style={fill(time, duration)} className="flex-1" />
             <span className="w-9">{fmt(duration)}</span>
           </div>
         </div>

@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { fetch } from "@tauri-apps/plugin-http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { heard } from "./recognize";
 import { files, forget, idb, notify, plural, useStore } from "./store";
 import { searchKind, stripVersion, type Track } from "./yt";
 
@@ -12,8 +13,9 @@ import { searchKind, stripVersion, type Track } from "./yt";
 // Only in the app: a browser can't read your folders.
 export const canHaveFiles = "__TAURI_INTERNALS__" in window;
 type LocalFile = { path: string; mtime: number; title: string; artist: string; album: string; albumArtist: string; track: number; disc: number; duration: number; cover?: string };
-// What you typed over a song's own tags when it was dropped in (SongImport in views.tsx). cover: a picture URL.
-export type SongEdit = { title: string; artist: string; feat: string; album: string; year?: string; genre?: string; cover?: string };
+// What you typed over a song's own tags when it was dropped in (SongImport in views.tsx). cover: a picture URL;
+// isrc: the release's code when Shazam heard it, so it's found on YouTube exactly.
+export type SongEdit = { title: string; artist: string; feat: string; album: string; year?: string; genre?: string; cover?: string; isrc?: string };
 type Local = { folders: string[]; files: Record<string, LocalFile>; edits: Record<string, SongEdit>; skip: string[]; scanning: boolean };
 export const useLocal = create<Local>()(
   persist((): Local => ({ folders: [], files: {}, edits: {}, skip: [], scanning: false }), { name: "local", storage: createJSONStorage(() => idb), partialize: ({ folders, files, edits, skip }) => ({ folders, files, edits, skip }) }),
@@ -32,6 +34,7 @@ export const fileTrack = (f: LocalFile): Track => {
     album: (e ? e.album : f.album) || undefined,
     thumb: e?.cover ?? (f.cover && convertFileSrc(f.cover)),
     duration: clock(f.duration),
+    ...(e?.isrc && { isrc: e.isrc }),
   };
 };
 
@@ -89,22 +92,28 @@ export async function addFiles(paths: string[]) {
 const words = (s: string) => new Set(s.toLowerCase().replace(/\(\s*(?:feat|ft|with)\b[^)]*\)/g, "").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1));
 const within = (a: Set<string>, b: Set<string>) => a.size > 0 && [...a].every((w) => b.has(w));
 const jaccard = (a: Set<string>, b: Set<string>) => [...a].filter((w) => b.has(w)).length / (new Set([...a, ...b]).size || 1);
-type Apple = { trackName: string; artistName: string; collectionName: string; releaseDate?: string; primaryGenreName?: string; artworkUrl100?: string };
-export type Found = { edit: SongEdit; source: "Apple Music" | "YouTube Music"; sure: boolean };
+type Apple = { trackName: string; artistName: string; collectionName: string; releaseDate?: string; primaryGenreName?: string; artworkUrl100?: string; trackTimeMillis?: number };
+// note: what to check before taking it, shown by the confidence badge.
+export type Found = { edit: SongEdit; source: "Apple Music" | "YouTube Music" | "Shazam"; sure: boolean; note?: string };
 // The best of Apple's results for the song read this way round, if any is it.
-function apple(e: SongEdit, results: Apple[]): Found | undefined {
+function apple(e: SongEdit, results: Apple[], secs?: number): Found | undefined {
   const t = words(stripVersion(e.title)), a = words(e.artist);
   const best = results
     .filter((x) => !/karaoke|tribute|made famous|instrumental/i.test(x.trackName) && within(t, words(stripVersion(x.trackName))) && (!a.size || within(a, words(x.artistName)) || within(words(x.artistName), a)))
     .map((x) => ({ x, score: jaccard(t, words(stripVersion(x.trackName))) * 0.65 + (a.size ? jaccard(a, words(x.artistName)) : 0.5) * 0.35 }))
     .sort((p, q) => q.score - p.score)[0];
   if (!best || best.score < 0.25) return;
-  const x = best.x;
+  const x = best.x, orig = (x.trackTimeMillis ?? 0) / 1000;
+  // A file well off the original's length is likely sped up or slowed (or another cut), so it isn't sure and
+  // gets heard too, which tells. ponytail: 4 s or 3%, a guess; widen it if radio edits get flagged.
+  const off = secs && orig && Math.abs(secs - orig) > Math.max(4, orig * 0.03) ? secs - orig : 0;
   const [artist, ...feat] = x.artistName.split(SPLIT).filter(Boolean);
   return {
     edit: { ...e, artist, feat: e.feat || feat.join(", "), album: x.collectionName.replace(/\s*-\s*(Single|EP)$/i, ""), year: x.releaseDate?.slice(0, 4), genre: x.primaryGenreName, cover: x.artworkUrl100?.replace("100x100bb", "1000x1000bb") },
     source: "Apple Music",
-    sure: best.score >= 0.6,
+    // A title alone ("lmao") matches too many songs to be sure of.
+    sure: best.score >= 0.6 && a.size > 0 && !off,
+    ...(off && { note: `${Math.round(Math.abs(off))} s ${off < 0 ? "shorter" : "longer"} than the original. ${off < 0 ? "Sped up" : "Slowed"}?` }),
   };
 }
 // The first of YouTube Music's top songs with all the title's words and the artist (a lot of edits, and
@@ -135,19 +144,27 @@ async function catalogue(e: SongEdit) {
   const seen = new Set<string>();
   return [...named, ...theirs].filter((x) => x.wrapperType === "track" && !seen.has(key(`${x.trackName}|${x.artistName}`)) && !!seen.add(key(`${x.trackName}|${x.artistName}`)));
 }
-export async function lookUp(e: SongEdit): Promise<Found | undefined> {
+export async function lookUp(e: SongEdit, secs?: number): Promise<Found | undefined> {
   const [songs, ys] = await Promise.all([catalogue(e), capped(searchKind(`${stripVersion(e.artist)} ${stripVersion(e.title)}`.trim(), "song"), [])]);
   // "Song - Artist" is as common as "Artist - Song": a miss is looked up again the other way round.
   const flip = { ...e, title: e.artist, artist: e.title };
   const flipped = !apple(e, songs) && e.artist ? await catalogue(flip) : [];
   songs.push(...flipped);
-  const hit = apple(e, songs) ?? (e.artist ? apple(flip, flipped) : undefined) ?? youtube(e, ys) ?? (e.artist ? youtube(flip, ys) : undefined);
+  const hit = apple(e, songs, secs) ?? (e.artist ? apple(flip, flipped, secs) : undefined) ?? youtube(e, ys) ?? (e.artist ? youtube(flip, ys) : undefined);
   if (hit) return hit;
   // Found in neither (unreleased, say): the artists the searches did turn up still say which way round it is.
   const apples = new Set(songs.flatMap((x) => x.artistName.split(SPLIT).map(key))), yts = new Set(ys.flatMap((y) => y.artists.map((n) => key(n.name))));
   const named = (s: string) => apples.has(key(s)) || yts.has(key(s));
   const way = named(e.artist) ? e : e.artist && named(e.title) ? flip : undefined;
   if (way) return { edit: way, source: apples.has(key(way.artist)) ? "Apple Music" : "YouTube Music", sure: false };
+}
+// The song a file is. One with no artist (just "lmao.mp3") is heard first, since its name could be any song;
+// one with an artist is looked up, and heard only if the lookup isn't sure.
+export async function identify(path: string, e: SongEdit) {
+  const hear = () => heard(path, e).catch(() => undefined), secs = useLocal.getState().files[path]?.duration;
+  if (!e.artist) return (await hear()) ?? lookUp(e, secs).catch(() => undefined);
+  const f = await lookUp(e, secs).catch(() => undefined);
+  return f?.sure ? f : ((await hear()) ?? f);
 }
 export const addedFiles = (paths: string[]) => {
   const t = fileTrack(useLocal.getState().files[paths[0]]);

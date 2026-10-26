@@ -126,8 +126,8 @@ export async function importSpotify(pick: Pick) {
     }
     if (pick.liked) {
       say("Importing Liked Songs…");
-      const liked = (await all<{ added_at: string; track: SpTrack }>("/me/tracks?limit=50")).map((s) => ({ ...track(s.track), at: Date.parse(s.added_at) }));
-      useLibrary.setState((s) => ((have) => ({ liked: [...liked.filter((t) => !have.has(t.id)), ...s.liked] }))(new Set(s.liked.map((t) => t.id))));
+      const liked = (await all<{ added_at: string; track: SpTrack }>("/me/tracks?limit=50")).filter((s) => real(s.track)).map((s) => ({ ...track(s.track), at: Date.parse(s.added_at) }));
+      useLibrary.setState((s) => ({ liked: [...liked.filter((t) => !likedAs(t, s.liked)), ...s.liked] }));
       (first ??= liked[0]?.thumb), brought.push(plural(liked.length, "liked song"));
     }
     // Playlists you only follow can't be read through the API, so they're read from their page (the first 100

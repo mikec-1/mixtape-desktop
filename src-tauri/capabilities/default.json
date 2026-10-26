@@ -50,6 +50,9 @@
           "url": "https://itunes.apple.com/*"
         },
         {
+          "url": "https://amp.shazam.com/*"
+        },
+        {
           "url": "https://api.deezer.com/*"
         },
         {

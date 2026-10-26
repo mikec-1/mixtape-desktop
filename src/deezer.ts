@@ -1,7 +1,9 @@
 import { fetch } from "@tauri-apps/plugin-http";
-import { findSong, rowOf } from "./import";
+import { create } from "zustand";
+import { findSong, latin, rowOf } from "./import";
+import { heard } from "./recognize";
 import { patch, patchAll, replay } from "./store";
-import type { Artist, Collection, Track } from "./yt";
+import { parseSecs, type Artist, type Collection, type Track } from "./yt";
 
 // Albums saved from Deezer (when artist pages came from there) still open from it, as in Mixtape. A song
 // from here only goes to YouTube when it's played (youtubeId).
@@ -99,13 +101,29 @@ export function youtubeId(t: Track): Promise<string> {
   if (!finding.has(t.id))
     finding.set(
       t.id,
-      findSong(rowOf(t))
+      // A file is heard, then looked for as what it is: first if it has no artist (its name could be any
+      // song), else only when its tags don't find it.
+      (t.file && !t.artists.length ? hear(t).then((hit) => hit ?? findSong(rowOf(t))) : findSong(rowOf(t)).then((hit) => hit ?? (t.file ? hear(t) : undefined)))
         .then((hit) => (hit ? (keep(t.id, hit.id), !t.thumb && !t.file && hit.thumb && patch(t.id, { thumb: hit.thumb }), hit.id) : Promise.reject(new Error(`Couldn’t find “${t.title}” on YouTube`))))
         .finally(() => finding.delete(t.id)),
     );
   return finding.get(t.id)!;
 }
+const hear = (t: Track) => heard(t.file!, { title: t.title, artist: t.artists.map((a) => a.name).join(", "), feat: "", album: t.album ?? "" }).then((f) => f && findSong({ ...rowOf(t), title: f.edit.title, artist: [f.edit.artist, f.edit.feat].filter(Boolean).join(", "), album: f.edit.album, isrc: f.edit.isrc }), () => undefined);
 export const pin = (t: Track, yt: string) => (keep(t.id, yt), replay(t.id));
+// A YouTube song whose sound runs well over or under its listed length is another cut of it: YouTube Music's
+// albums sometimes point a song at its music video ("Isterichka": listed 3:42, heard 4:09). Its released
+// copy is looked up as an imported song's would be, and played from then on.
+export async function releasedCut(t: Track, heard: number) {
+  const listed = parseSecs(t.duration);
+  if (!listed || found[t.id] || Math.abs(heard - listed) <= 10) return;
+  const hit = await findSong(rowOf(t)).catch(() => undefined);
+  if (!hit || hit.id === t.id || Math.abs((parseSecs(hit.duration) ?? heard) - listed) > 5) return;
+  keep(t.id, hit.id);
+  return hit.id;
+}
+// Lets these be looked for again next time they play.
+export const findAgain = (ids: string[]) => (ids.forEach((id) => delete found[id]), (localStorage.youtubeIds = JSON.stringify(found)));
 
 // Covers (and lengths) for songs that came without them (a CSV), by ISRC, three calls out at a time so
 // others still get in. The songs on screen go first (onScreen: replacing the last screen's) and are drawn
@@ -131,8 +149,52 @@ async function coverNext() {
   workers--;
 }
 export function covers(tracks: Track[], onScreen = false) {
-  const need = tracks.filter((t) => !t.thumb && t.isrc && !tried.has(t.id));
+  const need = tracks.filter((t) => !t.thumb && !t.file && t.isrc && !tried.has(t.id));
   if (onScreen) screen = need;
   else rest.push(...need);
   while (workers < 3 && (screen.length || rest.length)) void coverNext();
+}
+
+// Songs titled in Latin letters that were released in another script ("Lampochki" for "Лампочки"): labels
+// give YouTube Music and Deezer those for English. Apple Music keeps the original, so a song you play or
+// save is looked for among its artist's songs there, by how its title sounds and how long it is, and
+// renamed everywhere. Each song is looked up once, each artist once a launch, and Apple is asked every 3 s
+// at most, under its ~20 a minute. Spotify's and your own files' titles are already as released.
+// ponytail: Cyrillic and Greek only (what latin() spells); Japanese or Korean would need romanising.
+export const sound = (s: string) => latin(s).replace(/[^a-z0-9]+/g, "").replace(/shch/g, "s").replace(/[sc]h/g, (m) => m[0]).replace(/zh/g, "z").replace(/kh|x/g, "h").replace(/ts/g, "c").replace(/[jy]/g, "i");
+let appleNext: Promise<unknown> = Promise.resolve();
+function itunes(path: string, q: Record<string, string>): Promise<any[]> {
+  const r = appleNext.then(() => fetch(`https://itunes.apple.com/${path}?${new URLSearchParams({ country: "gb", ...q })}`)).then((r) => r.json()).then((d) => d.results ?? []);
+  appleNext = r.then(() => sleep(3000), () => sleep(3000));
+  return r;
+}
+type AppleSong = { wrapperType?: string; trackName: string; trackTimeMillis?: number };
+const catalogues = new Map<string, Promise<AppleSong[]>>();
+function songsBy(name: string) {
+  const k = bare(name);
+  if (!catalogues.has(k)) {
+    const p = itunes("search", { term: name, entity: "musicArtist", limit: "5" }).then((as) => as.find((a) => bare(a.artistName) === k)).then((a) => (a ? itunes("lookup", { id: String(a.artistId), entity: "song", limit: "200" }) : [])).then((r: AppleSong[]) => r.filter((x) => x.wrapperType === "track"));
+    catalogues.set(k, p);
+    p.catch(() => catalogues.delete(k));
+  }
+  return catalogues.get(k)!;
+}
+const OTHER = /(?!\p{Script=Latin})\p{L}/u;
+// What lists show a song as, whether or not it's in your library (search results, albums).
+export const useOriginals = create<Record<string, string>>(() => JSON.parse(localStorage.originals ?? "{}"));
+export async function original(ts: Track[]) {
+  for (const t of ts) {
+    if (t.file || /^(sp|csv):/.test(t.id) || OTHER.test(t.title) || !t.artists[0]) continue;
+    const had = useOriginals.getState()[t.id];
+    if (had !== undefined) {
+      if (had) patch(t.id, { title: had });
+      continue;
+    }
+    const songs = await songsBy(t.artists[0].name).catch(() => undefined), secs = parseSecs(t.duration), heard = sound(t.title);
+    if (!songs) continue;
+    const x = songs.find((x) => OTHER.test(x.trackName) && sound(x.trackName) === heard && (!secs || !x.trackTimeMillis || Math.abs(x.trackTimeMillis / 1000 - secs) <= 3));
+    useOriginals.setState({ [t.id]: x?.trackName ?? "" });
+    localStorage.originals = JSON.stringify(useOriginals.getState());
+    if (x) patch(t.id, { title: x.trackName });
+  }
 }

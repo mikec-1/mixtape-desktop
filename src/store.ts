@@ -147,14 +147,46 @@ const edit = (id: string, fn: (p: Playlist) => Partial<Playlist>) => (s: Library
 // A song as a list keeps it: without what only the queue cares about.
 const entry = ({ rec: _, ...t }: Track): Track => ({ ...t, at: Date.now() });
 
-export const toggleLike = (t: Track) =>
-  change(has(useLibrary.getState().liked, t.id) ? "Removed from Liked Songs" : "Added to Liked Songs", t, (s) => ({ liked: toggleIn(s.liked, entry(t)) }));
+// The liked song that's this one: the same id, or the same song from another source or in another script
+// (sameSong). Liked Songs is filed by id and by song once per change, not once per look.
+const filed = new WeakMap<Track[], Map<string, Track[]>>();
+export function likedAs(t: Track, liked = useLibrary.getState().liked) {
+  let m = filed.get(liked);
+  if (!m) {
+    filed.set(liked, (m = new Map()));
+    for (const x of liked) for (const k of [x.id, songOf(x)]) m.set(k, [...(m.get(k) ?? []), x]);
+  }
+  return [...(m.get(t.id) ?? []), ...(m.get(songOf(t)) ?? [])].find((x) => sameSong(x, t));
+}
+export const toggleLike = (t: Track) => {
+  const mine = likedAs(t);
+  if (!mine) void original([t]);
+  change(mine ? "Removed from Liked Songs" : "Added to Liked Songs", t, (s) => ({ liked: mine ? s.liked.filter((x) => x !== mine) : [entry(t), ...s.liked] }));
+};
 // Several picked in a list: all in, or all out, with one Undo.
-export const likeAll = (ts: Track[], on: boolean) =>
+export const likeAll = (ts: Track[], on: boolean) => (
+  on && void original(ts),
   change(on ? "Added to Liked Songs" : "Removed from Liked Songs", { title: plural(ts.length, "song"), thumb: ts[0]?.thumb }, (s) => {
-    const ids = new Set(ts.map((t) => t.id));
-    return { liked: on ? [...ts.filter((t) => !has(s.liked, t.id)).map(entry), ...s.liked] : s.liked.filter((x) => !ids.has(x.id)) };
-  });
+    const mine = new Set(ts.map((t) => likedAs(t, s.liked)));
+    return { liked: on ? [...ts.filter((t) => !likedAs(t, s.liked)).map(entry), ...s.liked] : s.liked.filter((x) => !mine.has(x)) };
+  }));
+// Once: a song liked twice under two ids or spellings, from before likes knew them as one, becomes one,
+// with the names you had first and the version you liked last. And songs titled in Cyrillic or Greek look
+// for their YouTube copy again, now that titles match across scripts (they often found the music video).
+function tidy() {
+  if (localStorage.sameSongs) return;
+  localStorage.sameSongs = 1;
+  const l = useLibrary.getState(), kept: Track[] = [], at = new Map<string, number[]>();
+  for (const x of [...l.liked].reverse()) {
+    const same = at.get(songOf(x)) ?? [], i = same.find((i) => sameSong(kept[i], x));
+    if (i === undefined) at.set(songOf(x), [...same, kept.push(x) - 1]);
+    else kept[i] = { ...x, title: kept[i].title, artists: kept[i].artists, album: kept[i].album, at: kept[i].at };
+  }
+  if (kept.length < l.liked.length) lib({ liked: kept.reverse() });
+  findAgain([...l.liked, ...l.hidden, ...l.playlists.flatMap((p) => p.tracks)].filter((t) => foundWhenPlayed(t.id) && /[\u0370-\u03ff\u0400-\u04ff]/.test(t.title)).map((t) => t.id));
+}
+if (useLibrary.persist.hasHydrated()) tidy();
+else useLibrary.persist.onFinishHydration(tidy);
 export const toggleSave = (a: Album) =>
   change(has(useLibrary.getState().saved, a.id) ? "Removed from Library" : "Saved to Library", a, (s) => ({ saved: toggleIn(s.saved, a) }));
 // Several at once, quietly (the artists picked when you first open Sleeve).
@@ -162,8 +194,9 @@ export const follow = (artists: Followed[]) =>
   lib((s) => ({ followed: [...artists.filter((a) => !has(s.followed, a.id)).map((a) => ({ ...a, at: Date.now() })), ...s.followed] }));
 export const toggleFollow = (a: Followed) =>
   change(has(useLibrary.getState().followed, a.id) ? "Unfollowed" : "Following", { title: a.name, thumb: a.thumb }, (s) => ({ followed: toggleIn(s.followed, a) }));
-export const addToPlaylist = (id: string, tracks: Track[]) =>
-  change(`Added to ${playlist(id)?.name}`, tracks[0], edit(id, (p) => ({ tracks: [...p.tracks, ...tracks.map(entry)] })));
+export const addToPlaylist = (id: string, tracks: Track[]) => (
+  void original(tracks),
+  change(`Added to ${playlist(id)?.name}`, tracks[0], edit(id, (p) => ({ tracks: [...p.tracks, ...tracks.map(entry)] }))));
 export const removeFromPlaylist = (id: string, at: number[]) =>
   change(`Removed from ${playlist(id)?.name}`, at.length > 1 ? { title: plural(at.length, "song"), thumb: playlist(id)?.tracks[at[0]]?.thumb } : playlist(id)?.tracks[at[0]], edit(id, (p) => ({ tracks: p.tracks.filter((_, i) => !at.includes(i)) })));
 // Rows picked together move together, in their order, to either side of the one they're dropped on.
@@ -327,15 +360,16 @@ export function addRecentSearch(item: RecentSearch) {
 }
 
 // Listening history. A play counts after 30 s of listening (all of a shorter song), as on Spotify. recent
-// is the last 50 songs, newest first, one entry each, read once at launch and kept up to date here.
+// is the last 50 songs, newest first, one entry per song however many copies it has (sameSong), read once
+// at launch and kept up to date here.
 export type Play = { t: Track; at: number };
 export const useHistory = create<{ recent: Track[] }>()(() => ({ recent: [] }));
 const RECENT = 50;
-const remember = (t: Track, list: Track[]) => [t, ...list.filter((x) => x.id !== t.id)].slice(0, RECENT);
+const remember = (t: Track, list: Track[]) => [t, ...list.filter((x) => !sameSong(x, t))].slice(0, RECENT);
 void (async () => {
   const seen: Track[] = [];
-  await plays((p) => (seen.length < RECENT && !seen.some((x) => x.id === p.t.id) && seen.push(p.t), seen.length < RECENT)).catch(() => {});
-  useHistory.setState((s) => ({ recent: [...s.recent, ...seen.filter((t) => !s.recent.some((x) => x.id === t.id))].slice(0, RECENT) }));
+  await plays((p) => (seen.length < RECENT && !seen.some((x) => sameSong(x, p.t)) && seen.push(p.t), seen.length < RECENT)).catch(() => {});
+  useHistory.setState((s) => ({ recent: [...s.recent, ...seen.filter((t) => !s.recent.some((x) => sameSong(x, t)))].slice(0, RECENT) }));
 })();
 // A private session (Settings → Privacy, until Sleeve quits or 6 hours pass) or history switched off: plays aren't kept.
 export const usePrivate = create<{ on: boolean }>()(() => ({ on: false }));
@@ -378,7 +412,7 @@ export async function addPlays(add: Play[]) {
   };
   await new Promise((ok, fail) => ((tx.oncomplete = ok), (tx.onerror = () => fail(tx.error))));
   const seen: Track[] = [];
-  for (const p of sorted.reverse()) if (!seen.some((x) => x.id === p.t.id) && seen.push(p.t) >= RECENT) break;
+  for (const p of sorted.reverse()) if (!seen.some((x) => sameSong(x, p.t)) && seen.push(p.t) >= RECENT) break;
   useHistory.setState({ recent: seen });
 }
 export function clearHistory() {
@@ -547,6 +581,7 @@ async function load(index: number, start = 0, fade = 0) {
   const track = get().queue[index];
   if (!track) return;
   const me = ++latest;
+  void original([track]);
   // Skipping forward uses up the tracks you queued; going back leaves them to the old order. ponytail: added resets.
   set((s) => ({ index, added: index > s.index ? Math.max(0, s.added - (index - s.index)) : 0, loading: true, error: "" }));
   const old = audio;
@@ -961,7 +996,7 @@ export const lyricNow = () => lyricLine();
 const share = () => {
   const { queue, index, loading, shuffle, repeat, sleep } = get();
   const t = queue[index];
-  const state: MiniState = { ...snapshot, track: t, loading, accent: document.documentElement.style.getPropertyValue("--accent-raw"), line: lyricLine(), liked: !!t && useLibrary.getState().liked.some((l) => l.id === t.id), index, next: queue.slice(index + 1, index + 6), shuffle, repeat, sleep };
+  const state: MiniState = { ...snapshot, track: t, loading, accent: document.documentElement.style.getPropertyValue("--accent-raw"), line: lyricLine(), liked: !!t && !!likedAs(t), index, next: queue.slice(index + 1, index + 6), shuffle, repeat, sleep };
   for (const to of ["mini", "bar"]) void emitTo(to, "player", state);
 };
 const main = () => void WebviewWindow.getByLabel("main").then((w) => w?.show().then(() => w.setFocus()));

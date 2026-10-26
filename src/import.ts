@@ -54,14 +54,23 @@ export function parsePlaylistCsv(text: string): CsvTrack[] {
   });
 }
 
+// Other scripts spelled the way their songs get titled in Latin letters, so "Она не я" finds "Ona ne ya"
+// and "Σ' αγαπώ" finds "S' agapo". Cyrillic goes first, before й and ё lose their marks; Greek after,
+// once its accents are off.
 const CYRILLIC: Record<string, string> = {
   а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "yo", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p",
   р: "r", с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh", щ: "shch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya", є: "ye", і: "i", ї: "yi", ґ: "g",
+  ў: "u", ђ: "dj", ј: "j", љ: "lj", њ: "nj", ћ: "c", џ: "dz",
 };
+const SPELL: Record<string, string> = {
+  α: "a", β: "v", γ: "g", δ: "d", ε: "e", ζ: "z", η: "i", θ: "th", ι: "i", κ: "k", λ: "l", μ: "m", ν: "n", ξ: "x", ο: "o", π: "p", ρ: "r", σ: "s", ς: "s", τ: "t", υ: "y", φ: "f", χ: "ch", ψ: "ps", ω: "o",
+  ł: "l", ø: "o", æ: "ae", œ: "oe", ß: "ss", đ: "d", ð: "d", þ: "th", ı: "i",
+};
+export const latin = (s: string) =>
+  s.toLowerCase().replace(/[\u0400-\u04ff]/g, (c) => CYRILLIC[c] ?? c).normalize("NFKD").replace(/\p{M}/gu, "").replace(/ου/g, "ou").replace(/[^\x00-\x7f]/g, (c) => SPELL[c] ?? c);
 
 // Accents off, plus the stylings artists love: !ce → ice, mon€ → mone, rmx → remix.
-const norm = (s: string) =>
-  s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/€/g, "e").replace(/(^|\s)!([a-z])/g, "$1i$2").replace(/\brmx\b/g, "remix");
+const norm = (s: string) => latin(s).replace(/€/g, "e").replace(/(^|\s)!([a-z])/g, "$1i$2").replace(/\brmx\b/g, "remix");
 const squash = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, "");
 
 // Words of 2+ letters, unless that leaves nothing ("A", "4").
@@ -82,6 +91,12 @@ export const bareTitle = (t: string) =>
     .replace(/\s+/g, " ")
     .trim() || t;
 
+// One song however it's spelled or wherever it's from: Spotify's "Она не я" is YouTube Music's "Ona ne ya".
+// Guests and version tags don't count, but the length does, so a live cut stays a song of its own.
+const keys = new WeakMap<Track, string>();
+export const songOf = (t: Track) => keys.get(t) ?? (keys.set(t, `${squash(norm(bareTitle(t.title)))}|${squash(norm(t.artists[0]?.name ?? ""))}`), keys.get(t)!);
+export const sameSong = (a: Track, b: Track) => a.id === b.id || (songOf(a) === songOf(b) && Math.abs((parseSecs(a.duration) ?? 0) - (parseSecs(b.duration) ?? 0)) <= (a.duration && b.duration ? 10 : Infinity));
+
 const rowArtists = (s: string) => s.split(/[;/]/).flatMap((p) => p.split(SEP)).map((a) => a.trim()).filter(Boolean);
 
 const EXTRA = new Set("remix mix edit version vip flip bootleg sped speed up slowed reverb tiktok tik tok nightcore extended radio club original remaster remastered live acoustic instrumental deluxe explicit clean bonus single prod feat ft featuring with lofi lo fi bass boosted 8d".split(" "));
@@ -89,8 +104,8 @@ const EXTRA = new Set("remix mix edit version vip flip bootleg sped speed up slo
 // The wrong song is worse than no song: the title must be there, and one of the artists.
 function matches(row: CsvTrack, c: Track) {
   const hay = norm(`${c.title} ${c.artists.map((a) => a.name).join(" ")} ${c.album ?? ""}`);
-  const plain = squash(hay), latin = squash([...hay].map((ch) => CYRILLIC[ch] ?? ch).join(""));
-  const has = (w: string) => plain.includes(w) || latin.includes(w);
+  const plain = squash(hay);
+  const has = (w: string) => plain.includes(w);
 
   // Mixtape's rule too: an upload called just "Popular" by the right artist is "Popular - TikTok Remix".
   // Only when what the row has over it is version talk or the artists' names: "Love" isn't "Love Me Like You Do".

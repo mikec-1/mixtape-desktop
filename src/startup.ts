@@ -6,7 +6,7 @@ import { resolveResource } from "@tauri-apps/api/path";
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, monitorFromPoint, PhysicalPosition, type PhysicalSize } from "@tauri-apps/api/window";
-import { audio, cycleRepeat, fillUpNext, lyricNow, next, prev, spectrum, subscribeAudio, toggle, toggleLike, toggleMini, toggleShuffle, useLibrary, useSettings, useStore } from "./store";
+import { audio, cycleRepeat, fillUpNext, lyricNow, next, prev, spectrum, subscribeAudio, toggle, likedAs, toggleLike, toggleMini, toggleShuffle, useLibrary, useSettings, useStore } from "./store";
 
 // Settings → Startup, for the main window. Opened at login the window starts hidden (lib.rs), and shows
 // unless you'd rather it stayed in the background. Close to Tray hides the window on close, and keeps
@@ -21,7 +21,7 @@ const isMac = /Mac/.test(navigator.userAgent);
 function now() {
   const { queue, index, shuffle, repeat } = useStore.getState();
   const t = queue[index];
-  const liked = !!t && useLibrary.getState().liked.some((l) => l.id === t.id);
+  const liked = !!t && !!likedAs(t);
   return { t, liked, shuffle, repeat, paused: audio.paused, key: [t?.id, liked, shuffle, repeat, audio.paused].join() };
 }
 function menu({ t, liked, shuffle, repeat, paused }: ReturnType<typeof now>) {

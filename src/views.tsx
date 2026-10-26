@@ -95,6 +95,8 @@ export function Search() {
   const all = tab === "all" ? found.data : undefined;
   const list = kind.data?.tab === tab ? kind.data.items : undefined;
   const top = all?.top;
+  // The first songs found get their titles as released (deezer.ts original).
+  useEffect(() => void original((all?.songs ?? (tab === "songs" ? list : undefined) ?? []).slice(0, 10)), [all, list, tab]);
 
   return (
     <div className="animate-enter px-8 pt-14">
@@ -537,8 +539,12 @@ export function CollectionPage({ id }: { id: string }) {
   const kept = useOffline((s) => s.lists[libraryKey("album", id)]?.collection);
   const { data: fresh, error } = useAsync(() => (online || !kept ? collection(id) : undefined), [id, online]);
   const { data: guests } = useAsync(() => (fresh && isDeezer(id) ? withGuests(fresh.tracks) : undefined), [fresh]);
+  useEffect(() => void (fresh && isAlbum(id) && original(fresh.tracks)), [fresh]); // one artist, so a call or two
   const page = fresh && guests ? { ...fresh, tracks: guests } : (fresh ?? kept);
-  const data = page && { ...page, by: [page.by ?? []].flat() }; // kept before an album's artists were a list
+  const liked = useLibrary((s) => s.liked);
+  // Songs you like keep the names you know them by (Spotify's "Она не я", not "Ona ne ya"), and play this copy.
+  const tracks = page?.tracks.map((t) => ((m) => (m && m.title !== t.title ? { ...t, title: m.title } : t))(likedAs(t, liked)));
+  const data = page && tracks && { ...page, tracks, by: [page.by ?? []].flat() }; // kept before an album's artists were a list
   const saved = useLibrary((s) => s.saved.some((a) => a.id === id));
   const [query, setQuery] = useState("");
   if (!data && error) return <p className="px-8 pt-20 text-muted">Couldn’t open this. Go back and try again.</p>;
@@ -1443,9 +1449,12 @@ export function WrappedPage() {
   );
 }
 
+// A song's title as released, once known ("Лампочки", not "Lampochki").
+const Title = ({ t }: { t: Track }) => <>{useOriginals((s) => s[t.id]) || t.title}</>;
+
 // Songs in columns of four that scroll sideways, like a record shelf.
 function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }) {
-  const current = useStore((s) => s.queue[s.index]?.id);
+  const current = useStore((s) => s.queue[s.index]), on = (t: Track) => !!current && sameSong(current, t);
   return (
     <ol className="-mx-8 grid auto-cols-[clamp(260px,31%,360px)] grid-flow-col grid-rows-4 gap-x-3 overflow-x-auto px-6 pb-2 [scrollbar-width:none]">
       {tracks.map((t, i) => (
@@ -1454,12 +1463,12 @@ function TrackGrid({ tracks, numbered }: { tracks: Track[]; numbered?: boolean }
           {numbered && <span className="w-7 shrink-0 text-center text-xl font-extrabold tracking-tight text-muted tabular-nums">{i + 1}</span>}
           <div className="pointer-events-none relative size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06]">
             <img src={art(t.thumb, 120)} alt="" loading="lazy" className="size-full object-cover" />
-            <div className={`absolute inset-0 grid place-items-center bg-black/35 text-white transition-opacity duration-150 ${current === t.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-              {current === t.id ? <AudioLines size={18} /> : <Play size={16} className="fill-current" />}
+            <div className={`absolute inset-0 grid place-items-center bg-black/35 text-white transition-opacity duration-150 ${on(t) ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+              {on(t) ? <AudioLines size={18} /> : <Play size={16} className="fill-current" />}
             </div>
           </div>
           <div className="min-w-0">
-            <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>{t.title}</div>
+            <div className={`truncate font-semibold ${on(t) ? "text-accent" : ""}`}><SongName t={t} /></div>
             <div className="truncate text-sm text-muted">
               {t.rec && <Sparkle size={14} aria-label="Recommended" className="mr-1.5 inline -translate-y-px fill-accent text-accent drop-shadow-[0_0_4px_var(--color-accent)]" />}
               {t.explicit && <Explicit />}
@@ -2379,6 +2388,11 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
   const files = useLocal((s) => s.files);
   const [at, setAt] = useState(0);
   const pickCover = useRef<HTMLInputElement>(null);
+  const coverPicked = (f: Blob) => {
+    const r = new FileReader();
+    r.onload = () => (touched.current.add("cover"), setEdit((x) => ({ ...x, cover: String(r.result) })));
+    r.readAsDataURL(f);
+  };
   const touched = useRef(new Set<keyof SongEdit>()); // what you've changed; the lookup leaves those alone
   const path = d.paths[at];
   const file = files[path];
@@ -2387,13 +2401,12 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
   const [found, setFound] = useState<Awaited<ReturnType<typeof lookUp>> | null>(null);
   // Lookups by file, so the next song's is already under way (or done) by the time you get to it.
   const asked = useRef(new Map<string, ReturnType<typeof lookUp>>());
-  const ask = (p: string) => asked.current.get(p) ?? asked.current.set(p, lookUp(guessTags(files[p])).catch(() => undefined)).get(p)!;
-  useEffect(() => {
-    const own = saved ?? guessTags(files[path]);
-    setEdit(own), setFound(null), touched.current.clear();
-    if (saved) return setFound(undefined);
+  const ask = (p: string) => asked.current.get(p) ?? asked.current.set(p, identify(p, guessTags(files[p]))).get(p)!;
+  // What was found fills in everything you haven't changed here; a song moved on from drops its answer.
+  const stop = useRef<() => void>(undefined);
+  const look = () => {
     let live = true;
-    if (d.paths[at + 1]) ask(d.paths[at + 1]);
+    setFound(null), stop.current?.(), (stop.current = () => void (live = false));
     ask(path).then(
       (f) =>
         live &&
@@ -2404,10 +2417,23 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
             return { ...f.edit, cover: files[path].cover ? undefined : f.edit.cover, ...mine };
           })),
     );
-    return () => void (live = false);
+  };
+  useEffect(() => {
+    const own = saved ?? guessTags(files[path]);
+    setEdit(own), touched.current.clear();
+    if (saved) return setFound(undefined);
+    if (d.paths[at + 1]) ask(d.paths[at + 1]);
+    look();
+    return () => stop.current?.();
   }, [path]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Edit Song Info shows what you saved; this looks the file up afresh, from its own tags and sound.
+  const again = () => (asked.current.delete(path), look());
   const next = (save: boolean) => {
-    if (save) useLocal.setState((s) => ({ edits: { ...s.edits, [path]: edit } }));
+    // The ISRC is of the song as heard; retitled, it may be another.
+    const from = found?.edit ?? saved, same = from && edit.title === from.title && edit.artist === from.artist;
+    if (save) useLocal.setState((s) => ({ edits: { ...s.edits, [path]: { ...edit, isrc: same ? edit.isrc : undefined } } }));
+    // Now another song: its YouTube match (for radio) and lyrics are found again as that.
+    if (save && saved && (edit.title !== saved.title || edit.artist !== saved.artist || edit.feat !== saved.feat)) findAgain([`file:${path}`]), lookAgain(fileTrack(file));
     if (at < d.paths.length - 1) return setAt(at + 1);
     if (!d.editing) addedFiles(d.paths);
     closeDialog();
@@ -2464,8 +2490,14 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
         </div>
         <div className="mt-4">
           <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold ${looking ? "bg-ink/[0.06] text-muted" : found?.sure ? "bg-green-500/15 text-green-500" : found ? "bg-amber-500/15 text-amber-500" : "bg-ink/[0.06] text-muted"}`}>
-            {looking ? <><LoaderCircle size={14} className="animate-spin" /> Looking it up…</> : found ? <><Music size={14} /> {found.source} · {found.sure ? "High confidence" : "Best guess"}</> : "Not found online · from the file"}
+            {looking ? <><span className="spinner size-3.5" /> Looking it up…</> : found ? <><Music size={14} /> {found.source} · {found.sure ? "High confidence" : "Best guess"}</> : saved ? "Your saved info" : "Not found online · from the file"}
           </span>
+          {!looking && found?.note && <span className="ml-2 text-sm text-amber-500">{found.note}</span>}
+          {d.editing && !looking && (
+            <button onClick={again} className="press ml-2 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold text-muted hover:bg-ink/[0.06] hover:text-ink">
+              <RefreshCw size={14} /> Look Up Again
+            </button>
+          )}
         </div>
         <div className="mt-4 divide-y divide-ink/10 overflow-hidden rounded-xl bg-ink/[0.04]">
           {rows.map(([key, label, hint]) => (
@@ -2484,7 +2516,7 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
   );
 }
 
-// Right-click → Wrong Version…: other copies of the song on YouTube (play one to check it). Picking one keeps
+// Right-click → Wrong Version? Re-resolve: other copies of the song on YouTube (play one to check it). Picking one keeps
 // it for this song from then on.
 function Versions({ d }: { d: Extract<Dialog, { kind: "versions" }> }) {
   const t = d.track, { data, loading } = useAsync(() => versions(t), [t.id]);
@@ -3812,7 +3844,7 @@ export function QueuePanel() {
 // Hidden songs and blocked artists' are dimmed.
 type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number[], to: number) => void; times?: number[]; added?: boolean; header?: boolean; onPlay?: (i: number) => void };
 function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, added, header = true, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
-  const current = useStore((s) => s.queue[s.index]?.id);
+  const current = useStore((s) => s.queue[s.index]), on = (t: Track) => !!current && sameSong(current, t);
   useLibrary((s) => s.hidden), useLibrary((s) => s.blocked), useOnline(); // re-dim as they change
   const saved = useOffline((s) => s.songs);
   useOffline((s) => s.art); // a cover just kept is drawn from disk
@@ -4001,9 +4033,9 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
               <div className="flex min-w-0 items-center gap-3">
                 {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" draggable={false} className={`size-10 shrink-0 rounded-lg bg-ink/[0.06] object-cover ${dim ? "opacity-40" : ""}`} />}
                 <div className={`min-w-0 ${dim ? "opacity-45" : ""}`}>
-                  <div className={`truncate font-semibold ${current === t.id ? "text-accent" : ""}`}>
+                  <div className={`truncate font-semibold ${on(t) ? "text-accent" : ""}`}>
                     {off && <EyeOff size={14} aria-label="Hidden" className="mr-1.5 inline -translate-y-px text-muted" />}
-                    {t.title}
+                    <SongName t={t} />
                   </div>
                   <div className="truncate text-sm text-muted">
                     {saved[t.id] && <CircleArrowDown size={14} aria-label="Downloaded" className="mr-1 inline -translate-y-px fill-accent text-paper" />}

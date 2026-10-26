@@ -1,9 +1,9 @@
-import { useEffect, useState, type CSSProperties } from "react";
-import { ChevronLeft, Heart, House, Library as LibraryIcon, ListMusic, LoaderCircle, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, TriangleAlert, Volume2, VolumeX, WifiOff, X, type LucideIcon } from "lucide-react";
-import { audio, back, cycleRepeat, go, next, prev, setMuted, setVolume, sleepIn, toggle, toggleLike, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
-import { actionFor, comboFrom, findSearch, recording } from "./keys";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { ChevronLeft, House, Library as LibraryIcon, ListMusic, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, TriangleAlert, Volume2, VolumeX, WifiOff, X, type LucideIcon } from "lucide-react";
+import { ROOTS, audio, back, cycleRepeat, go, next, prev, seekTo, setMuted, setVolume, sleepIn, subscribeAudio, toggle, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { actionFor, comboFrom, recording, searchTab } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
-import { Artist, Artists, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
+import { Artist, Artists, SongName, LikeButton, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
 import { useAccount } from "./account";
 import { Welcome } from "./welcome";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -38,20 +38,25 @@ export default function App() {
   const queue = useSettings((s) => s.queue);
 
   useEffect(() => {
+    // Whether focus last moved by mouse or by Tab, so Space only presses buttons you tabbed to.
+    let tabbed = false;
+    const onPointer = () => (tabbed = false);
     const onKey = (e: KeyboardEvent) => {
       const key = comboFrom(e);
+      if (e.key === "Tab") tabbed = true;
       if (!key || recording || e.defaultPrevented) return; // Settings → Shortcuts, or what's focused, took this press
       const target = e.target as Element;
       // Fields keep their own keys (arrows, space, ⌘← …); ⌘ shortcuts without arrows still work in them.
       if (target.closest?.("input, textarea, select") && key !== "escape" && !(key.startsWith("mod+") && !key.includes("arrow"))) return;
-      // Space on a focused button presses it.
-      if (key === " " && (e.repeat || target.closest?.("button"))) return;
+      // Space presses a button you tabbed to; one focused by a click or by code (the lyrics sheet's Close) doesn't steal play/pause.
+      if (key === " " && (e.repeat || (tabbed && target.closest?.("button")))) return;
       const action = actionFor(key);
       if (!action) return;
       e.preventDefault();
       action.run();
     };
     addEventListener("keydown", onKey);
+    addEventListener("pointerdown", onPointer, true);
     // A playlist or album link pasted outside a text field imports it.
     const onPaste = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData("text") ?? "";
@@ -60,7 +65,7 @@ export default function App() {
       void importLink(text);
     };
     addEventListener("paste", onPaste);
-    return () => (removeEventListener("keydown", onKey), removeEventListener("paste", onPaste));
+    return () => (removeEventListener("keydown", onKey), removeEventListener("pointerdown", onPointer, true), removeEventListener("paste", onPaste));
   }, []);
 
   // Files dropped on the window: a playlist (.csv) imports, songs play from Local Files.
@@ -238,8 +243,8 @@ function PlayerBar() {
           <button onClick={() => toggleSheet("playing")} aria-label="Now Playing" disabled={!track} className="press size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] shadow-md shadow-black/15">
             {track && <img src={art(track.thumb, 120)} alt="" className="size-full object-cover" />}
           </button>
-          <div className="min-w-0">
-            <div className="truncate font-semibold">{track?.title ?? "Not playing"}</div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-semibold">{track ? <SongName t={track} /> : "Not playing"}</div>
             <div aria-live="polite" className="truncate text-sm text-muted">{track && <>{error && <span title={error} className="font-semibold text-[#ff453a]">Unavailable · </span>}{track.explicit && <Explicit />}<Artists list={track.artists} /></>}</div>
             {track && !error && <Peek track={track} />}
           </div>
@@ -295,17 +300,44 @@ function PlayerBar() {
 }
 
 // The line being sung, under the artist, for songs with synced lyrics; it opens the lyrics. Its height
-// is the artwork's and the controls', so it never makes the bar taller.
+// is the artwork's and the controls', so it never makes the bar taller. It runs on under the heart, and a
+// line longer than that shows a piece at a time, each when it's sung.
 function Peek({ track }: { track: Track }) {
   const on = useSettings((s) => s.lyricsPeek);
   const { value } = useLyrics(track);
   const lyrics = on && value?.synced ? value : undefined;
   const { romanised } = useExtras(track, lyrics);
   const at = useLine(lyrics);
+  const line = lyrics?.lines[at], words = romanised?.[at] ?? line?.text ?? "♪";
+  const box = useRef<HTMLButtonElement>(null);
+  const [part, setPart] = useState<{ at: number; list: string[]; i: number }>();
+  useLayoutEffect(() => {
+    const el = box.current, shown = el?.firstElementChild;
+    if (!el || !shown || !line) return setPart(undefined);
+    // Measured in a copy of the line as shown, to the fraction of a pixel (whole pixels let a hair too much
+    // through, and the "…" then takes a letter or two), with a little to spare.
+    const pen = el.appendChild(shown.cloneNode() as HTMLElement), room = shown.getBoundingClientRect().width - 3;
+    pen.style.cssText = "position:absolute;visibility:hidden;width:max-content";
+    const fits = (t: string) => ((pen.textContent = t), pen.getBoundingClientRect().width <= room);
+    const list = words.split(" ").reduce<string[]>((out, w) => (out.length && fits(`${out.at(-1)} ${w}`) ? (out[out.length - 1] += ` ${w}`) : out.push(w), out), []);
+    pen.remove();
+    if (list.length < 2) return setPart(undefined);
+    // ponytail: takes the singing as even through the line; its word timings would place each switch exactly.
+    const end = line.end ?? lyrics!.lines[at + 1]?.time ?? line.time + 5;
+    const sync = () => {
+      const sung = ((audio.currentTime - line.time) / Math.max(1, end - line.time)) * words.length;
+      let i = 0;
+      for (let n = list[0].length + 1; i < list.length - 1 && n <= sung; n += list[++i].length + 1);
+      setPart((p) => (p?.list === list && p.i === i ? p : { at, list, i }));
+    };
+    sync();
+    return subscribeAudio(sync);
+  }, [lyrics, at, words]);
   if (!lyrics) return null;
+  const i = part?.at === at ? part.i : 0;
   return (
-    <button onClick={() => toggleSheet("lyrics")} title="Lyrics" className="block w-full text-left text-[13px] leading-[15px] font-semibold text-accent">
-      <span key={at} className="block animate-enter truncate">{romanised?.[at] ?? lyrics.lines[at]?.text ?? "♪"}</span>
+    <button ref={box} onClick={() => toggleSheet("lyrics")} title="Lyrics" className="-mr-11 block w-[calc(100%+2.75rem)] text-left text-[13px] leading-[15px] font-semibold text-accent">
+      <span key={`${at}:${i}`} className="block animate-enter truncate">{part?.at === at ? part.list[i] : words}</span>
     </button>
   );
 }
@@ -335,7 +367,8 @@ function Toast() {
   if (toast && toast !== last) setLast(toast);
   useEffect(() => {
     if (!toast || hold || toast.sticky) return;
-    const t = setTimeout(() => useStore.setState({ toast: undefined }), 5000);
+    // Long enough to reach Undo; just news goes sooner.
+    const t = setTimeout(() => useStore.setState({ toast: undefined }), toast.undo || toast.action ? 5000 : 2500);
     return () => clearTimeout(t);
   }, [toast, hold]);
   const t = toast ?? last;
@@ -349,7 +382,7 @@ function Toast() {
           onPointerLeave={() => setHold(false)}
           onFocus={() => setHold(true)}
           onBlur={() => setHold(false)}
-          className={`flex w-[min(460px,calc(100vw-32px))] items-center gap-4 rounded-[22px] bg-neutral-900 p-3 text-white ${t.thumb || t.sticky || t.warn ? "" : "pl-5"} shadow-2xl ring-1 shadow-black/30 ${t.warn ? "ring-[#ff453a]/60" : "ring-white/10"} ${
+          className={`flex w-max max-w-[min(460px,calc(100vw-32px))] min-w-[220px] items-center gap-4 rounded-[22px] bg-neutral-900 p-3 text-white ${t.thumb || t.sticky || t.warn ? "" : "pl-5"} shadow-2xl ring-1 shadow-black/30 ${t.warn ? "ring-[#ff453a]/60" : "ring-white/10"} ${
             toast
               ? "pointer-events-auto translate-y-0 scale-100 opacity-100 transition-[opacity,translate,scale] duration-400 ease-(--ease-out)"
               : "translate-y-4 scale-95 opacity-0 transition-[opacity,translate,scale] duration-200 ease-in"
@@ -361,7 +394,7 @@ function Toast() {
             {/* Something went wrong: a red warning where the cover would be. */}
             {t.warn ? <div className="grid size-14 shrink-0 place-items-center rounded-[10px] bg-[#ff453a]/15 text-[#ff453a]"><TriangleAlert size={26} /></div> : (t.thumb || t.sticky) && <div className="size-14 shrink-0 overflow-hidden rounded-[10px]"><img src={art(t.thumb, 120)} alt="" className="size-full rounded-[10px] object-cover" /></div>}
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[17px] font-bold tracking-tight">{t.text}</div>
+              <div className="truncate pr-2 text-[17px] font-bold tracking-tight">{t.text}</div>
               {t.detail && <div className="truncate text-sm text-white/60">{t.detail}</div>}
             </div>
           </div>

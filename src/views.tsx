@@ -1,19 +1,21 @@
 import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { type LucideIcon, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, LoaderCircle, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
-import { Menu, type MenuOptions } from "@tauri-apps/api/menu";
+import { open as openFile } from "@tauri-apps/plugin-dialog";
+import { type LucideIcon, ArrowDown, ArrowUp, Ban, CircleCheck, CircleMinus, CirclePlus, Eye, FolderInput, FolderPlus, HeartOff, ImageOff, Import, ListEnd, ListMinus, ListPlus, ListStart, ListX, Lock, PinOff, RefreshCw, UserMinus, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { Menu, Submenu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
-  shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
-  useRecentSearches, addRecentSearch, idbGet, idbPut, idbBytes, idbDelete, deleteAllPlaylists, clearLibrary, resetSettings,
+  likedAs, meantIt, shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
+  useRecentSearches, addRecentSearch, idbGet, idbPut, idbBytes, idbDelete, deleteAllPlaylists, clearLibrary, resetSettings, warm as fetchAhead, toggleShuffle, toggleListShuffle,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
-import { asText, estimateWords, forgetLyrics, groups, isRtl, lineNow, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
+import { asText, estimateWords, forgetLyrics, groups, isRtl, lineNow, lookAgain, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { albumByName, art, artist, artistByName, charts, collection as ytCollection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
-import { album as deezerAlbum, covers as coversFor, isDeezer, pin, withGuests, youtubeId } from "./deezer";
-import { addFolder, canHaveFiles, guessTags, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
+import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, pin, topSongs as dzTop, useOriginals, withGuests, youtubeId } from "./deezer";
+import { addFolder, canHaveFiles, fileTrack, guessTags, identify, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
 import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
 import { SignIn } from "./signin";
@@ -21,7 +23,7 @@ import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCom
 import { version } from "../package.json";
 import appIcon from "../src-tauri/icons/128x128@2x.png";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
-import { importLink, importPlaylistFile, isLink, pickPlaylists, versions } from "./import";
+import { importLink, importPlaylistFile, isLink, pickPlaylists, sameSong, songOf, versions } from "./import";
 import { connect, contents, disconnect, importSpotify, useSpotify } from "./spotify";
 
 // An album from Deezer (artist pages) or YouTube Music (search, Home).
@@ -360,7 +362,7 @@ function Masthead({ cover, bg, fill = "bg-neutral-800", title, sub, meta, childr
           {title}
           {sub && <div className="mt-3 truncate text-lg font-semibold">{sub}</div>}
           <div className="mt-1 truncate text-white/80">{meta}</div>
-          <div className="mt-6 flex gap-2.5">{children}</div>
+          <div className="mt-6 flex flex-wrap gap-2.5 *:shrink-0">{children}</div>
         </div>
       </div>
     </header>
@@ -411,7 +413,7 @@ function DownloadButton({ id, about }: { id: string; about: () => Parameters<typ
   const p = progress(id, state);
   const label = !p ? "Download" : p.done ? "Downloaded" : `Downloading, ${p.saved} of ${p.total}`;
   return (
-    <button onClick={() => (p ? popup([{ text: "Remove Download", action: () => unsave(id) }]) : download(id, about()))} aria-label={label} title={label} aria-haspopup={p ? "menu" : undefined} className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
+    <button onClick={() => (p ? removeDownload(id) : download(id, about()))} aria-label={p ? (p.done ? "Remove Download" : "Stop Download") : label} title={label} className="press grid size-10 place-items-center rounded-full bg-white/20 hover:bg-white/30">
       {!p ? (
         <ArrowDownToLine size={18} />
       ) : p.done ? (
@@ -420,6 +422,7 @@ function DownloadButton({ id, about }: { id: string; about: () => Parameters<typ
         <svg viewBox="0 0 20 20" aria-hidden className="size-5 -rotate-90">
           <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2.5" />
           <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray={`${(p.total ? p.saved / p.total : 0) * 50.3} 50.3`} className="transition-[stroke-dasharray] duration-300" />
+          <rect x="7.25" y="7.25" width="5.5" height="5.5" rx="1" fill="currentColor" />
         </svg>
       )}
     </button>
@@ -953,6 +956,7 @@ export function PlaylistPage({ id }: { id: string }) {
   const folder = useLibrary((s) => s.folders.find((f) => f.id === playlist?.folder));
   const signedIn = useAccount((s) => !!s.user);
   const file = useRef<HTMLInputElement>(null);
+  const chooseCover = () => pickImage(file.current, (b) => coverFrom(b).then((c) => setCover(id, c)));
   const [query, setQuery] = useState("");
   const tracks = playlist?.tracks ?? liked;
   useEffect(() => fillIn(tracks), [tracks]); // albums, lengths and artists some songs came without
@@ -966,10 +970,10 @@ export function PlaylistPage({ id }: { id: string }) {
   const from = playlist ? libraryKey("playlist", id) : "liked";
   const shown = rows.map((r) => r.t);
   const more = () =>
-    popup([
-      { text: pinned ? "Unpin" : "Pin to Top", action: () => togglePin(from) },
-      { text: "Choose Cover Image…", action: () => file.current?.click() },
-      ...(playlist?.cover ? [{ text: "Remove Cover Image", action: () => warn("Remove the cover image?", "Remove", () => setCover(id)) }] : []),
+    popup(!playlist ? [{ text: "Duplicate", icon: Copy, action: () => open({ name: "playlist", id: newPlaylist(sorted(tracks, sort).map((r) => r.t), undefined, "Liked Songs Copy") }) }] : [
+      { text: pinned ? "Unpin" : "Pin to Top", icon: pinned ? PinOff : Pin, action: () => togglePin(from) },
+      { text: "Choose Cover Image…", icon: ImagePlus, action: chooseCover },
+      ...(playlist?.cover ? [{ text: "Remove Cover Image", icon: ImageOff, action: () => warn("Remove the cover image?", "Remove", () => setCover(id)) }] : []),
       { item: "Separator" as const },
       {
         text: "Move to Folder",
@@ -998,7 +1002,7 @@ export function PlaylistPage({ id }: { id: string }) {
       <Masthead
         cover={
           playlist ? (
-            <button onClick={() => file.current?.click()} aria-label="Choose Cover Image" title="Choose Cover Image" className="group/cover relative block size-full">
+            <button onClick={chooseCover} aria-label="Choose Cover Image" title="Choose Cover Image" className="group/cover relative block size-full">
               <PlaylistCover id={id} tracks={tracks} cover={playlist.cover} />
               <span className="absolute inset-0 grid place-items-center bg-black/45 text-white opacity-0 transition-opacity group-hover/cover:opacity-100 group-focus-visible/cover:opacity-100">
                 <ImagePlus size={36} strokeWidth={1.5} />
@@ -1086,7 +1090,10 @@ export function PlaylistPage({ id }: { id: string }) {
 
 // An image you picked, as a playlist cover: cropped square and drawn at 640 px as a JPEG, so the library
 // stays small (about 80 KB a cover) and the cover loads at once. Profile pictures are 256 px.
-async function coverFrom(file: File, size = 640) {
+// WebKit's file picker ignores accept="image/*", so in the app the native one, showing only images, picks it.
+const pickImage = (input: HTMLInputElement | null, use: (image: Blob) => unknown) =>
+  canHaveFiles ? void openFile({ filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "heic", "avif", "bmp", "tif", "tiff"] }], title: "Choose Image" }).then((p) => p && fetch(convertFileSrc(p)).then((r) => r.blob()).then(use)).catch(report) : input?.click();
+async function coverFrom(file: Blob, size = 640) {
   const img = await createImageBitmap(file);
   const side = Math.min(img.width, img.height);
   const canvas = document.createElement("canvas");
@@ -1735,7 +1742,7 @@ export function NowPlaying() {
   const track = queue[index];
   const upNext = queue.slice(index + 1);
   const [tab, setTab] = useState<"lyrics" | "queue">("lyrics");
-  const lyrics = useLyrics(track);
+  const lyrics = useLyrics(track, true);
   const extras = useExtras(track, lyrics.value);
   const karaoke = !!lyrics.value?.lines.some((l) => l.words);
   const still = useSettings((s) => s.lyricsStill);
@@ -1775,7 +1782,7 @@ export function NowPlaying() {
                   <img src={art(track.thumb, 120)} alt="" className="size-full object-cover" />
                 </button>
                 <div className="min-w-0">
-                  <div className="truncate font-bold">{track.title}</div>
+                  <div className="truncate font-bold"><SongName t={track} /></div>
                   <div className="truncate text-sm text-white/75"><Artists list={track.artists} /></div>
                 </div>
               </div>
@@ -1793,7 +1800,7 @@ export function NowPlaying() {
             {track ? (
               <>
                 <img src={art(track.thumb, 1000)} alt="" className="aspect-square w-full max-w-[min(100%,50vh)] rounded-2xl object-cover shadow-2xl shadow-black/25" />
-                <h1 className={`mt-10 leading-[0.95] font-extrabold tracking-[-0.04em] text-balance break-words ${track.title.length <= 28 ? "text-[clamp(40px,5vw,72px)]" : "text-[clamp(30px,3.4vw,48px)]"}`}>{track.title}</h1>
+                <h1 className={`mt-10 leading-[0.95] font-extrabold tracking-[-0.04em] text-balance break-words ${track.title.length <= 28 ? "text-[clamp(40px,5vw,72px)]" : "text-[clamp(30px,3.4vw,48px)]"}`}>{track.album || track.albumId ? <button onClick={() => goToAlbum(track)} className="text-left hover:underline">{track.title}</button> : track.title}</h1>
                 <div className="mt-3 truncate text-xl text-white/75">
                   <Artists list={track.artists} />
                 </div>
@@ -1966,7 +1973,9 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
   const synced = !!value?.synced;
   const lines = value?.lines ?? [];
   const sz = SIZES[size];
-  const estimate = useSettings((s) => s.lyricsWords);
+  // Not while the song's own word timings are on their way: a guess runs ahead of a pause ("Uh, … Been
+  // dreaming"), then jumps back when they land.
+  const estimate = useSettings((s) => s.lyricsWords) && !lyrics.timing;
   const still = useSettings((s) => s.lyricsStill);
 
   // The lines around the one being sung, as words: their own timings when they have them (and show their
@@ -2065,7 +2074,15 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
       </div>
     );
   // No source had any, or none answered (they're asked again next time): no lyrics either way, no error.
-  if (!value) return <p className={`pt-6 ${note} ${sz.pad}`}>No lyrics for this one yet.</p>;
+  if (!value)
+    return (
+      <div className={`flex flex-col items-start gap-4 pt-6 ${sz.pad}`}>
+        <p className={note}>No lyrics for this one yet.</p>
+        <button onClick={() => lookAgain(track)} className="press h-8 rounded-full bg-white/15 px-3.5 text-sm font-semibold text-white/80 hover:bg-white/25 hover:text-white">
+          Look Again
+        </button>
+      </div>
+    );
   if (value.instrumental) return <p className={`pt-6 ${note} ${sz.pad}`}>♪ Instrumental</p>;
 
   const focus = Math.max(0, ahead);
@@ -2136,7 +2153,7 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
       {/* The padding under it lets the last line scroll up to where the others are read. */}
       <p className="mt-8 pb-[45vh] text-sm font-semibold text-white/70">
         {synced ? "" : "These lyrics aren’t synced to the song yet. "}
-        {value.source === "you" ? "Your own lyrics." : `Lyrics from ${value.source}.`}
+        {value.source === "you" ? "Your own lyrics." : `Lyrics from ${value.source}${value.slid ? `, moved ${Math.abs(value.slid).toFixed(1)} s ${value.slid > 0 ? "later" : "earlier"} to fit this song` : ""}.`}
         {value.writers && ` Written by ${value.writers}.`}
         {google && ` ${google} by Google.`}
       </p>
@@ -2474,7 +2491,7 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
                 <Trash2 size={16} />
               </button>
             )}
-            <button onClick={() => pickCover.current?.click()} aria-label="Change Cover" title="Change Cover" className="press absolute right-2 bottom-2 grid size-9 place-items-center rounded-full bg-black/60 text-white shadow-lg backdrop-blur">
+            <button onClick={() => pickImage(pickCover.current, coverPicked)} aria-label="Change Cover" title="Change Cover" className="press absolute right-2 bottom-2 grid size-9 place-items-center rounded-full bg-black/60 text-white shadow-lg backdrop-blur">
               <PencilLine size={16} />
             </button>
             <input
@@ -2485,10 +2502,7 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 e.target.value = "";
-                if (!f) return;
-                const r = new FileReader();
-                r.onload = () => (touched.current.add("cover"), setEdit((x) => ({ ...x, cover: String(r.result) })));
-                r.readAsDataURL(f);
+                if (f) coverPicked(f);
               }}
             />
           </div>
@@ -2575,7 +2589,10 @@ function LyricsEditor({ d }: { d: Extract<Dialog, { kind: "edit" }> }) {
   const [text, setText] = useState(d.text);
   const area = useRef<HTMLTextAreaElement>(null);
   const mine = useMine((s) => s.songs[d.key]);
-  const playing = useStore((s) => !!d.track && s.queue[s.index]?.id === d.track.id);
+  // Lyrics not fetched yet (a song you haven't opened) come in here when they land, unless you've started typing.
+  const found = useLyrics(d.text ? undefined : d.track);
+  useEffect(() => void (found.value && setText((was) => was || asText(lyricsNow(d.track!, true)!))), [found.value]);
+  const playing = useStore((s) => !!d.track && !!s.queue[s.index] && sameSong(s.queue[s.index], d.track));
   const save = () => (saveMine(d.key, d, text), closeDialog());
   const stampLine = () => {
     const el = area.current!;
@@ -2589,9 +2606,12 @@ function LyricsEditor({ d }: { d: Extract<Dialog, { kind: "edit" }> }) {
   };
   return (
     <Modal label="Edit Lyrics" onClose={closeDialog} className="h-[min(640px,86vh)] w-[min(620px,92vw)]">
-      <header className="px-6 pt-5">
-        <h2 className="text-xl font-bold tracking-tight">Edit Lyrics</h2>
-        <p className="truncate text-sm text-muted">{d.title} · {d.artist}</p>
+      <header className="flex items-start gap-3 px-6 pt-5">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-xl font-bold tracking-tight">Edit Lyrics</h2>
+          <p className="truncate text-sm text-muted">{d.title} · {d.artist}</p>
+        </div>
+        {found.loading && <span className="mt-0.5 inline-flex shrink-0 animate-enter items-center gap-1.5 rounded-full bg-accent-vivid px-3 py-1 text-sm font-semibold text-white shadow-sm"><span className="spinner size-3.5" /> Finding lyrics…</span>}
       </header>
       <textarea
         ref={area}
@@ -2605,7 +2625,7 @@ function LyricsEditor({ d }: { d: Extract<Dialog, { kind: "edit" }> }) {
         }}
         aria-label="Lyrics"
         spellCheck={false}
-        placeholder="Type or paste the lyrics. To sync them, put a time before each line, like [01:02.50], or play the song and use Stamp Line."
+        placeholder={found.loading ? "" : "Type or paste the lyrics. To sync them, put a time before each line, like [01:02.50], or play the song and use Stamp Line."}
         className="mx-6 mt-4 min-h-0 flex-1 resize-none rounded-xl bg-ink/[0.05] p-4 font-mono text-[13px] leading-relaxed outline-none select-text placeholder:font-sans placeholder:text-sm placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent"
       />
       <footer className="flex flex-wrap items-center gap-2 px-6 py-4">
@@ -2913,6 +2933,7 @@ function AccountPane() {
   const online = useOnline();
   const playlists = useLibrary((s) => s.playlists);
   const picture = useRef<HTMLInputElement>(null);
+  const choosePicture = () => pickImage(picture.current, (b) => coverFrom(b, 256).then((avatar) => setProfile({ avatar })));
   const [deleting, setDeleting] = useState<"ask" | "busy">();
   if (!canSignIn)
     return (
@@ -2934,7 +2955,7 @@ function AccountPane() {
     <>
       <div className="flex items-center gap-5">
         <button
-          onClick={() => (profile?.avatar ? popup([{ text: "Choose Picture…", action: () => picture.current?.click() }, { text: "Remove Picture", action: () => warn("Remove your picture?", "Remove", () => setProfile({ avatar: undefined })) }]) : picture.current?.click())}
+          onClick={() => (profile?.avatar ? popup([{ text: "Choose Picture…", icon: ImagePlus, action: choosePicture }, { text: "Remove Picture", icon: ImageOff, action: () => warn("Remove your picture?", "Remove", () => setProfile({ avatar: undefined })) }]) : choosePicture())}
           aria-label="Change Picture"
           title="Change Picture"
           className="press group/avatar relative rounded-full"
@@ -3222,7 +3243,7 @@ function LyricsPane() {
         <Row label="Lyrics on the Player Bar" detail="The line being sung, under the song’s name">
           <Switch label="Lyrics on the Player Bar" on={lyricsPeek} onChange={(lyricsPeek) => set({ lyricsPeek })} />
         </Row>
-        <Row label="Word by Word on Every Song" detail={lyricsWords ? "Songs that only time their lines get their words timed by estimate" : "Only songs whose lyrics time each word"}>
+        <Row label="Word by Word on Every Song" detail={lyricsWords ? "Songs that only time their lines get their words timed from the song itself, or by estimate" : "Only songs whose lyrics time each word"}>
           <Switch label="Word by Word on Every Song" on={lyricsWords} onChange={(lyricsWords) => set({ lyricsWords })} />
         </Row>
         <Row label="Reduce Lyric Motion" detail={lyricsStill ? "Lines jump to the one being sung, and words stay put" : "Lines glide and words move, whatever the system’s Reduce Motion is set to"}>
@@ -3728,6 +3749,8 @@ export function Artists({ list }: { list: Track["artists"] }) {
     </Fragment>
   ));
 }
+// A song's name opens its album, single or EP, as the artists' names open theirs.
+export const SongName = ({ t }: { t: Track }) => (t.album || t.albumId ? <button onClick={(e) => (e.stopPropagation(), goToAlbum(t))} className="relative max-w-full truncate text-left align-top hover:underline"><Title t={t} /></button> : <Title t={t} />);
 const goToArtist = (a: Artist) => open({ name: "artist", id: a.id ?? "", by: a.name });
 
 // The queue beside the page, opened from the player bar (like Spotify's). Drag a row, or use its menu, to reorder.
@@ -3776,7 +3799,7 @@ export function QueuePanel() {
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <div className={`truncate text-sm font-semibold ${i === index ? "text-accent" : ""}`}>{t.title}</div>
+        <div className={`truncate text-sm font-semibold ${i === index ? "text-accent" : ""}`}><SongName t={t} /></div>
         {/* Artists come first; "Recommended" gives way when the row is narrow. */}
         <div className="flex text-sm whitespace-nowrap text-muted">
           <span className="min-w-0 truncate">{t.explicit && <Explicit />}<Artists list={t.artists} /></span>
@@ -4151,7 +4174,8 @@ function ago(at: number) {
 
 // An album's page. A song kept without the link to it looks it up by name and artist, then keeps the link.
 function goToAlbum(t: Track) {
-  if (t.albumId) return open({ name: "collection", id: t.albumId });
+  const here = useStore.getState().stack.at(-1);
+  if (t.albumId) return here?.name === "collection" && here.id === t.albumId && !useStore.getState().sheet ? undefined : open({ name: "collection", id: t.albumId }); // already on it
   if (!t.album) return;
   albumByName(t.album, t.artists[0]?.name).then(
     (id) => (id ? (patch(t.id, { albumId: id }), open({ name: "collection", id })) : notify({ text: "No Page for This Album", detail: t.album })),
@@ -4185,39 +4209,6 @@ export function LikeButton({ track, mine }: { track: Track; mine?: boolean }) {
     >
       {mine ? <Heart size={18} className={liked ? "fill-accent text-accent" : ""} /> : saved ? <Tick /> : <CirclePlus size={18} strokeWidth={1.75} />}
     </button>
-  );
-}
-
-// A row of album (or playlist) cards that scrolls sideways, or a grid of them. remember: opening one
-// from search adds it to Recent Searches.
-const ROW = "-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]";
-const GRID = "grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6";
-function Albums({ items, grid, remember }: { items: Album[]; grid?: boolean; remember?: boolean }) {
-  const pick = (a: Album) => remember && addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
-  return (
-    <div className={grid ? GRID : ROW}>
-      {items.map((a) => (
-        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className={`group relative ${grid ? "" : "w-44 shrink-0"}`}>
-          <button onClick={() => (pick(a), open({ name: "collection", id: a.id }))} className="press block w-full rounded-xl text-left">
-            <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
-              <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
-            </div>
-            <div className="mt-2.5 truncate font-semibold">{a.title}</div>
-            <div className="truncate text-sm text-muted">{[a.kind, a.year ?? a.by].filter(Boolean).join(" · ")}</div>
-          </button>
-          {/* Sits on the cover's bottom-right corner. */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 aspect-square">
-            <button
-              onClick={() => (pick(a), playCollection(a.id))}
-              aria-label={`Play ${a.title}`}
-              className="pointer-events-auto absolute right-2 bottom-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
-            >
-              <Play size={18} className="ml-0.5 fill-current" />
-            </button>
-          </div>
-        </div>
-      ))}
-    </div>
   );
 }
 // Spotify's saved mark: a small accent disc with a check.
@@ -4308,6 +4299,39 @@ function SavedIn({ d: { track: t } }: { d: Extract<Dialog, { kind: "saved" }> })
       </div>
     </div>,
     document.body,
+  );
+}
+
+// A row of album (or playlist) cards that scrolls sideways, or a grid of them. remember: opening one
+// from search adds it to Recent Searches.
+const ROW = "-mx-8 -mt-1 flex gap-5 overflow-x-auto px-8 pt-1 pb-2 [scrollbar-width:none]";
+const GRID = "grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-5 gap-y-6";
+function Albums({ items, grid, remember }: { items: Album[]; grid?: boolean; remember?: boolean }) {
+  const pick = (a: Album) => remember && addRecentSearch({ id: a.id, kind: "album", title: a.title, subtitle: a.by, thumb: a.thumb });
+  return (
+    <div className={grid ? GRID : ROW}>
+      {items.map((a) => (
+        <div key={a.id} onContextMenu={(e) => (e.preventDefault(), albumMenu(a))} className={`group relative ${grid ? "" : "w-44 shrink-0"}`}>
+          <button onClick={() => (pick(a), open({ name: "collection", id: a.id }))} className="press block w-full rounded-xl text-left">
+            <div className="overflow-hidden rounded-xl bg-ink/[0.06]">
+              <img src={art(a.thumb, 400)} alt="" loading="lazy" className="aspect-square w-full object-cover" />
+            </div>
+            <div className="mt-2.5 truncate font-semibold">{a.title}</div>
+            <div className="truncate text-sm text-muted">{[a.kind, a.year ?? a.by].filter(Boolean).join(" · ")}</div>
+          </button>
+          {/* Sits on the cover's bottom-right corner. */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 aspect-square">
+            <button
+              onClick={() => (pick(a), playCollection(a.id))}
+              aria-label={`Play ${a.title}`}
+              className="pointer-events-auto absolute right-2 bottom-2 grid size-11 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+            >
+              <Play size={18} className="ml-0.5 fill-current" />
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 

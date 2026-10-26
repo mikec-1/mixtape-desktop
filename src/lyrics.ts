@@ -3,7 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { audio, idb, idbDelete, idbGet, idbKeys, idbPut, notify, setLyricLine, subscribeAudio, useOnline, useSettings, useStore } from "./store";
+import { audio, idb, idbDelete, idbGet, idbKeys, idbPut, notify, setLyricLine, songBytes, subscribeAudio, useOnline, useSettings, useStore } from "./store";
+import { latin } from "./import";
+import { recording as heard } from "./deezer";
 import type { Track } from "./yt";
 import { version } from "../package.json";
 
@@ -14,7 +16,9 @@ export type Word = { time: number; end?: number; text: string };
 // bgWords times the backing vocals the same way; side "end" puts a duet's other singer on the right.
 export type Line = { time: number; end?: number; text: string; words?: Word[]; bg?: string; bgWords?: Word[]; roman?: string; side?: "end" };
 // Unsynced lyrics have time 0 on every line, and "" between verses. source "you": your own (useMine).
-export type Lyrics = { lines: Line[]; synced: boolean; source: string; instrumental?: boolean; writers?: string };
+// slid: how far (s) the source's times were moved to fit this song (align). alt: another copy LRCLIB's
+// uploads disagreed with, which the song itself picks between (align).
+export type Lyrics = { lines: Line[]; synced: boolean; source: string; instrumental?: boolean; writers?: string; slid?: number; alt?: Line[] };
 
 // In the app requests go through Rust like YouTube's (yt.ts), so CORS never matters; a browser uses its own.
 const http: typeof fetch = "__TAURI_INTERNALS__" in window ? tauriFetch : (input, init) => fetch(input, init);
@@ -25,13 +29,14 @@ const timeout = (ms = 10_000) => {
 };
 
 // LRCLIB: free, community-made, mostly synced, some word by word (its Lyricsfile YAML).
-type Hit = { trackName: string; artistName: string; duration: number; instrumental: boolean; plainLyrics: string | null; syncedLyrics: string | null; lyricsfile?: string | null; hasWordSync?: boolean };
+type Hit = { id: number; trackName: string; artistName: string; albumName?: string | null; duration: number; instrumental: boolean; plainLyrics: string | null; syncedLyrics: string | null; lyricsfile?: string | null; hasWordSync?: boolean };
 // LRCLIB asks apps to say who they are; this header is its browser-friendly User-Agent.
 const LRCLIB = { "Lrclib-Client": `Sleeve v${version} (https://github.com/mikec-1/Sleeve)` };
 
 const norm = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+// Across scripts too, so a Cyrillic title finds lyrics filed under its Latin spelling (norm stays as it was: it keys your lyrics).
 const alike = (a: string, b: string) => {
-  const x = norm(a), y = norm(b);
+  const x = norm(latin(a)), y = norm(latin(b));
   return !!x && !!y && (x.includes(y) || y.includes(x));
 };
 const seconds = (d?: string) => d?.split(":").reduce((s, n) => s * 60 + +n, 0) || undefined;
@@ -47,19 +52,31 @@ function title(t: Track) {
   return s.trim() || t.title;
 }
 
-// The richest lyrics (word sync, then line sync, then plain) whose length matches the song's.
-// LRCLIB's own tolerance is ±2 s; YouTube's durations are rounded, so 3.
+// Mixtape's test for "the same song": the bare titles contain one another, both are the same version
+// (a remix, live, acoustic or sped-up take only matches the same take), one of the song's artists
+// matches, and the length is within 20 s. Closest length wins after that.
+const VERSION = /\b(remix|mix|version|edit|live|acoustic|instrumental|demo|reprise|cover|bootleg|dub|radio|extended|sped|slowed|vip|flip|rework|unplugged|session|karaoke)\b/;
+const versionKey = (s: string) => [...s.toLowerCase().matchAll(/[([]([^)\]]*)[)\]]|\s[-–—]\s(.*)$/g)].map((m) => (m[1] ?? m[2]).trim()).filter((g) => g && !/^(feat|ft|with)\b/.test(g) && !g.includes("remaster") && VERSION.test(g)).map((g) => g.replace(/[^\p{L}\p{N}]/gu, "")).sort().join("|");
+const sameVersion = (a: string, b: string) => { const x = versionKey(a), y = versionKey(b); return !x === !y && (!x || x.includes(y) || y.includes(x)); };
+const matches = (t: Track, name: string, artists: string[], secs?: number) =>
+  alike(name, title(t)) && sameVersion(name, t.title) && (!artists.length || !t.artists.length || artists.some((a) => t.artists.some((b) => alike(a, b.name)))) && (!secs || !seconds(t.duration) || Math.abs(secs - seconds(t.duration)!) <= 20);
+
 const rank = (r: Hit) => (r.hasWordSync && r.lyricsfile ? 0 : r.syncedLyrics ? 1 : r.plainLyrics ? 2 : r.instrumental ? 3 : 4);
-function pick(list: Hit[], secs?: number) {
-  const off = (r: Hit) => (secs ? Math.abs(r.duration - secs) : 0);
-  return list.filter((r) => rank(r) < 4 && off(r) <= 3).sort((a, b) => rank(a) - rank(b) || off(a) - off(b))[0];
-}
+// The first three lines, bare, so copies of the same lyrics group together however they're timed.
+// Synced lyrics that can't fit this song: crammed by someone who never heard it (a quarter of the lines
+// under a second apart, where even Rap God has one in a hundred), or still singing after it ends (timed
+// to a longer cut). Uploads of a bad copy can outvote the good one.
+const offbeat = (r: Hit, secs?: number) => {
+  const ts = parseLrc(r.syncedLyrics ?? "").filter((l) => l.text).map((l) => l.time).sort((a, b) => a - b);
+  return (ts.length > 8 && ts.filter((x, i) => i && x - ts[i - 1] < 1).length > ts.length / 4) || (!!secs && ts.length > 0 && ts.at(-1)! > secs + 1);
+};
+const print = (r: Hit) => (r.syncedLyrics ?? r.plainLyrics ?? "").split(/\r?\n/).map((l) => l.replace(/\[[^\]]*\]/g, "").toLowerCase().replace(/[^\p{L}\p{N} ]/gu, "").trim()).filter(Boolean).slice(0, 3).join("|");
 
 // undefined: LRCLIB doesn't have it (404).
 async function lrclibApi<T>(path: "get" | "search", q: Record<string, string>): Promise<T | undefined> {
   const go = () => http(`https://lrclib.net/api/${path}?${new URLSearchParams(q)}`, { headers: LRCLIB, signal: timeout() });
   let r = await go();
-  if (r.status === 503) r = await new Promise((ok) => setTimeout(ok, 1000)).then(go); // busy, and it says Retry-After: 1
+  if (r.status === 503 || r.status === 429) r = await new Promise((ok) => setTimeout(ok, 1000 * Math.min(5, +(r.headers.get("Retry-After") ?? 0) || 1))).then(go); // busy, or too many asks
   if (r.status === 404) return undefined;
   if (!r.ok) throw new Error(`LRCLIB: ${r.status}`);
   return r.json();
@@ -69,12 +86,30 @@ async function lrclib(t: Track): Promise<Lyrics | undefined> {
   const name = title(t);
   const artist = t.artists[0]?.name ?? "";
   const secs = seconds(t.duration);
-  // An exact match first (LRCLIB's own: title, artist, album, and length within 2 s), then a search by title
-  // and artist, then one as free text, which forgives credits written differently.
-  const exact = artist ? await lrclibApi<Hit>("get", { track_name: name, artist_name: artist, ...(t.album && { album_name: t.album }), ...(secs && { duration: String(secs) }) }) : undefined;
-  const best = pick(exact ? [exact] : [], secs)
-    ?? pick((await lrclibApi<Hit[]>("search", artist ? { track_name: name, artist_name: artist } : { track_name: name })) ?? [], secs)
-    ?? pick(((await lrclibApi<Hit[]>("search", { q: `${name} ${artist}`.trim() })) ?? []).filter((r) => alike(r.trackName, name) && (!artist || alike(r.artistName, artist))), secs);
+  // LRCLIB's exact match (title, artist, album, length within 2 s) and a search by title and artist at once;
+  // a free-text search, which forgives credits written differently, only when neither has it. Then
+  // Mixtape's consensus, since anyone can upload: the lyrics most copies agree on win (the exact match
+  // breaks a tie, then the song's album, then the newest upload), and within them word sync, then line
+  // sync, then the closest length. Copies that can't fit the song don't vote while a well-timed one exists; otherwise
+  // they count as plain words.
+  const [exact, found] = await Promise.all([
+    artist ? lrclibApi<Hit>("get", { track_name: name, artist_name: artist, ...(t.album && { album_name: t.album }), ...(secs && { duration: String(secs) }) }) : undefined,
+    lrclibApi<Hit[]>("search", artist ? { track_name: name, artist_name: artist } : { track_name: name }),
+  ]);
+  const same = (r: Hit) => rank(r) < 4 && matches(t, r.trackName, [r.artistName], r.duration);
+  let hits = [exact, ...(found ?? [])].filter((r): r is Hit => !!r && same(r));
+  if (!hits.length) hits = ((await lrclibApi<Hit[]>("search", { q: `${name} ${artist}`.trim() })) ?? []).filter(same);
+  const fine = hits.filter((r) => !r.syncedLyrics || !offbeat(r, secs));
+  hits = fine.some((r) => r.syncedLyrics) ? fine : hits.map((r) => (r.syncedLyrics && offbeat(r, secs) ? { ...r, syncedLyrics: null, hasWordSync: false } : r));
+  const groups = new Map<string, Hit[]>();
+  for (const r of new Map(hits.map((r) => [r.id, r])).values()) groups.set(print(r), [...(groups.get(print(r)) ?? []), r]);
+  const kept = exact && hits.find((r) => r.id === exact.id);
+  const won = kept ? print(kept) : undefined;
+  const album = (g: Hit[]) => +g.some((r) => !!t.album && !!r.albumName && alike(r.albumName, t.album));
+  const newest = (g: Hit[]) => Math.max(...g.map((r) => r.id)); // ponytail: a guess (later uploads are usually fixes); the song's audio would know
+  const off = (r: Hit) => (secs ? Math.abs(r.duration - secs) : 0);
+  const voted = [...groups].sort(([a, x], [b, y]) => y.length - x.length || +(b === won) - +(a === won) || album(y) - album(x) || newest(y) - newest(x)).map(([, g]) => g.sort((a, b) => rank(a) - rank(b) || off(a) - off(b))[0]);
+  const best = voted[0];
   if (!best) return;
   const source = "LRCLIB";
   if (rank(best) === 0) {
@@ -83,7 +118,9 @@ async function lrclib(t: Track): Promise<Lyrics | undefined> {
   }
   if (best.syncedLyrics) {
     const lines = parseLrc(best.syncedLyrics);
-    if (lines.length) return { lines: tidy(lines), synced: true, source };
+    // The runner-up's timed lines go along, for the song to pick between when its words are timed.
+    const alt = voted.slice(1).find((r) => r.syncedLyrics)?.syncedLyrics;
+    if (lines.length) return { lines: tidy(lines), synced: true, source, ...(alt && { alt: tidy(parseLrc(alt)) }) };
   }
   if (best.plainLyrics) return { lines: plain(best.plainLyrics), synced: false, source };
   return { lines: [], synced: false, source, instrumental: true };
@@ -181,25 +218,73 @@ type Song = { id: number; name: string; artists?: { name: string }[]; duration?:
 // The credits NetEase opens its lyrics with: "作词 : …", "Composer: …".
 const CREDIT = /^(作词|作曲|编曲|制作人?|监制|混音|母带|和声|录音|吉他|贝斯|鼓|弦乐|出品|发行|企划|统筹|词|曲|lyrics|lyricist|composer|producers?|arranger|written by|mix(ed|ing)?|master(ed|ing)?)\s*(by)?\s*[:：]/i;
 
-async function netease(t: Track): Promise<Lyrics | undefined> {
+async function netease(t: Track, words?: string): Promise<Lyrics | undefined> {
   const name = title(t);
   const artist = t.artists[0]?.name ?? "";
   const secs = seconds(t.duration);
   const call = async (path: string, q: Record<string, string>, method = "GET") => {
     const r = await http(`https://music.163.com/api/${path}?${new URLSearchParams(q)}`, { method, headers: NETEASE, signal: timeout() });
     if (!r.ok) throw new Error(`NetEase: ${r.status}`);
-    return r.json();
+    const j = await r.json();
+    if (j?.code != null && j.code !== 200) throw new Error(`NetEase: ${j.code}`); // -462 is it turning bots away, with a 200: not a miss
+    return j;
   };
-  const songs: Song[] = (await call("search/pc", { s: `${name} ${artist}`.trim(), type: "1", limit: "10", offset: "0" }, "POST"))?.result?.songs ?? [];
-  const song = songs.find((s) => alike(s.name, name) && (!artist || s.artists?.some((a) => alike(a.name, artist))) && (!secs || !s.duration || Math.abs(s.duration / 1000 - secs) <= 3));
-  if (!song) return;
-  const lrc: unknown = (await call("song/lyric", { id: String(song.id), lv: "1", kv: "1", tv: "-1" }))?.lrc?.lyric;
-  if (typeof lrc !== "string") return;
+  // Mixtape's way: the four closest in length that pass the same-song test, their lyrics fetched at once.
+  const off = (s: Song) => (secs && s.duration ? Math.abs(s.duration / 1000 - secs) : 0);
+  const songs: Song[] = ((await call("search/pc", { s: `${name} ${artist}`.trim(), type: "1", limit: "10", offset: "0" }, "POST"))?.result?.songs ?? [])
+    .filter((s: Song) => matches(t, s.name, s.artists?.map((a) => a.name) ?? [], s.duration && s.duration / 1000))
+    .sort((a: Song, b: Song) => off(a) - off(b))
+    .slice(0, 4);
+  const got = await Promise.allSettled(songs.map((s) => call("song/lyric", { id: String(s.id), lv: "1", kv: "1", tv: "-1" })));
+  if (got.length && got.every((g) => g.status === "rejected")) throw (got[0] as PromiseRejectedResult).reason;
+  const lrcs = got.map((g) => (g.status === "fulfilled" && typeof g.value?.lrc?.lyric === "string" ? (g.value.lrc.lyric as string) : ""));
   const source = "NetEase Cloud Music";
-  if (lrc.includes("纯音乐，请欣赏")) return { lines: [], synced: false, source, instrumental: true }; // "pure music, enjoy"
-  const lines = parseLrc(lrc).filter((l) => !CREDIT.test(l.text));
   // Synced only: NetEase's untimed lyrics come stamped all at 0.
-  return lines.filter((l) => l.time > 0).length > 1 ? { lines: tidy(lines), synced: true, source } : undefined;
+  const synced = lrcs.map((l) => parseLrc(l).filter((l) => !CREDIT.test(l.text))).filter((lines) => lines.filter((l) => l.time > 0).length > 1);
+  if (!synced.length) return lrcs[0]?.includes("纯音乐，请欣赏") ? { lines: [], synced: false, source, instrumental: true } : undefined; // "pure music, enjoy"
+  // With LRCLIB's plain words, the copy they fit best, wearing them; else the first that isn't censored.
+  const fit = words ? synced.map((lines) => reskin(lines, words)).sort((a, b) => b.score - a.score)[0] : undefined;
+  const lines = fit && fit.score >= 0.55 ? fit.lines : (synced.find((lines) => !lines.some((l) => l.text.includes("**"))) ?? synced[0]);
+  return { lines: tidy(lines), synced: true, source };
+}
+
+// Mixtape's reskin: NetEase's timings carrying LRCLIB's words, which are usually typed out with more care
+// (NetEase's are often censored or misheard). Walking forward through LRCLIB's words, each timed line takes
+// the run that shares the most words with it (a near one first, then up to 25 words ahead); a line with no
+// good match keeps its own. score: how well every line matched, on average.
+const token = (w: string) => latin(w).toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+function reskin(timed: Line[], text: string) {
+  const words = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !CREDIT.test(l) && !/^[[(].*[\])]$/.test(l)).flatMap((l) => l.split(/\s+/));
+  const keys = words.map(token);
+  const overlap = (a: Set<string>, from: number, len: number) => {
+    const b = new Set(keys.slice(from, from + len).filter(Boolean));
+    let both = 0;
+    for (const w of b) if (a.has(w)) both++;
+    return both / (a.size + b.size - both || 1);
+  };
+  let at = 0, sum = 0, count = 0;
+  const lines = timed.map((l) => {
+    const own = l.text.split(/\s+/).filter(Boolean);
+    const mine = new Set(own.map(token).filter(Boolean));
+    if (!mine.size) return l;
+    count++;
+    const best = (from: number, to: number) => {
+      let top = { score: 0, from: 0, len: 0 };
+      for (let i = from; i <= to && i < words.length; i++)
+        for (let len = Math.max(1, own.length - 1); len <= own.length + 2 && i + len <= words.length; len++) {
+          const score = overlap(mine, i, len);
+          if (score > top.score) top = { score, from: i, len };
+        }
+      return top;
+    };
+    let m = best(at, at + 2);
+    if (m.score < 0.5) { const far = best(at + 3, at + 25); if (far.score >= 0.55) m = far; }
+    if (m.score < 0.34) return l;
+    at = m.from + m.len;
+    sum += m.score;
+    return { ...l, text: words.slice(m.from, at).join(" "), words: undefined };
+  });
+  return { lines, score: count ? sum / count : 0 };
 }
 
 // Apple Music's lyrics, timed word by word, from the index am-lyrics uses: looked up by title, artist,
@@ -324,19 +409,35 @@ function sides(singers: (string | undefined)[], types: Map<string, string>) {
   return out.map((s) => (s === "end" ? (flip ? undefined : "end") : s === "start" && flip ? "end" : undefined));
 }
 
-// Where lyrics come from, the first that has them: Apple's word-timed lyrics, LRCLIB, then NetEase Cloud
-// Music. Apple and LRCLIB are asked at once, so a song Apple lacks waits no longer than LRCLIB takes;
-// NetEase (slower, and far away) only when both come back empty. None: just no lyrics, with no error,
+// Where lyrics come from, the first that has them: Apple's word-timed lyrics, LRCLIB's synced ones, then
+// NetEase Cloud Music's (wearing LRCLIB's plain words when it has them, as Mixtape does), then LRCLIB's
+// plain ones. Apple and LRCLIB are asked at once, so a song Apple lacks waits no longer than LRCLIB takes;
+// NetEase (slower, and far away) only when neither has synced lyrics. None: just no lyrics, with no error,
 // and a source that didn't answer is asked again the next time they're shown. Settings → Lyrics can
 // switch any of them off.
 const SOURCES = { apple: "Apple Music", lrclib: "LRCLIB", netease: "NetEase Cloud Music" } as const;
 const off = (name: string) => useSettings.getState().lyricsOff.some((k) => SOURCES[k] === name);
+// A source that didn't answer (busy, slow, offline for a moment) is asked twice more before giving up, so
+// "no lyrics" means none were found, not that a source hiccuped.
 async function find(t: Track): Promise<Lyrics | null> {
+  for (let i = 0; ; i++)
+    try {
+      return await ask(t);
+    } catch (e) {
+      if (i === 2) throw e;
+      await new Promise((ok) => setTimeout(ok, 1500 * (i + 1)));
+    }
+}
+async function ask(t: Track): Promise<Lyrics | null> {
   let down = false;
   const miss = () => void (down = true);
   const use = (name: string, from: (t: Track) => Promise<Lyrics | undefined>) => (off(name) ? undefined : from(t).catch(miss));
   const fromLrclib = use(SOURCES.lrclib, lrclib);
-  const found = (await use(SOURCES.apple, apple)) ?? (await fromLrclib) ?? (await use(SOURCES.netease, netease));
+  const fromApple = await use(SOURCES.apple, apple);
+  if (fromApple) return fromApple;
+  const l = await fromLrclib;
+  if (l?.synced || l?.instrumental) return l;
+  const found = (await use(SOURCES.netease, (t) => netease(t, l?.lines.map((x) => x.text).join("\n")))) ?? l;
   if (found) return found;
   if (down) throw new Error("A lyrics source didn't answer");
   return null;
@@ -359,16 +460,24 @@ async function fromFile(path: string): Promise<Lyrics | undefined> {
 export const keptLyrics = () => idbKeys("lyrics:").then((k) => k.length);
 export const forgetLyrics = () => idbDelete("lyrics:");
 
+// Forgets what's kept for this song and asks every source again: for a miss kept from a bad day, or a
+// song a source has since added.
+export function lookAgain(t: Track) {
+  const key = `lyrics:${heard(t)}`;
+  put(key, {});
+  idbDelete(`lyrics:v4:${heard(t)}`).catch(() => {}).then(() => stored(t)).then((value) => put(key, { value }), () => put(key, { failed: true }));
+}
+
 export const keepLyrics = (t: Track) => stored(t).then(() => {}, () => {});
 
 // Lyrics found are kept on disk, so a song heard before has them at once, even offline, with no request.
 // A miss is kept two days, then asked again, as sources keep adding songs. ponytail: never pruned (a
 // few KB a song); bump the version when a source is added, or what's read from one changes (v2: Apple's
-// backing-vocal timings and duet sides).
+// backing-vocal timings and duet sides; v3: Mixtape's matching; v4: no copies that can't fit the song).
 async function stored(t: Track): Promise<Lyrics | null> {
   const own = t.file ? await fromFile(t.file) : undefined;
   if (own) return own;
-  const key = `lyrics:v2:${t.id}`;
+  const key = `lyrics:v4:${heard(t)}`;
   const kept = await idbGet<{ at: number; lyrics: Lyrics | null }>(key).catch(() => undefined);
   if (kept && (kept.lyrics ? !off(kept.lyrics.source) : Date.now() - kept.at < 2 * 86_400_000)) return kept.lyrics;
   const lyrics = await find(t);
@@ -399,10 +508,10 @@ export function fromMine(mine: Mine): Lyrics {
   return l;
 }
 
-export function saveMine(key: string, about: { title: string; artist: string }, text: string) {
+export function saveMine(key: string, { title, artist, track }: { title: string; artist: string; track?: Track }, text: string) {
   if (!text.trim()) return removeMine(key);
-  useMine.setState((s) => ({ songs: { ...s.songs, [key]: { ...about, text, at: Date.now() } } }));
-  notify({ text: "Lyrics Saved", detail: about.title });
+  useMine.setState((s) => ({ songs: { ...s.songs, [key]: { title, artist, text, at: Date.now() } } }));
+  notify({ text: "Lyrics Saved", detail: artist ? `${title} · ${artist}` : title, thumb: track?.thumb });
 }
 export function removeMine(key: string) {
   const was = useMine.getState().songs[key];
@@ -458,25 +567,94 @@ function timed<L extends Lyrics | null | undefined>(l: L, by = 0): L {
   return hit.l as L;
 }
 
-// A song's lyrics: your own if you wrote some, otherwise what the sources have.
-export function useLyrics(t?: Track) {
+// Word timings from the song itself (align.rs), for synced lines that only time themselves, worked out
+// once a lyrics view shows the song and kept on disk by song and lyrics, so fixing them times them again.
+// The model knows English letters, so only lines in Latin script (accents dropped) or Cyrillic (spelt out
+// in Latin) go; the rest, and any line it can't find, keep the estimate. Each line's index gets its words,
+// or null. Fetched lyrics found to be off from the song as a whole (timed to another upload) are kept
+// moved, so every view has them right; your own stay where you put them.
+const SPELLED = /^[\p{Script=Latin}\p{Script=Cyrillic}\p{N}\p{P}\p{S}\s]*$/u;
+const CYRILLIC = Object.fromEntries([..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((c, i) => [c, "A B V G D E YO ZH Z I Y K L M N O P R S T U F H TS CH SH SHCH - Y - E YU YA I YI YE G".split(" ")[i].replace("-", "")]));
+const letters = (w: string) => w.toLowerCase().replace(/[а-яёіїєґ]/g, (c) => CYRILLIC[c]).normalize("NFKD").replace(/\p{M}/gu, "").replace(/[’‘`]/g, "'").toUpperCase().replace(/[^A-Z']/g, "");
+const hash = (lines: Line[]) => [...lines.map((l) => `${l.time}${l.text}`).join("\n")].reduce((h, c) => (h * 31 + c.codePointAt(0)!) | 0, 0) >>> 0;
+async function align(t: Track, l: Lyrics, key: string, fetched: boolean): Promise<(Word[] | null)[]> {
+  const kept = await idbGet<{ by: number; words: (Word[] | null)[] }>(key).catch(() => undefined);
+  if (kept) return slide(t, l, kept, fetched);
+  const job = (lines: Line[]) => {
+    const want = lines.flatMap((line, i) => (line.text && !line.words && SPELLED.test(line.text) ? [i] : []));
+    const parts = want.map((i) => lines[i].text.match(WORDS) ?? []);
+    // A line before a long instrumental is looked for in its first 12 s, not across the break.
+    return { want, parts, send: want.map((i, k) => ({ start: lines[i].time, end: Math.min(lines[i].end ?? lines[i + 1]?.time ?? Infinity, lines[i].time + 12), words: parts[k].map(letters) })) };
+  };
+  const shown = job(l.lines), other = fetched && l.alt ? job(l.alt) : undefined;
+  let use = l, { want, parts } = shown, out = l.lines.map((): Word[] | null => null), by = 0;
+  if (want.length) {
+    // 16 kHz mono, what the model hears.
+    const buf = await new OfflineAudioContext(1, 1, 16000).decodeAudioData(await songBytes(t));
+    const pcm = new Float32Array(buf.length);
+    for (let c = 0; c < buf.numberOfChannels; c++) buf.getChannelData(c).forEach((v, i) => (pcm[i] += v / buf.numberOfChannels));
+    const [slid, got, alt] = await invoke<[number, ([number, number][] | null)[], boolean]>("align_words", new Uint8Array(pcm.buffer), { headers: { "x-lines": JSON.stringify(shown.send), ...(other?.want.length && { "x-alt": JSON.stringify(other.send) }) } });
+    // The song fit the other copy clearly better: it's what this song shows from now on, its words kept under it.
+    if (alt) {
+      ({ want, parts } = other!);
+      use = { ...l, lines: l.alt!, alt: undefined };
+      out = use.lines.map(() => null);
+      key = `words:v5:${heard(t)}:${hash(use.lines)}`;
+      idbPut(`lyrics:v4:${heard(t)}`, { at: Date.now(), lyrics: use }).catch(() => {});
+      put(`lyrics:${heard(t)}`, { value: use });
+    }
+    want.forEach((i, k) => (out[i] = got[k]?.map(([time, end], j) => ({ time, end, text: parts[k][j] })) ?? null));
+    by = slid;
+  }
+  idbPut(key, { by, words: out }).catch(() => {});
+  const words = await slide(t, use, { by, words: out }, fetched);
+  return use === l ? words : []; // the other copy's words reach it under its own key
+}
+// Fetched lyrics the song is `by` later than: kept moved (with their words, under the moved lyrics' key),
+// which shows them everywhere and brings the lyrics view back here for the words.
+async function slide(t: Track, l: Lyrics, { by, words }: { by: number; words: (Word[] | null)[] }, fetched: boolean) {
+  if (!by || !fetched) return words;
+  const moved = { ...timed(l, by), slid: (l.slid ?? 0) + by, alt: undefined };
+  await idbPut(`words:v5:${heard(t)}:${hash(moved.lines)}`, { by: 0, words: words.map((w) => w?.map((x) => ({ ...x, time: x.time + by, end: x.end! + by })) ?? null) }).catch(() => {});
+  idbPut(`lyrics:v4:${heard(t)}`, { at: Date.now(), lyrics: moved }).catch(() => {});
+  put(`lyrics:${heard(t)}`, { value: moved });
+  return words;
+}
+const worded = new WeakMap<Lyrics, { words: (Word[] | null)[]; l: Lyrics }>();
+function withWords<L extends Lyrics | null | undefined>(l: L, words?: (Word[] | null)[]): L {
+  if (!l || !words?.some(Boolean)) return l;
+  let hit = worded.get(l);
+  if (hit?.words !== words) worded.set(l, (hit = { words, l: { ...l, lines: l.lines.map((x, i) => (words[i] ? { ...x, words: words[i]! } : x)) } }));
+  return hit.l as L;
+}
+
+// A song's lyrics: your own if you wrote some, otherwise what the sources have. words: time the words of
+// lines that only time themselves from the song (the lyrics views), unless Settings → Lyrics says not to.
+export function useLyrics(t?: Track, words = false) {
   const mine = useMine((s) => (t ? s.songs[songKey(t)] : undefined));
   const by = useTiming((s) => (t ? s.songs[songKey(t)] : undefined));
-  const fetched = useResult(t && !mine ? `lyrics:${t.id}` : undefined, () => stored(t!));
-  return mine ? { value: timed(fromMine(mine), by), loading: false, retry: () => {} } : { ...fetched, value: timed(fetched.value, by) };
+  const fetched = useResult(t && !mine ? `lyrics:${heard(t)}` : undefined, () => stored(t!));
+  const base = mine ? fromMine(mine) : fetched.value;
+  // Aligned before the timing nudge, so nudging shifts the found words instead of looking again in the wrong place.
+  const want = useSettings((s) => s.lyricsWords) && words && "__TAURI_INTERNALS__" in window && !!t && !!base?.synced;
+  const key = want ? `words:v5:${heard(t!)}:${hash(base!.lines)}` : undefined;
+  const aligned = useResult(key, () => align(t!, base!, key!, !mine));
+  const value = timed(withWords(base, aligned.value), by);
+  // timing: the words are still being found (the song has to download first), so nothing guesses at them meanwhile.
+  return mine ? { value, loading: false, timing: aligned.loading, retry: () => {} } : { ...fetched, value, timing: aligned.loading };
 }
 // Without a hook: what's known now, for the mini player and the editor.
 // raw: without the song's timing nudge (the editor, so saving doesn't bake it in twice).
 export const lyricsNow = (t: Track, raw = false) => {
   const mine = useMine.getState().songs[songKey(t)];
-  const l = mine ? fromMine(mine) : (results.get(`lyrics:${t.id}`)?.value as Lyrics | null | undefined);
+  const l = mine ? fromMine(mine) : (results.get(`lyrics:${heard(t)}`)?.value as Lyrics | null | undefined);
   return raw ? l : timed(l, useTiming.getState().songs[songKey(t)]);
 };
 
 // The next song's lyrics load while this one plays, so they're there the moment it starts.
 useStore.subscribe((s, was) => {
   const t = s.queue[s.index + 1];
-  if (t && (s.index !== was.index || s.queue !== was.queue)) fetchOnce(`lyrics:${t.id}`, () => stored(t));
+  if (t && (s.index !== was.index || s.queue !== was.queue)) fetchOnce(`lyrics:${heard(t)}`, () => stored(t));
 });
 
 // The mini player shows the line being sung (store.ts sends it along), unless Settings turned that off:

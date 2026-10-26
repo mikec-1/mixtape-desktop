@@ -8,5 +8,12 @@ fn main() {
     if let Some(id) = id {
         println!("cargo:rustc-env=DISCORD_CLIENT_ID={id}");
     }
+    // onnxruntime's CoreML code calls ___isPlatformVersionAtLeast, which lives in clang's runtime; release links drop it unless we add it.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        if let Ok(out) = std::process::Command::new("clang").arg("--print-runtime-dir").output() {
+            println!("cargo:rustc-link-search={}", String::from_utf8_lossy(&out.stdout).trim());
+            println!("cargo:rustc-link-lib=static=clang_rt.osx");
+        }
+    }
     tauri_build::build()
 }

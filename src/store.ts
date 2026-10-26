@@ -4,11 +4,13 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import { art, beats, details, fetchAudio, hear, playAudio, radio, searchKind, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
-import { foundWhenPlayed, known, youtubeId } from "./deezer";
+import { art, beats, details, edges, fetchAudio, hear, parseSecs, playAudio, radio, searchKind, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
+import { findAgain, foundWhenPlayed, known, original, recording, releasedCut, youtubeId } from "./deezer";
+import { sameSong, songOf } from "./import";
 import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
 
-type Root = "home" | "search" | "library" | "settings";
+export type Root = "home" | "search" | "library" | "settings";
+export const ROOTS: Root[] = ["home", "search", "library", "settings"];
 // "playlist" is one of yours; id "liked" is Liked Songs. "collection" is an album or playlist on YouTube Music.
 // "shared" is someone's public playlist (id "<owner>/<playlist>"), "profile" someone's profile (account.ts).
 export type View =
@@ -519,6 +521,9 @@ function fetchCached({ id, ...t }: Track) {
   p.catch(() => cache.delete(id));
   return p;
 }
+// A song's whole file, to work things out from its sound (lyrics.ts word timings). Usually here already.
+export const songBytes = (t: Track) =>
+  t.file ? fetch(convertFileSrc(t.file)).then((r) => r.arrayBuffer()) : fetchCached(t).then((d) => Promise.all(d.chunks)).then((c) => new Blob(c).arrayBuffer());
 // A song pinned to another version (deezer.ts pin): its old audio goes, and if it's the one on, it goes on
 // from the same place in the new one.
 export function replay(id: string) {
@@ -918,7 +923,7 @@ export const EQ_BANDS = [60, 150, 400, 1000, 2400, 15000];
 // Small and read synchronously at startup, so the theme is right on the first frame: localStorage.
 // sidebarWidth is the expanded width; closed, the sidebar is the icon rail. queue is the Queue panel, queueWidth its width.
 // crossfade is in seconds (0 is gapless); eq is dB per EQ_BANDS band. lyricsPeek is the line on the player bar;
-// lyricsWords estimates word timings for lyrics that only time lines; translateTo is a language code, "" for
+// lyricsWords times the words of lyrics that only time lines (from the song, lyrics.ts align, or by estimate); translateTo is a language code, "" for
 // the system's (lyrics.ts translateTarget). lyricsStill keeps the lyrics from moving: they don't follow the
 // system's Reduce Motion, so they look the same for everyone unless this is on. The Library page keeps
 // its view, order and filter; likedSort is how Liked Songs lists its songs (a playlist keeps its own).

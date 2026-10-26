@@ -27,6 +27,8 @@ tauri-plugin-dialog = "2.8.3"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-autostart = "2"
 discord-rich-presence = "1.1.0"
+ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-17"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

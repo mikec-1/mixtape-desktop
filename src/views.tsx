@@ -2340,7 +2340,9 @@ function LinkImport() {
 }
 
 // Your Spotify library, once you're signed in (spotify.ts): everything is ticked, untick what stays behind.
-function SpotifyImport() {
+// inline: shown as a page of the welcome screen instead of a dialog; told whether anything was imported.
+export function SpotifyImport({ inline }: { inline?: (imported: boolean) => void }) {
+  const close = () => (inline ? inline(false) : closeDialog());
   const name = useSpotify((s) => s.name);
   const history = useSettings((s) => s.history);
   const [lib, setLib] = useState<Awaited<ReturnType<typeof contents>>>();
@@ -2354,7 +2356,7 @@ function SpotifyImport() {
   const on = (id: string) => !off.has(id) && (id !== "recent" || history);
   const picked = lib ? lib.playlists.filter((p) => on(p.id)) : [];
   const any = !!lib && (picked.length > 0 || ["liked", "albums", "artists", "recent"].some(on));
-  const go = () => lib && (closeDialog(), void importSpotify({ playlists: picked, liked: on("liked"), albums: on("albums"), artists: on("artists"), recent: on("recent") }));
+  const go = () => lib && (inline ? inline(true) : closeDialog(), void importSpotify({ playlists: picked, liked: on("liked"), albums: on("albums"), artists: on("artists"), recent: on("recent") }));
   // A plain function, not a component, so ticking one keeps its focus.
   const row = (id: string, cover: ReactNode, title: string, detail: string) => (
     <li key={id}>
@@ -2369,14 +2371,14 @@ function SpotifyImport() {
     </li>
   );
   const tile = (bg: string, icon: ReactNode) => <div className={`grid size-10 shrink-0 place-items-center rounded-md text-white ${bg}`}>{icon}</div>;
-  return (
-    <Modal label="Import from Spotify" onClose={closeDialog} className="flex max-h-[86vh] w-[min(520px,94vw)] flex-col">
+  const body = (
+    <>
       <header className="px-6 pt-5">
-        <h2 className="text-xl font-bold tracking-tight">Import from Spotify</h2>
+        {!inline && <h2 className="text-xl font-bold tracking-tight">Import from Spotify</h2>}
         <p className="text-sm text-muted">{name ? `Signed in as ${name}. Untick anything you’d rather leave behind.` : "Sign in to bring over your playlists, Liked Songs, albums and artists. Your recent plays join your History, and keep coming in while you’re signed in."}</p>
       </header>
       {lib ? (
-        <ul className="mt-3 min-h-0 flex-1 overflow-y-auto px-4">
+        <ul className={`mt-3 min-h-0 flex-1 overflow-y-auto px-4 ${inline ? "max-h-[46vh]" : ""}`}>
           {row("liked", tile(LIKED, <Heart size={16} className="fill-white" />), "Liked Songs", plural(lib.liked, "song"))}
           {row("albums", tile(tint("b"), <Disc3 size={18} />), "Albums", plural(lib.albums, "album"))}
           {row("artists", tile(tint("c"), <UserCheck size={18} />), "Artists", plural(lib.artists, "artist"))}
@@ -2401,12 +2403,13 @@ function SpotifyImport() {
       <footer className="flex items-center gap-2 px-6 py-4">
         {name && <button onClick={() => (disconnect(), setLib(undefined))} className={quiet}>Sign Out</button>}
         <div className="ml-auto flex gap-2">
-          <button onClick={closeDialog} className={quiet}>Cancel</button>
+          <button onClick={close} className={quiet}>Cancel</button>
           {name ? <button disabled={!any} onClick={go} className={solid}>Import</button> : <button disabled={busy} onClick={signIn} className={`${btn} bg-[#1ed760] text-black`}>{busy ? "Waiting for Spotify…" : "Sign In with Spotify"}</button>}
         </div>
       </footer>
-    </Modal>
+    </>
   );
+  return inline ? <div className="flex w-full max-w-lg flex-col rounded-2xl bg-ink/[0.05] text-left">{body}</div> : <Modal label="Import from Spotify" onClose={closeDialog} className="flex max-h-[86vh] w-[min(520px,94vw)] flex-col">{body}</Modal>;
 }
 
 // Songs dropped on the window, one at a time before they go into Local Files: what the file says, read

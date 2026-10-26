@@ -5,6 +5,9 @@ import "./index.css";
 // Artwork that won't load (a moved file, a dead link) shows as no artwork (index.css), not a broken image.
 addEventListener("error", (e) => e.target instanceof HTMLImageElement && e.target.removeAttribute("src"), true);
 
+// No browser right-click menu (Reload, Inspect Element): only Mixtape's own, and Copy and Paste in text fields.
+addEventListener("contextmenu", (e) => !(e.target as HTMLElement).closest?.("input, textarea, [contenteditable]") && e.preventDefault());
+
 let Root: ComponentType;
 try {
   // One page, three windows: the mini player (store.ts toggleMini) is labelled "mini" and draws only
@@ -15,6 +18,7 @@ try {
   else {
     Root = (await import("./App")).default;
     void import("./startup").catch(console.error); // never holds the window up
+    if (/Mac/.test(navigator.userAgent)) void import("./menubar").catch(console.error);
     // Draw once the library, your own lyrics, what's downloaded and your files are read (a few ms), so none
     // flashes in late, and offline the first covers come from disk. A store that can't be read (it never
     // says it's done) doesn't hold the window up past a second.

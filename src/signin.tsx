@@ -1,6 +1,6 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { claimHandle, cleanHandle, handleFree, setProfile, cancelBrowserSignIn, enterCode, handBack, handingOff, resendSignUp, sendCode, signInInBrowser, signInWith, signInWithPassword, signOut, signUp, useAccount, viaBrowser } from "./account";
+import { claimHandle, cleanHandle, handleFree, setProfile, cancelBrowserSignIn, enterCode, handBack, handingOff, publicProfile, resendSignUp, sendCode, signInInBrowser, signInWith, signInWithPassword, signOut, signUp, useAccount, viaBrowser } from "./account";
 
 // Signing in: email and password, or Google. Making an account then asks for the
 // 6-digit code Supabase emails to confirm the address ({{ .Token }} in its "Confirm signup" template).
@@ -36,7 +36,17 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const { user, profile, synced } = useAccount();
+  const { user, profile } = useAccount();
+  // Handing off: whether you've picked a username yet, asked for on its own rather than waiting out a whole
+  // library sync, so the right screen shows at once. null: still asking.
+  const [named, setNamed] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!handingOff() || !user) return;
+    if (profile?.handle) return setNamed(true);
+    let on = true;
+    publicProfile(user.id).then((p) => on && setNamed(!!p?.profile?.handle), () => on && setNamed(false));
+    return () => void (on = false);
+  }, [user?.id, profile?.handle]);
   const run = (what: string, fn: () => Promise<unknown>) => {
     setBusy(what), setError(""), setNote("");
     fn().catch((e) => (/email not confirmed/i.test(e?.message) ? (setSent(email.trim()), setMode("code"), resendSignUp(email.trim()).then(() => setWait(30)), setNote("Confirm your email first: we sent you a new code.")) : setError(say(e)))).finally(() => setBusy(undefined));
@@ -84,7 +94,8 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
         {said}
       </div>
     );
-  if (handingOff() && user && synced && !profile?.handle) return <NameYourself s={s} heading={heading} />;
+  if (handingOff() && user && !profile?.handle && named === null) return <span className="spinner mx-auto block size-6 text-white/50" />;
+  if (handingOff() && user && !profile?.handle && !named) return <NameYourself s={s} heading={heading} />;
   if (handingOff() && user)
     return (
       <div className="w-full max-w-sm">
@@ -230,7 +241,7 @@ function NameFields({ s, name, setName, handle, setHandle, free, autoFocus }: { 
           <span className="pointer-events-none absolute top-1/2 left-4 mt-[3px] -translate-y-1/2 text-[16px] opacity-40">@</span>
           <input required value={handle} onChange={(e) => setHandle(cleanHandle(e.target.value))} name="username" autoComplete="username" spellCheck={false} minLength={3} className={`${s.field} pl-9`} />
         </span>
-        <span className={`mt-2 block text-[13px] font-medium ${free === false ? s.error : s.quiet}`}>{handle.length < 3 ? "At least 3 letters or numbers." : free === false ? "Someone already has that one." : free ? "It’s yours." : "Checking…"}</span>
+        <span className={`mt-2 block text-[13px] font-medium ${handle.length < 3 ? s.quiet : free === false ? s.error : free ? "text-[#3ddc84]" : s.quiet}`}>{handle.length < 3 ? "At least 3 letters or numbers." : free === false ? "Someone already has that one." : free ? "It’s yours." : "Checking…"}</span>
       </label>
     </>
   );
@@ -239,16 +250,17 @@ function NameFields({ s, name, setName, handle, setHandle, free, autoFocus }: { 
 // How strong a new password is: a bar that fills red, then yellow, then green, and the one thing that would
 // make it stronger. ponytail: counts length and character kinds, not a dictionary check.
 function Strength({ password, quiet }: { password: string; quiet: string }) {
-  const missing = [password.length >= 12 || "make it longer", /[a-z]/.test(password) && /[A-Z]/.test(password) || "mix in capitals", /\d/.test(password) || "add a number", /[^a-zA-Z\d]/.test(password) || "add a symbol"].filter((m) => m !== true);
+  const missing = [password.length >= 12 || "Make it longer", /[a-z]/.test(password) && /[A-Z]/.test(password) || "Mix in capitals", /\d/.test(password) || "Add a number", /[^a-zA-Z\d]/.test(password) || "Add a symbol"].filter((m) => m !== true);
   const score = password.length < 8 ? 0 : 4 - missing.length; // 0–4
-  const [word, colour] = score < 2 ? ["Weak", "#ff5a5f"] : score < 4 ? ["Okay", "#ffc53d"] : ["Strong", "#3ddc84"];
+  const [word, colour, lit] = score < 2 ? ["Weak", "#ff5a5f", 1] : score < 4 ? ["Okay", "#ffc53d", 2] : ["Strong", "#3ddc84", 3];
+  const tip = password.length < 8 ? `${8 - password.length} more character${8 - password.length > 1 ? "s" : ""}` : missing[0];
+  // The bar carries the colour; the words underneath stay quiet: how strong it is, then the one thing that'd help.
   return (
-    <span className="mt-2.5 flex items-center gap-3 text-[13px] font-medium">
-      <span className="flex flex-1 gap-1">
-        {[0, 1, 2].map((i) => <span key={i} className="h-1 flex-1 rounded-full bg-current/15 transition-colors duration-300" style={i <= (score < 2 ? 0 : score < 4 ? 1 : 2) ? { background: colour } : undefined} />)}
+    <span className="mt-2.5 block text-[13px]">
+      <span className="flex gap-1">
+        {[1, 2, 3].map((i) => <span key={i} className="h-[3px] flex-1 rounded-full bg-current/12 transition-colors duration-300" style={i <= lit ? { background: colour } : undefined} />)}
       </span>
-      <span style={{ color: colour }}>{word}</span>
-      {missing[0] && <span className={quiet}>{password.length < 8 ? `${8 - password.length} more` : missing[0]}</span>}
+      <span className={`mt-2 flex justify-between ${quiet}`}><span className="font-medium text-ink">{word}</span>{tip && <span>{tip}</span>}</span>
     </span>
   );
 }

@@ -154,8 +154,17 @@ function signedIn(user: User) {
   const was = useAccount.getState().user;
   if (was?.id !== user.id || was.email !== user.email) useAccount.setState({ user: { id: user.id, email: user.email }, out: false });
   if (watching && was?.id === user.id) return;
-  watch();
-  void syncNow();
+  // The library here belongs to whoever last signed in on this computer (it stays after signing out). Another
+  // account starts empty and gets only its own; the old one's is still in that account. A library from before
+  // any account goes up into the first one.
+  // Waits for both to load from disk first, or loading would bring the old one back.
+  const loaded = (st: typeof useLibrary | typeof useMine) => new Promise<void>((r) => (st.persist.hasHydrated() ? r() : st.persist.onFinishHydration(() => r())));
+  void Promise.all([loaded(useLibrary), loaded(useMine)]).then(() => {
+    if (localStorage.libraryOwner && localStorage.libraryOwner !== user.id) useLibrary.setState(useLibrary.getInitialState()), useMine.setState({ songs: {} });
+    localStorage.libraryOwner = user.id;
+    watch();
+    void syncNow();
+  });
 }
 function signedOut() {
   meta = undefined;

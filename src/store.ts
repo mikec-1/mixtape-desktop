@@ -127,7 +127,12 @@ export type Followed = { id: string; name: string; thumb?: string; at?: number }
 // skipped wherever a queue moves on by itself, and left out of radio.
 export type Library = { liked: Track[]; saved: Album[]; playlists: Playlist[]; followed: Followed[]; folders: Folder[]; pinned: string[]; hidden: Track[]; blocked: (Artist & { at?: number })[] };
 const empty = (): Library => ({ liked: [], saved: [], playlists: [], followed: [], folders: [], pinned: [], hidden: [], blocked: [] });
-export const useLibrary = create<Library>()(persist(empty, { name: "library", storage: createJSONStorage(() => idb) }));
+// Spotify songs it had blanked (spotify.ts real) came over nameless before that was caught; they're dropped on load.
+const blank = (t: Track) => t.id.startsWith("sp:") && !t.title;
+export const useLibrary = create<Library>()(persist(empty, { name: "library", storage: createJSONStorage(() => idb), merge: (saved, now) => {
+  const s = { ...now, ...(saved as Partial<Library>) };
+  return { ...s, liked: s.liked.filter((t) => !blank(t)), playlists: s.playlists.map((p) => (p.tracks.some(blank) ? { ...p, tracks: p.tracks.filter((t) => !blank(t)) } : p)) };
+} }));
 const lib = useLibrary.setState;
 let toasts = 0;
 // A sticky toast stays until replaced; one with the same text updates in place (import progress).
@@ -140,12 +145,17 @@ export const notify = (t: Omit<Toast, "id">) => {
 
 // Every library change goes through here: apply it, say so, offer Undo. Undo puts back only the
 // lists this change touched. ponytail: an edit to the same list in between (a rename) is undone with it.
+// When you last changed your library on purpose (here, or by confirming a warning), so sync can tell what
+// you removed from what went missing (account.ts).
+export let deliberate = 0;
+export const meantIt = () => void (deliberate = Date.now());
 function change(text: string, about: { title?: string; thumb?: string } | undefined, fn: (s: Library) => Partial<Library>, undoable = true) {
+  meantIt();
   const before = useLibrary.getState();
   const patch = fn(before);
   lib(patch);
   const restore = Object.fromEntries(Object.keys(patch).map((k) => [k, before[k as keyof Library]]));
-  notify({ text, detail: about?.title, thumb: about?.thumb, undo: undoable ? () => (lib(restore), set({ toast: undefined })) : undefined });
+  notify({ text, detail: about?.title, thumb: about?.thumb, undo: undoable ? () => (meantIt(), lib(restore), set({ toast: undefined })) : undefined });
 }
 
 const has = (list: { id: string }[], id: string) => list.some((x) => x.id === id);

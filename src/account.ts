@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { GoTrueClient, User } from "@supabase/auth-js";
-import { artistKey, idbGet, idbPut, notify, open, plays, useLibrary, useSettings, type Library, type Play, type Playlist, type View } from "./store";
+import { artistKey, deliberate, idbGet, idbPut, notify, open, plays, useLibrary, useSettings, type Library, type Play, type Playlist, type View } from "./store";
 import { useMine, type Mine } from "./lyrics";
 
 // Accounts, all optional: Sleeve works the same without one. Signed in, your library syncs between your
@@ -109,8 +109,11 @@ async function token() {
   if (error || !data.session) throw error ?? new Error("You’re signed out");
   return data.session.access_token;
 }
-async function rpc<T>(fn: string, args: object, bearer?: string) {
-  const r = await fetch(`${BASE}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: KEY!, ...(bearer && { authorization: `Bearer ${bearer}` }), "content-type": "application/json" }, body: JSON.stringify(args) });
+const rpc = <T>(fn: string, args: object, bearer?: string) => call<T>(`rpc/${fn}`, { method: "POST", body: JSON.stringify(args) }, bearer);
+// Your rows in the account's other tables (the Spotify ones), signed in.
+export const table = async <T>(path: string, init: RequestInit = {}) => call<T>(path, init, await token());
+async function call<T>(path: string, init: RequestInit, bearer?: string) {
+  const r = await fetch(`${BASE}/rest/v1/${path}`, { ...init, headers: { apikey: KEY!, ...(bearer && { authorization: `Bearer ${bearer}` }), "content-type": "application/json", ...init.headers } });
   const text = await r.text();
   if (!r.ok) {
     const { message, code } = (() => { try { return JSON.parse(text) as { message?: string; code?: string }; } catch { return {}; } })();
@@ -124,8 +127,10 @@ async function rpc<T>(fn: string, args: object, bearer?: string) {
 // device last agreed it with the server, so a difference is a change made here; cursor is how far
 // through the server's changes this device has read. A change from elsewhere to something not changed
 // here just lands; to something changed on both, the later change wins, except a playlist's songs,
-// which merge (added on either side are kept, removed on either side go).
-type Meta = { user: string; cursor: number; base: Record<string, string>; dirtyAt: Record<string, number> };
+// which merge (added on either side are kept, removed on either side go). meant: the removals you made on
+// purpose; the server refuses more than 50 others at once (Mixtape's guard against a library that went
+// missing here wiping it everywhere), and they come back from your account.
+type Meta = { user: string; cursor: number; base: Record<string, string>; dirtyAt: Record<string, number>; meant?: Record<string, 1> };
 type Change = { key: string; data: unknown; c: string; at: number };
 type Row = { kind: string; id: string; data: unknown; at: number; rev: number };
 let meta: Meta | undefined;
@@ -174,10 +179,11 @@ const seen = new Map<string, string>();
 function changes(m: Meta, now = Date.now()) {
   const out: Change[] = [];
   const check = (key: string, data: unknown, c: string) => {
-    if ((m.base[key] ?? "null") === c) return void (delete m.dirtyAt[key], seen.delete(key));
+    if ((m.base[key] ?? "null") === c) return void (delete m.dirtyAt[key], delete m.meant?.[key], seen.delete(key));
     if (seen.get(key) !== c) {
       if (seen.has(key) || !m.dirtyAt[key]) m.dirtyAt[key] = now;
       seen.set(key, c);
+      if (data === null && now - deliberate < 10_000) (m.meant ??= {})[key] = 1;
     }
     out.push({ key, data, c, at: m.dirtyAt[key] });
   };
@@ -191,7 +197,8 @@ function changes(m: Meta, now = Date.now()) {
 async function round(m: Meta, bearer: string) {
   const out = changes(m);
   const send = out.slice(0, 500);
-  const r = await rpc<{ items: Row[]; cursor: number; more: boolean; took: (number | null)[] }>("sync", { since: m.cursor, changes: send.map(({ key, data, at }) => ({ kind: key.slice(0, key.indexOf(":")), id: key.slice(key.indexOf(":") + 1), data, at })) }, bearer);
+  const gone = send.filter((c) => c.data === null), bulk = gone.length > 50 && gone.filter((c) => !m.meant?.[c.key]).length <= 50;
+  const r = await rpc<{ items: Row[]; cursor: number; more: boolean; took: (number | null)[] }>("sync", { since: m.cursor, changes: send.map(({ key, data, at }) => ({ kind: key.slice(0, key.indexOf(":")), id: key.slice(key.indexOf(":") + 1), data, at })), ...(bulk && { bulk }) }, bearer);
   if (m !== meta) return false; // signed out meanwhile
   r.took.forEach((rev, i) => rev !== null && setBase(m, send[i].key, send[i].c));
   merge(m, r.items);
@@ -315,6 +322,14 @@ export function syncNow(): Promise<void> {
     } catch (e) {
       // Deleted from another device: signed out here too, library kept.
       if ((e as { code?: string }).code === "SV001") void (await auth()).signOut({ scope: "local" }), signedOut(), notify({ text: "Your Account Was Deleted", detail: "Your library is still on this computer" });
+      // Lots went missing here without you removing them: forget they were here and read everything again,
+      // which puts them back.
+      else if ((e as { code?: string }).code === "SV002" && meta) {
+        for (const c of changes(meta)) if (c.data === null && !meta.meant?.[c.key]) delete meta.base[c.key];
+        meta.cursor = 0;
+        saveMeta(), (again = true);
+        notify({ text: "Your Library Was Restored", detail: "Songs went missing on this computer, so they came back from your account" });
+      }
       else useAccount.setState({ state: "error", error: e instanceof Error ? e.message : String(e) });
     } finally {
       running = undefined;

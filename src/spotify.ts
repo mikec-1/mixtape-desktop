@@ -2,20 +2,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { addPlays, follow, idb, newPlaylist, notify, plural, useLibrary } from "./store";
+import { table, useAccount } from "./account";
+import { addPlays, follow, idb, likedAs, newPlaylist, notify, plural, useLibrary } from "./store";
 import { bareTitle, importRows, pool, readLink } from "./import";
 import { length } from "./deezer";
 import { searchKind, type Album, type Track } from "./yt";
 
 // Signing in to Spotify (PKCE, back to account.rs on the one port registered with Spotify) to bring over
 // your playlists, Liked Songs, albums and artists, and your recent plays into History. Spotify only tells
-// apps your last 50 plays, so while you're signed in new ones are fetched at launch and every half hour.
+// apps your last 50 plays, so while you're signed in new ones are fetched at launch and every half hour,
+// and with an account the server fetches them too, even while Sleeve is closed (spotify_history).
 const CLIENT = "0e312a528cc34744b92021bed3f6edc9";
 const PORT = 43821;
 const REDIRECT = `http://127.0.0.1:${PORT}/callback`;
 const SCOPES = "playlist-read-private playlist-read-collaborative user-library-read user-follow-read user-read-recently-played";
 
-type Auth = { refresh?: string; access?: string; expires?: number; name?: string; lastPlay?: number }; // lastPlay: the newest play brought over, in ms
+// lastPlay: the newest play brought over, in ms. at: when this refresh token was handed out. linked: the
+// account it's kept with.
+type Auth = { refresh?: string; access?: string; expires?: number; name?: string; lastPlay?: number; at?: number; linked?: string };
 export const useSpotify = create<Auth>()(persist(() => ({}), { name: "spotify", storage: createJSONStorage(() => idb) }));
 
 const b64 = (b: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -24,10 +28,16 @@ const random = () => b64(crypto.getRandomValues(new Uint8Array(32)));
 async function grant(body: Record<string, string>) {
   const r = await fetch("https://accounts.spotify.com/api/token", { method: "POST", body: new URLSearchParams({ client_id: CLIENT, ...body }) });
   const d = await r.json().catch(() => ({}));
-  // Signed out on Spotify's side (access removed): sign out here too. Offline just fails.
-  if (d.error === "invalid_grant") disconnect();
+  // Spent: another device (or the server) refreshed it and got a newer one, kept with your account. Or
+  // signed out on Spotify's side (access removed): sign out here too. Offline just fails.
+  if (d.error === "invalid_grant" && body.refresh_token) {
+    if (await link().then(() => useSpotify.getState().refresh !== body.refresh_token, () => false)) return grant({ ...body, refresh_token: useSpotify.getState().refresh! });
+    disconnect();
+  }
   if (!r.ok) throw new Error(d.error_description ?? `Spotify answered ${r.status}`);
-  useSpotify.setState((s) => ({ access: d.access_token, expires: Date.now() + d.expires_in * 1000 - 60_000, refresh: d.refresh_token ?? s.refresh }));
+  const fresh = d.refresh_token && d.refresh_token !== useSpotify.getState().refresh;
+  useSpotify.setState((s) => ({ access: d.access_token, expires: Date.now() + d.expires_in * 1000 - 60_000, refresh: d.refresh_token ?? s.refresh, ...(fresh && { at: Date.now() }) }));
+  if (fresh) void link().catch(() => {});
 }
 
 export async function connect() {
@@ -41,9 +51,33 @@ export async function connect() {
   if (!code || back.get("state") !== state) throw new Error(back.get("error") === "access_denied" ? "You didn’t allow it on Spotify" : "Signing in didn’t finish");
   await grant({ grant_type: "authorization_code", code, redirect_uri: REDIRECT, code_verifier: verifier });
   // Plays from before signing in come over with the import, if you pick them.
-  useSpotify.setState({ name: (await api("/me")).display_name, lastPlay: Date.now() });
+  useSpotify.setState({ name: (await api("/me")).display_name, lastPlay: Date.now(), at: Date.now() });
+  void link().catch(() => {});
 }
-export const disconnect = () => useSpotify.setState({}, true);
+// Everywhere: it's taken off your account too.
+export function disconnect() {
+  const { linked } = useSpotify.getState();
+  if (linked && linked === useAccount.getState().user?.id) void table(`spotify_connections?user_id=eq.${linked}`, { method: "DELETE" }).catch(() => {});
+  useSpotify.setState({}, true);
+}
+
+// Spotify follows your account, as in Mixtape: whichever device signed in (or refreshed) last keeps its
+// sign-in with your account, so another device picks it up, and the server brings your plays into History
+// every half hour (supabase/functions/spotify_history). Gone from the account: disconnected elsewhere.
+async function link() {
+  const user = useAccount.getState().user?.id;
+  if (!user) return;
+  const s = useSpotify.getState();
+  const [row] = await table<{ refresh_token: string; updated_at: string }[]>("spotify_connections?select=refresh_token,updated_at");
+  if (row && row.refresh_token !== s.refresh && (!s.refresh || Date.parse(row.updated_at) > (s.at ?? 0))) {
+    useSpotify.setState({ refresh: row.refresh_token, access: undefined, expires: 0, at: Date.parse(row.updated_at), linked: user });
+    if (!s.refresh) useSpotify.setState({ name: (await api("/me")).display_name });
+  } else if (!row && s.linked === user) disconnect();
+  else if (s.refresh && row?.refresh_token !== s.refresh) {
+    await table("spotify_connections", { method: "POST", headers: { prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ user_id: user, refresh_token: s.refresh, scope: SCOPES, updated_at: new Date(s.at ?? Date.now()).toISOString() }) });
+    useSpotify.setState({ linked: user });
+  } else if (s.refresh && s.linked !== user) useSpotify.setState({ linked: user });
+}
 
 // One refresh at a time: Spotify may hand back a new refresh token, and the old one stops working.
 let refreshing: Promise<void> | undefined;
@@ -89,6 +123,8 @@ const track = (t: SpTrack): Track => ({
   ...(t.explicit && { explicit: true as const }),
   ...(t.external_ids?.isrc && { isrc: t.external_ids.isrc }),
 });
+// Spotify blanks a song it no longer has: no name, artist or length, only its cover. Those stay behind.
+const real = (t?: SpTrack | null): t is SpTrack => t?.type === "track" && !!t.name;
 const squash = (s: string) => s.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
 export type SpPlaylist = { id: string; name: string; images?: { url: string }[] | null; items?: { total: number }; tracks?: { total: number }; owner?: { id: string; display_name?: string } };
@@ -100,14 +136,30 @@ export async function contents() {
 
 // The last 50 plays (or those since after), put in History.
 async function recent(after?: number) {
-  const items: { track: SpTrack; played_at: string }[] = (await api(`/me/player/recently-played?limit=50${after ? `&after=${after}` : ""}`)).items.filter((p: { track?: SpTrack }) => p.track?.type === "track");
+  const items: { track: SpTrack; played_at: string }[] = (await api(`/me/player/recently-played?limit=50${after ? `&after=${after}` : ""}`)).items.filter((p: { track?: SpTrack }) => real(p.track));
   const plays = items.map((p) => ({ t: track(p.track), at: Date.parse(p.played_at) }));
   await addPlays(plays);
   if (plays.length) useSpotify.setState((s) => ({ lastPlay: Math.max(s.lastPlay ?? 0, ...plays.map((p) => p.at)) }));
   return plays;
 }
-const syncRecent = () => useSpotify.getState().refresh && void recent(useSpotify.getState().lastPlay).catch(() => {});
-if ("__TAURI_INTERNALS__" in window) setTimeout(() => (syncRecent(), setInterval(syncRecent, 30 * 60_000)), 15_000);
+// The plays the server kept since the newest one here (it may have caught more than Spotify's last 50
+// while Sleeve was closed), then Spotify's latest.
+async function fromAccount(after = 0) {
+  const rows = await table<{ played_at: string; track: SpTrack }[]>(`spotify_plays?select=played_at,track&played_at=gt.${encodeURIComponent(new Date(after).toISOString())}&order=played_at`);
+  const plays = rows.filter((r) => r.track?.name).map((r) => ({ t: track(r.track), at: Date.parse(r.played_at) }));
+  await addPlays(plays);
+  if (plays.length) useSpotify.setState((s) => ({ lastPlay: Math.max(s.lastPlay ?? 0, ...plays.map((p) => p.at)) }));
+}
+const syncRecent = async () => {
+  if (useAccount.getState().user) await link().catch(() => {});
+  if (!useSpotify.getState().refresh) return;
+  if (useSpotify.getState().linked) await fromAccount(useSpotify.getState().lastPlay).catch(() => {});
+  await recent(useSpotify.getState().lastPlay).catch(() => {});
+};
+if ("__TAURI_INTERNALS__" in window) {
+  setTimeout(() => (void syncRecent(), setInterval(syncRecent, 30 * 60_000)), 15_000);
+  useAccount.subscribe((a, was) => a.user?.id !== was.user?.id && a.user && void syncRecent());
+}
 
 export type Pick = { playlists: SpPlaylist[]; liked: boolean; albums: boolean; artists: boolean; recent: boolean };
 export async function importSpotify(pick: Pick) {
@@ -135,7 +187,7 @@ export async function importSpotify(pick: Pick) {
     for (const p of pick.playlists) {
       say(`Importing ${p.name}…`, pic(p));
       const songs = await all<{ item?: SpTrack | null; track?: SpTrack | null }>(`/playlists/${p.id}/items?limit=100`)
-        .then((es) => es.flatMap((e) => ((e.item ?? e.track)?.type === "track" ? [track((e.item ?? e.track)!)] : [])))
+        .then((es) => es.flatMap((e) => (real(e.item ?? e.track) ? [track((e.item ?? e.track)!)] : [])))
         .catch(() => undefined);
       if (songs) songs.length && newPlaylist(songs, undefined, p.name, pic(p));
       else {

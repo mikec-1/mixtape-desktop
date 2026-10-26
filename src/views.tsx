@@ -2299,7 +2299,7 @@ function Warning({ d }: { d: Extract<Dialog, { kind: "warn" }> }) {
       {d.text && <p className="mt-1.5 text-sm text-muted">{d.text}</p>}
       <div className="mt-6 flex justify-end gap-2">
         <button onClick={closeDialog} className={quiet}>Cancel</button>
-        <button autoFocus onClick={() => (closeDialog(), d.then())} className={`${btn} bg-[#ff375f] text-white`}>{d.yes}</button>
+        <button autoFocus onClick={() => (meantIt(), closeDialog(), d.then())} className={`${btn} bg-[#ff375f] text-white`}>{d.yes}</button>
       </div>
     </Modal>
   );

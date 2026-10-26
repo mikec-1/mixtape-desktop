@@ -4,7 +4,7 @@ import { ROOTS, audio, back, cycleRepeat, go, next, prev, seekTo, setMuted, setV
 import { actionFor, comboFrom, recording, searchTab } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, SongName, LikeButton, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
-import { handingOff, mustSignIn, publicProfile, useAccount } from "./account";
+import { handingOff, mustSignIn, publicProfile, setProfile, useAccount } from "./account";
 import { Welcome } from "./welcome";
 import { Hello } from "./hello";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -28,6 +28,10 @@ function firstLaunch() {
 }
 
 export default function App() {
+  // Libraries from before the welcome only marked it done on this computer; tell the account too, so a new
+  // computer or the web doesn't show it again. Waits for the profile so it never syncs a blank name.
+  const signedIn = useAccount((s) => !!s.user), profile = useAccount((s) => s.profile);
+  useEffect(() => { if (signedIn && profile?.name && !profile.welcomed && localStorage.onboarded) setProfile({ welcomed: true }); }, [signedIn, profile]);
   // Settings → About can show it again ("preview"), after a reload.
   const [welcome, setWelcome] = useState<boolean | "preview">(() => (sessionStorage.welcome ? (delete sessionStorage.welcome, "preview") : firstLaunch()));
   // Dev only: ⌘⇧O replays the welcome from sign-in, without wiping anything.

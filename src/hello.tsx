@@ -67,7 +67,7 @@ function Wall() {
   const all = Array.from({ length: Math.max(60, covers.length) }, (_, i) => covers[i % covers.length] ?? ""); // a short chart repeats, so no column runs out
   const cols = Array.from({ length: COLS }, (_, i) => all.filter((_, j) => j % COLS === i));
   return (
-    <div aria-hidden className="absolute -inset-y-1/4 right-0 flex w-[min(78%,1100px)] -rotate-6 scale-125 gap-4 opacity-90">
+    <div aria-hidden className="pointer-events-none absolute -inset-y-1/4 right-0 flex w-[min(78%,1100px)] -rotate-6 scale-125 gap-4 opacity-90">
       {cols.map((col, i) => (
         // Each column twice over, so sliding it by half loops without a seam; neighbours go opposite ways.
         <div key={i} className="flex h-max flex-1 flex-col self-start animate-[wall_linear_infinite]" style={{ animationDuration: `${(32 + i * 6) * (calm ? 1.6 : 1)}s`, animationDirection: i % 2 ? "reverse" : "normal" }}>

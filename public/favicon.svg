@@ -1,0 +1,5 @@
+<!-- MixtapeMark — the same waveform.circle.fill the app draws. The bars are
+     knocked out, not filled, so the mark sits on a light or dark tab alike. -->
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <path fill="#ff6b00" fill-rule="evenodd" d="M50 0A50 50 0 1 1 50 100A50 50 0 1 1 50 0ZM21.32 45.57a3.05 3.05 0 0 1 6.1 0v8.85a3.05 3.05 0 0 1 -6.1 0ZM31.57 36.94a3.05 3.05 0 0 1 6.1 0v26.11a3.05 3.05 0 0 1 -6.1 0ZM41.82 25.09a3.05 3.05 0 0 1 6.1 0v49.83a3.05 3.05 0 0 1 -6.1 0ZM52.07 41.55a3.05 3.05 0 0 1 6.1 0v16.89a3.05 3.05 0 0 1 -6.1 0ZM62.32 32.12a3.05 3.05 0 0 1 6.1 0v35.76a3.05 3.05 0 0 1 -6.1 0ZM72.57 43.54a3.05 3.05 0 0 1 6.1 0v12.92a3.05 3.05 0 0 1 -6.1 0Z" />
+</svg>

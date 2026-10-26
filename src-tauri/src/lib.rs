@@ -9,7 +9,7 @@ mod offline;
 /// Lets the mini player and the menu bar player float over other apps' full-screen spaces (a Chrome
 /// video, say). macOS only shows a regular app's windows there if they're non-activating panels, so
 /// the window is turned into one: an NSPanel subclass that can still take key (for its buttons and
-/// search), joins every space as a full-screen auxiliary, and stays put when Sleeve isn't frontmost.
+/// search), joins every space as a full-screen auxiliary, and stays put when Mixtape isn't frontmost.
 /// Its own class is kept to put back before it closes (sink): WebKit unregisters its observers of the
 /// window as the page goes, and under another class that throws, which aborts the app.
 #[cfg(target_os = "macos")]
@@ -27,11 +27,11 @@ fn float(window: tauri::WebviewWindow) {
         if floated.iter().any(|(label, _)| label == window.label()) {
             return; // already one (the page reloaded)
         }
-        let class = AnyClass::get(c"SleeveMiniPanel").unwrap_or_else(|| {
+        let class = AnyClass::get(c"MixtapeMiniPanel").unwrap_or_else(|| {
             extern "C-unwind" fn yes(_: &AnyObject, _: Sel) -> Bool {
                 Bool::YES
             }
-            let mut panel = ClassBuilder::new(c"SleeveMiniPanel", NSPanel::class()).unwrap();
+            let mut panel = ClassBuilder::new(c"MixtapeMiniPanel", NSPanel::class()).unwrap();
             panel.add_method(sel!(canBecomeKeyWindow), yes as extern "C-unwind" fn(_, _) -> _);
             panel.register()
         });

@@ -170,7 +170,7 @@ export const addedFiles = (paths: string[]) => {
   const t = fileTrack(useLocal.getState().files[paths[0]]);
   notify({ text: paths.length > 1 ? `Added ${paths.length} Songs` : `Added ${t.title}`, detail: "In your Local Files", thumb: t.thumb });
 };
-// Takes songs out of Sleeve, not off the disk: songs dropped on their own go, ones in a folder are passed
+// Takes songs out of Mixtape, not off the disk: songs dropped on their own go, ones in a folder are passed
 // over by later scans. Gone from your playlists and the queue too.
 export function removeFiles(paths: string[]) {
   const out = new Set(paths);

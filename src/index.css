@@ -9,7 +9,7 @@
   --color-muted: light-dark(#6e6e73, #98989d);
   /* Tint taken from the playing track's artwork (store.ts). Lightness is clamped so paper on it
      and it on paper both stay above 4.5:1; dark mode flips the range. With no colour (nothing
-     playing, or turned off in Settings) it's Sleeve's pink. */
+     playing, or turned off in Settings) it's Mixtape's pink. */
   --color-accent: light-dark(
     oklch(from var(--accent-raw) clamp(0.22, l, 0.55) min(c, 0.2) h),
     oklch(from var(--accent-raw) max(clamp(0.66, l, 0.82), 0.97 - c * 10) min(c, 0.2) h)

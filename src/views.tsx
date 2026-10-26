@@ -87,7 +87,7 @@ export function Search() {
   const kind = useAsync(() => (ok && tab !== "all" ? (searchKind(term, KINDS[tab]) as Promise<(Track & Album & SearchArtist)[]>).then((items) => ({ tab, items })) : undefined), [term, tab, online]);
   const { error, loading } = tab === "all" ? found : kind;
   const sugs = useAsync(() => (typing && query.trim() ? suggestions(query) : undefined), [typing && query]).data ?? [];
-  // A Sleeve link pasted in opens what it's for.
+  // A Mixtape link pasted in opens what it's for.
   useEffect(() => {
     const view = fromLink(query);
     if (view) useStore.setState({ query: "" }), open(view);
@@ -284,7 +284,7 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
     ...(t.file
       ? [
           { text: "Edit Song Info…", icon: PencilLine, action: () => useStore.setState({ dialog: { kind: "songs", paths: [t.file!], editing: true } }) },
-          { text: "Remove from Sleeve", icon: Trash2, action: () => unfile([t]) },
+          { text: "Remove from Mixtape", icon: Trash2, action: () => unfile([t]) },
         ]
       : []),
     { text: "Edit Lyrics…", icon: MicVocal, action: () => editLyrics(t) },
@@ -328,7 +328,7 @@ function tracksMenu(ts: Track[], playlist?: { id: string; at: number[] }) {
       ],
     },
     ...(playlist ? [{ text: "Remove from This Playlist", icon: ListMinus, action: () => unlist(playlist.id, playlist.at, ts) }] : []),
-    ...(files ? [{ text: "Remove from Sleeve", icon: Trash2, action: () => unfile(ts) }] : []),
+    ...(files ? [{ text: "Remove from Mixtape", icon: Trash2, action: () => unfile(ts) }] : []),
   ]);
 }
 
@@ -706,7 +706,7 @@ type Item = { key: string; kind: LibraryKind; id: string; title: string; sub: st
 const isAlbum = (id: string) => id.startsWith("MPRE") || id.startsWith("dz:album:");
 
 // What the Library shows for a filter and search, pinned first (Liked Songs before all), then in order.
-// Searching looks inside folders too. at: when it was added; things saved before Sleeve kept the time
+// Searching looks inside folders too. at: when it was added; things saved before Mixtape kept the time
 // keep their old order.
 // local: how many songs Local Files has, or -1 when you've added no folders (and it isn't shown).
 // downloaded: the keys of what's downloaded (offline.ts).
@@ -1173,10 +1173,10 @@ export function ProfilePage({ id }: { id: string }) {
   const mine = useAccount((s) => s.user?.id === id);
   const synced = useAccount((s) => (mine ? s.synced : 0)); // your own: as it is after each sync
   const { data, error } = useAsync(() => (canSignIn ? publicProfile(id) : Promise.reject(new Error("Accounts aren’t set up"))), [id, online, synced]);
-  if (data === null) return <p className="px-8 pt-20 text-muted">There’s no Sleeve profile here any more.</p>;
+  if (data === null) return <p className="px-8 pt-20 text-muted">There’s no Mixtape profile here any more.</p>;
   if (!data && error) return <p title={error} className="px-8 pt-20 text-muted">Couldn’t open this profile. Check your connection and try again.</p>;
   if (!data) return <Skeleton className="h-[300px] bg-ink/[0.04]" />;
-  const name = data.profile.name || "Sleeve Listener";
+  const name = data.profile.name || "Mixtape Listener";
   return (
     <div className="animate-enter px-8 pt-20">
       <div className="flex items-end gap-8">
@@ -1272,7 +1272,7 @@ export function LocalPage() {
       <div className="mt-6 px-8">
         {!folders.length ? (
           <div className="flex items-center gap-4">
-            <p className="text-muted">{canHaveFiles ? "Add a folder of music on this Mac and it plays here, alongside everything else." : "Local files play in the Sleeve app."}</p>
+            <p className="text-muted">{canHaveFiles ? "Add a folder of music on this Mac and it plays here, alongside everything else." : "Local files play in the Mixtape app."}</p>
             {canHaveFiles && <button onClick={() => void addFolder()} className={solid}><Plus size={16} /> Add Folder…</button>}
           </div>
         ) : (
@@ -1392,7 +1392,7 @@ export function WrappedPage() {
         if (!b) return;
         const a = document.createElement("a");
         a.href = URL.createObjectURL(b);
-        a.download = `Sleeve Wrapped ${label}.png`;
+        a.download = `Mixtape Wrapped ${label}.png`;
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
         notify({ text: "Card Saved", detail: "Saved to your Downloads folder" });
@@ -2475,7 +2475,7 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
       <header className="flex items-start gap-4 px-6 pt-5">
         <div className="min-w-0 flex-1">
           <h2 className="text-2xl font-bold tracking-tight">{d.editing ? "Edit Song Info" : "Review Song"}{d.paths.length > 1 && <span className="ml-2 text-base font-semibold text-muted">{at + 1} of {d.paths.length}</span>}</h2>
-          <p className="mt-0.5 text-muted">{d.editing ? "Fix anything that’s off. Only Sleeve changes, not the file." : "Check what we found before it’s added to your library."}</p>
+          <p className="mt-0.5 text-muted">{d.editing ? "Fix anything that’s off. Only Mixtape changes, not the file." : "Check what we found before it’s added to your library."}</p>
         </div>
         <button onClick={closeDialog} aria-label="Close" className="press grid size-8 shrink-0 place-items-center rounded-full bg-ink/[0.08] hover:bg-ink/[0.14]">
           <X size={16} />
@@ -2709,7 +2709,7 @@ function LyricCard({ d }: { d: Extract<Dialog, { kind: "card" }> }) {
   );
 }
 
-// The card, 1080 × 1350: the backdrop, the song at the top, the lines big in the middle, Sleeve at the foot.
+// The card, 1080 × 1350: the backdrop, the song at the top, the lines big in the middle, Mixtape at the foot.
 // The artwork backdrop is the cover drawn tiny and stretched, which blurs it the same in every WebView.
 const cardArt = (t: Track) =>
   new Promise<HTMLImageElement | undefined>((ok) => {
@@ -2780,7 +2780,7 @@ async function drawCard(c: HTMLCanvasElement, t: Track, texts: string[], backdro
   }
   ctx.globalAlpha = 0.7;
   ctx.font = font(800, 34);
-  ctx.fillText("Sleeve", pad, H - pad + 10);
+  ctx.fillText("Mixtape", pad, H - pad + 10);
   ctx.globalAlpha = 1;
 }
 function fit(ctx: CanvasRenderingContext2D, s: string, w: number) {
@@ -2815,7 +2815,7 @@ export async function restore(file: File) {
     // A full export (Settings → Account) has your lyrics too: added to what's here.
     if (lyrics && typeof lyrics === "object" && Object.values(lyrics).every((m) => typeof (m as { text?: unknown })?.text === "string")) useMine.setState((s) => ({ songs: { ...s.songs, ...lyrics } }));
   } catch {
-    notify({ text: "Couldn’t Restore", detail: `${file.name} isn’t a Sleeve library export` });
+    notify({ text: "Couldn’t Restore", detail: `${file.name} isn’t a Mixtape library export` });
   }
 }
 
@@ -2938,7 +2938,7 @@ function AccountPane() {
   if (!canSignIn)
     return (
       <>
-        <p className="max-w-xl text-[13px] text-muted">Accounts aren’t set up in this copy of Sleeve, so your library stays on this computer. Everything works without one.</p>
+        <p className="max-w-xl text-[13px] text-muted">Accounts aren’t set up in this copy of Mixtape, so your library stays on this computer. Everything works without one.</p>
         <button onClick={() => void exportAll()} className={`${quiet} mt-6`}><Download size={16} /> Export Your Data</button>
       </>
     );
@@ -3010,7 +3010,7 @@ function AccountPane() {
         </div>
         {deleting && (
           <div ref={(el) => el?.scrollIntoView({ block: "nearest", behavior: "smooth" })} role="alertdialog" aria-label="Delete Account" className="mt-4 max-w-xl animate-enter rounded-2xl bg-[#ff375f]/10 p-5">
-            <p className="font-semibold">Delete your Sleeve account?</p>
+            <p className="font-semibold">Delete your Mixtape account?</p>
             <p className="mt-1 text-sm text-muted">Everything synced with it is deleted for good, and your public playlists and profile go with it. Your library stays on this computer.</p>
             <div className="mt-4 flex gap-2">
               <button onClick={() => (setDeleting("busy"), void deleteAccount().catch((e) => (setDeleting(undefined), report(e))))} disabled={deleting === "busy"} className={`${btn} bg-[#ff375f] text-white`}>{deleting === "busy" ? "Deleting…" : "Delete Account"}</button>
@@ -3036,7 +3036,7 @@ function LinkedAccountsPane() {
   const linkBrainz = () => token && (set({ listenBrainzToken: token }), setToken(""), notify({ text: "Connected to ListenBrainz" }));
   return (
     <div className={card}>
-      <Row label="Last.fm" detail={lastfmSessionKey ? `Scrobbling as ${lastfmUsername}` : lastfm.error ?? (lastfm.token ? "Allow Sleeve in your browser, then come back and click Done" : "Scrobble what you play to Last.fm")}>
+      <Row label="Last.fm" detail={lastfmSessionKey ? `Scrobbling as ${lastfmUsername}` : lastfm.error ?? (lastfm.token ? "Allow Mixtape in your browser, then come back and click Done" : "Scrobble what you play to Last.fm")}>
         {lastfmSessionKey ? (
           <button onClick={lastfmSignOut} className={quiet}>Disconnect</button>
         ) : lastfm.token ? (
@@ -3079,7 +3079,7 @@ function Appearance() {
       </Group>
       <Group title="Colour" about="Where the highlight colour comes from.">
         <Choice label="From Artwork" on={artworkAccent} onPick={() => set({ artworkAccent: true })}><Mini tint="#ff8a3d" /></Choice>
-        <Choice label="Sleeve Pink" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Mini tint="#ff375f" /></Choice>
+        <Choice label="Mixtape Pink" on={!artworkAccent} onPick={() => set({ artworkAccent: false })}><Mini tint="#ff375f" /></Choice>
       </Group>
       <div className={card}>
         <Row label="Reduce Motion" detail={reduceMotion ? "Things fade in place instead of sliding" : "Follows the system’s Reduce Motion"}>
@@ -3342,7 +3342,7 @@ function Mini({ scheme, tint }: { scheme?: "light" | "dark"; tint?: string }) {
 function exportLibrary() {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(useLibrary.getState())], { type: "application/json" }));
-  a.download = `Sleeve Library ${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `Mixtape Library ${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   notify({ text: "Library Exported", detail: "Saved to your Downloads folder" });
@@ -3500,7 +3500,7 @@ function Downloads() {
     <section className="mt-8">
       <h3 className={`${subhead} mb-1`}>Downloads</h3>
       <p className="mb-3 text-xs text-muted">
-        {entries.length ? `${count(n)}${size !== undefined ? `, ${bytes(size)}` : ""}${waiting.length ? `, ${waiting.length} still to come` : ""}. They play without a connection, and only in Sleeve.` : "Download a playlist or album with its arrow button and it plays without a connection."}
+        {entries.length ? `${count(n)}${size !== undefined ? `, ${bytes(size)}` : ""}${waiting.length ? `, ${waiting.length} still to come` : ""}. They play without a connection, and only in Mixtape.` : "Download a playlist or album with its arrow button and it plays without a connection."}
       </p>
       {entries.length > 0 && (
         <>
@@ -3530,7 +3530,7 @@ function LocalFolders() {
   return (
     <section className="mt-8">
       <h3 className={`${subhead} mb-1`}>Local Files</h3>
-      <p className="mb-3 text-xs text-muted">{folders.length ? `${count(songs)} from these folders${scanning ? ", looking for changes…" : ""}. They’re read again each time Sleeve opens.` : "Music on this Mac plays alongside everything else. Add a folder and its songs land in Local Files."}</p>
+      <p className="mb-3 text-xs text-muted">{folders.length ? `${count(songs)} from these folders${scanning ? ", looking for changes…" : ""}. They’re read again each time Mixtape opens.` : "Music on this Mac plays alongside everything else. Add a folder and its songs land in Local Files."}</p>
       {folders.length > 0 && (
         <div className={`${card} mb-3`}>
           {folders.map((f) => (
@@ -3625,7 +3625,7 @@ function Privacy() {
   return (
     <>
       <div className={card}>
-        <Row label="Private Session" detail={priv ? "What you play now isn’t kept, for 6 hours or until Sleeve quits" : "Plays nothing into your history until Sleeve quits"}>
+        <Row label="Private Session" detail={priv ? "What you play now isn’t kept, for 6 hours or until Mixtape quits" : "Plays nothing into your history until Mixtape quits"}>
           <Switch label="Private Session" on={priv} onChange={(on) => usePrivate.setState({ on })} />
         </Row>
         <Row label="Listening History" detail={history ? "Songs you play for 30 s are kept, on this computer only" : "Nothing you play is kept"}>
@@ -3635,7 +3635,7 @@ function Privacy() {
           </div>
         </Row>
       </div>
-      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">Sleeve sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
+      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">Mixtape sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
     </>
   );
 }
@@ -3650,10 +3650,10 @@ function Startup() {
   const isMac = /Mac/.test(navigator.userAgent);
   return (
     <div className={card}>
-      <Row label="Open at Login" detail="Sleeve starts when you log in">
+      <Row label="Open at Login" detail="Mixtape starts when you log in">
         <Switch label="Open at Login" on={!!login} onChange={toggleLogin} />
       </Row>
-      <Row label="Open in the Background" detail={login ? "Opened at login, the window stays out of the way until you click Sleeve" : "Once Open at Login is on"}>
+      <Row label="Open in the Background" detail={login ? "Opened at login, the window stays out of the way until you click Mixtape" : "Once Open at Login is on"}>
         <Switch label="Open in the Background" on={loginHidden} onChange={(loginHidden) => set({ loginHidden })} />
       </Row>
       {isMac ? (
@@ -3665,14 +3665,14 @@ function Startup() {
           <Switch label="Tray Player" on={menuBar !== "off"} onChange={(on) => set({ menuBar: on ? "icon" : "off" })} />
         </Row>
       )}
-      <Row label={isMac ? "Keep in the Menu Bar" : "Close to Tray"} detail={closeToTray ? `Closing the window keeps Sleeve playing, with its icon in the ${isMac ? "menu bar" : "tray"}` : "Closing the window quits Sleeve"}>
+      <Row label={isMac ? "Keep in the Menu Bar" : "Close to Tray"} detail={closeToTray ? `Closing the window keeps Mixtape playing, with its icon in the ${isMac ? "menu bar" : "tray"}` : "Closing the window quits Mixtape"}>
         <Switch label={isMac ? "Keep in the Menu Bar" : "Close to Tray"} on={closeToTray} onChange={(closeToTray) => set({ closeToTray })} />
       </Row>
     </div>
   );
 }
 
-// The open-source parts Sleeve is built on, and their licences.
+// The open-source parts Mixtape is built on, and their licences.
 const LICENCES: [string, string][] = [
   ["Tauri and its plugins", "MIT or Apache-2.0"],
   ["React", "MIT"],
@@ -3693,8 +3693,8 @@ function About() {
       <div className="flex flex-col items-center rounded-2xl bg-ink/[0.04] px-6 py-8 text-center">
         <img src={appIcon} alt="" className="size-16 rounded-2xl" />
         <div className="mt-3 flex items-center gap-2">
-          <span className="text-xl font-bold tracking-tight">Sleeve</span>
-          <span className="flex items-center gap-1.5 rounded-full bg-ink/[0.07] px-2 py-0.5 text-xs font-semibold tabular-nums"><span className="size-1.5 rounded-full bg-[#30d158]" />v{version}</span>
+          <span className="text-xl font-bold tracking-tight">Mixtape</span>
+          <span className="flex items-center gap-1.5 rounded-full bg-ink/[0.07] px-2 py-0.5 text-xs font-semibold tabular-nums"><span className="size-1.5 rounded-full bg-[#30d158]" />v{version} Beta</span>
         </div>
         <p className="mt-1 text-[13px] text-muted">Your library from anywhere, in one free player.</p>
         <div className="mt-5 flex flex-wrap justify-center gap-2">
@@ -3705,7 +3705,7 @@ function About() {
       </div>
       <section className="mt-8">
         <h3 className={`${subhead} mb-1`}>Licences</h3>
-        <p className="mb-3 text-xs text-muted">Sleeve is built on these open-source projects. Thank you.</p>
+        <p className="mb-3 text-xs text-muted">Mixtape is built on these open-source projects. Thank you.</p>
         <div className={card}>
           {LICENCES.map(([name, licence]) => (
             <div key={name} className="flex h-10 items-center justify-between gap-6">

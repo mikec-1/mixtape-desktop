@@ -48,7 +48,7 @@ export default function Mini() {
           {s?.line ? (
             <div key={s.line} data-tauri-drag-region className="animate-enter truncate text-[13px] font-semibold text-accent">{s.line}</div>
           ) : (
-            <div data-tauri-drag-region className="truncate text-[13px] text-muted">{t?.artists.map((a) => a.name).join(", ") || "Sleeve"}</div>
+            <div data-tauri-drag-region className="truncate text-[13px] text-muted">{t?.artists.map((a) => a.name).join(", ") || "Mixtape"}</div>
           )}
         </div>
         <div className="flex items-center justify-center gap-3">

@@ -42,7 +42,7 @@ type State = {
   more?: "finding" | "none"; // Autoplay looking for similar songs, or finding none
 };
 // A modal over everything: the lyrics editor (for a song, by its key in lyrics.ts useMine; track when it's
-// one Sleeve knows, to stamp times with while it plays), or a lyric card of the playing song.
+// one Mixtape knows, to stamp times with while it plays), or a lyric card of the playing song.
 export type Dialog =
   | { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track }
   | { kind: "card"; track: Track; pick: number[] }
@@ -209,7 +209,7 @@ if (useLibrary.persist.hasHydrated()) tidy();
 else useLibrary.persist.onFinishHydration(tidy);
 export const toggleSave = (a: Album) =>
   change(has(useLibrary.getState().saved, a.id) ? "Removed from Library" : "Saved to Library", a, (s) => ({ saved: toggleIn(s.saved, a) }));
-// Several at once, quietly (the artists picked when you first open Sleeve).
+// Several at once, quietly (the artists picked when you first open Mixtape).
 export const follow = (artists: Followed[]) =>
   lib((s) => ({ followed: [...artists.filter((a) => !has(s.followed, a.id)).map((a) => ({ ...a, at: Date.now() })), ...s.followed] }));
 export const toggleFollow = (a: Followed) =>
@@ -343,7 +343,7 @@ export function patchAll(ps: Map<string, Partial<Track>>) {
   useHistory.setState((s) => ({ recent: fix(s.recent) }));
 }
 
-// Takes songs out of everywhere they're kept (a file removed from Sleeve). One playing stops, and the
+// Takes songs out of everywhere they're kept (a file removed from Mixtape). One playing stops, and the
 // song after it waits in its place.
 export function forget(ids: string[]) {
   const out = new Set(ids);
@@ -391,7 +391,7 @@ void (async () => {
   await plays((p) => (seen.length < RECENT && !seen.some((x) => sameSong(x, p.t)) && seen.push(p.t), seen.length < RECENT)).catch(() => {});
   useHistory.setState((s) => ({ recent: [...s.recent, ...seen.filter((t) => !s.recent.some((x) => sameSong(x, t)))].slice(0, RECENT) }));
 })();
-// A private session (Settings → Privacy, until Sleeve quits or 6 hours pass) or history switched off: plays aren't kept.
+// A private session (Settings → Privacy, until Mixtape quits or 6 hours pass) or history switched off: plays aren't kept.
 export const usePrivate = create<{ on: boolean }>()(() => ({ on: false }));
 let privateEnds: ReturnType<typeof setTimeout> | undefined;
 usePrivate.subscribe((s) => {
@@ -1097,5 +1097,5 @@ export async function toggleMini() {
   const mini = await WebviewWindow.getByLabel("mini");
   if (mini) return mini.close();
   // Borderless and transparent: mini.tsx draws the rounded card and its own close button.
-  new WebviewWindow("mini", { title: "Sleeve", width: 380, height: 140, resizable: false, alwaysOnTop: true, visibleOnAllWorkspaces: true, decorations: false, transparent: true, shadow: true });
+  new WebviewWindow("mini", { title: "Mixtape", width: 380, height: 140, resizable: false, alwaysOnTop: true, visibleOnAllWorkspaces: true, decorations: false, transparent: true, shadow: true });
 }

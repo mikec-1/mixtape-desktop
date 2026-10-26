@@ -43,9 +43,9 @@ function menu({ t, liked, shuffle, repeat, paused }: ReturnType<typeof now>) {
       { text: `Repeat: ${repeat === "one" ? "One" : repeat === "all" ? "All" : "Off"}`, action: cycleRepeat },
       { item: "Separator" },
       { text: "Mini Player", action: () => void toggleMini() },
-      { text: "Show Sleeve", action: show },
+      { text: "Show Mixtape", action: show },
       { item: "Separator" },
-      { text: "Quit Sleeve", action: () => void win.destroy() }, // lib.rs exits once main is gone
+      { text: "Quit Mixtape", action: () => void win.destroy() }, // lib.rs exits once main is gone
     ],
   });
 }
@@ -96,10 +96,10 @@ async function makeTray(player: boolean) {
   // A left click opens the player (on a Mac as the button goes down, like the menu bar's own), a right click the
   // menu. With the player off, any click opens the menu.
   const made = await TrayIcon.new({
-    icon, iconAsTemplate: isMac, tooltip: "Sleeve", menu: shown, showMenuOnLeftClick: !player,
+    icon, iconAsTemplate: isMac, tooltip: "Mixtape", menu: shown, showMenuOnLeftClick: !player,
     action: (e) => player && e.type === "Click" && e.button === "Left" && e.buttonState === (isMac ? "Down" : "Up") && void pop(e.rect),
   });
-  if (player) bar = new WebviewWindow("bar", { title: "Sleeve", url: "/", visible: false, focus: false, width: 340, height: 548, resizable: false, decorations: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, shadow: true });
+  if (player) bar = new WebviewWindow("bar", { title: "Mixtape", url: "/", visible: false, focus: false, width: 340, height: 548, resizable: false, decorations: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, shadow: true });
   const offBlur = bar?.onFocusChanged(({ payload }) => !payload && ((hid = Date.now()), void bar?.hide()));
   // Up to 30 a second, each frame drawn here and shown by lib.rs's dance (Tauri's set_icon stuttered and lost
   // clicks), and only when a bar moves a pixel, so the icon is left alone to take clicks as much as it can.
@@ -124,14 +124,14 @@ async function makeTray(player: boolean) {
     if (state.key === was.key) return;
     if (isMac && !moving) void (state.paused ? Promise.resolve(icon!) : still!).then((i) => made.setIconWithAsTemplate(i, true));
     void menu(state).then(async (m) => (await made.setMenu(m), void shown.close(), (shown = m)));
-    void made.setTooltip(state.t ? `${state.t.title} · ${state.t.artists.map((a) => a.name).join(", ")}` : "Sleeve");
+    void made.setTooltip(state.t ? `${state.t.title} · ${state.t.artists.map((a) => a.name).join(", ")}` : "Mixtape");
   };
   update();
   const offs = [useStore.subscribe(update), useLibrary.subscribe(update), useSettings.subscribe(update), subscribeAudio(update)];
   stop = () => (offs.forEach((off) => off()), hold(), void offBlur?.then((off) => off()), void bar?.close(), (bar = undefined));
   return made;
 }
-// There's an icon when the menu bar player is on, or closing the window leaves Sleeve playing (then just the menu).
+// There's an icon when the menu bar player is on, or closing the window leaves Mixtape playing (then just the menu).
 let made = "";
 const applyTray = () => {
   const { menuBar, closeToTray } = useSettings.getState(), want = menuBar !== "off" ? "player" : closeToTray ? "menu" : "";

@@ -32,9 +32,9 @@ function Broken({ error }: { error: unknown }) {
   return (
     <div className="grid h-full place-items-center bg-paper p-10 text-center">
       <div className="max-w-lg">
-        <h1 className="text-3xl font-extrabold tracking-[-0.03em]">Sleeve couldn’t start</h1>
+        <h1 className="text-3xl font-extrabold tracking-[-0.03em]">Mixtape couldn’t start</h1>
         <p className="mt-3 break-words text-muted">{error instanceof Error ? error.message : String(error)}</p>
-        {import.meta.env.DEV && <p className="mt-3 text-sm text-muted">Just updated? Run <code className="rounded bg-ink/[0.07] px-1.5 py-0.5">pnpm install</code>, then start Sleeve again. The details are in the console (⌥⌘I).</p>}
+        {import.meta.env.DEV && <p className="mt-3 text-sm text-muted">Just updated? Run <code className="rounded bg-ink/[0.07] px-1.5 py-0.5">pnpm install</code>, then start Mixtape again. The details are in the console (⌥⌘I).</p>}
         <button onClick={() => location.reload()} className="press mt-6 h-9 rounded-full bg-ink px-4 text-sm font-semibold text-paper">Try Again</button>
       </div>
     </div>

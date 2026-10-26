@@ -47,7 +47,7 @@ const toLastfm = ({ track, at, secs }: Listen) => ({
 });
 const toBrainz = ({ track, at }: Partial<Listen> & { track: Track }) => ({
   ...(at && { listened_at: Math.floor(at / 1000) }),
-  track_metadata: { artist_name: by(track), track_name: track.title, release_name: track.album, additional_info: { media_player: "Sleeve" } },
+  track_metadata: { artist_name: by(track), track_name: track.title, release_name: track.album, additional_info: { media_player: "Mixtape" } },
 });
 async function brainz(token: string, listen_type: "playing_now" | "single" | "import", payload: object[]) {
   const r = await fetch("https://api.listenbrainz.org/1/submit-listens", {

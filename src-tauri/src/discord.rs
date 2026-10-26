@@ -1,7 +1,7 @@
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use std::sync::Mutex;
 
-// Settings → Linked Accounts → Discord: "Listening to Sleeve", with the song, like Spotify's. The
+// Settings → Linked Accounts → Discord: "Listening to Mixtape", with the song, like Spotify's. The
 // connection opens on first use and again after Discord restarts. The client id is baked in by build.rs.
 static CLIENT: Mutex<Option<DiscordIpcClient>> = Mutex::new(None);
 

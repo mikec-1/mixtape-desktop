@@ -11,7 +11,7 @@ import { searchKind, type Album, type Track } from "./yt";
 // Signing in to Spotify (PKCE, back to account.rs on the one port registered with Spotify) to bring over
 // your playlists, Liked Songs, albums and artists, and your recent plays into History. Spotify only tells
 // apps your last 50 plays, so while you're signed in new ones are fetched at launch and every half hour,
-// and with an account the server fetches them too, even while Sleeve is closed (spotify_history).
+// and with an account the server fetches them too, even while Mixtape is closed (spotify_history).
 const CLIENT = "0e312a528cc34744b92021bed3f6edc9";
 const PORT = 43821;
 const REDIRECT = `http://127.0.0.1:${PORT}/callback`;
@@ -143,7 +143,7 @@ async function recent(after?: number) {
   return plays;
 }
 // The plays the server kept since the newest one here (it may have caught more than Spotify's last 50
-// while Sleeve was closed), then Spotify's latest.
+// while Mixtape was closed), then Spotify's latest.
 async function fromAccount(after = 0) {
   const rows = await table<{ played_at: string; track: SpTrack }[]>(`spotify_plays?select=played_at,track&played_at=gt.${encodeURIComponent(new Date(after).toISOString())}&order=played_at`);
   const plays = rows.filter((r) => r.track?.name).map((r) => ({ t: track(r.track), at: Date.parse(r.played_at) }));

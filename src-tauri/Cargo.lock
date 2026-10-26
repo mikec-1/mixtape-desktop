@@ -3,6 +3,28 @@
 version = 4
 
 [[package]]
+name = "Mixtape"
+version = "0.1.0"
+dependencies = [
+ "discord-rich-presence",
+ "lofty",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "ort",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-http",
+ "tauri-plugin-opener",
+ "tempfile",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3787,28 +3809,6 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "sleeve"
-version = "0.1.0"
-dependencies = [
- "discord-rich-presence",
- "lofty",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "ort",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-http",
- "tauri-plugin-opener",
- "tempfile",
-]
 
 [[package]]
 name = "smallvec"

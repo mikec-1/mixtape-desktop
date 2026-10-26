@@ -31,7 +31,7 @@ const timeout = (ms = 10_000) => {
 // LRCLIB: free, community-made, mostly synced, some word by word (its Lyricsfile YAML).
 type Hit = { id: number; trackName: string; artistName: string; albumName?: string | null; duration: number; instrumental: boolean; plainLyrics: string | null; syncedLyrics: string | null; lyricsfile?: string | null; hasWordSync?: boolean };
 // LRCLIB asks apps to say who they are; this header is its browser-friendly User-Agent.
-const LRCLIB = { "Lrclib-Client": `Sleeve v${version} (https://github.com/mikec-1/Sleeve)` };
+const LRCLIB = { "Lrclib-Client": `Mixtape v${version} (https://github.com/mikec-1/Sleeve)` };
 
 const norm = (s: string) => s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 // Across scripts too, so a Cyrillic title finds lyrics filed under its Latin spelling (norm stays as it was: it keys your lyrics).

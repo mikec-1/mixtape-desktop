@@ -29,6 +29,12 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
       - run: pnpm install --frozen-lockfile
+      # The release text is the tag's message (written at release time: Patch notes / Minor release / Major release, then what changed).
+      - id: notes
+        shell: bash
+        run: |
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          { echo 'body<<EOF'; git tag -l --format='%(contents)' "$GITHUB_REF_NAME"; echo EOF; } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -43,7 +49,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Mixtape ${{ github.ref_name }}
-          releaseBody: See the commits since the last version.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

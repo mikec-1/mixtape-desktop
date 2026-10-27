@@ -32,6 +32,7 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
   useEffect(() => void (wait && setTimeout(() => setWait(wait - 1), 1000)), [wait]);
   useEffect(() => field.current?.focus(), [mode]);
   const [sent, setSent] = useState<string>();
+  const [byCode, setByCode] = useState(false); // the code came from "email me a code", not a new password account
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState("");
@@ -50,7 +51,7 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
   const run = (what: string, fn: () => Promise<unknown>) => {
     if (["password", "code", "email", "google"].includes(what)) sessionStorage.justIn = 1; // kept through Google's round trip
     setBusy(what), setError(""), setNote("");
-    fn().catch((e) => (/email not confirmed/i.test(e?.message) ? (setSent(email.trim()), setMode("code"), resendSignUp(email.trim()).then(() => setWait(30)), setNote("Confirm your email first: we sent you a new code.")) : setError(say(e)))).finally(() => setBusy(undefined));
+    fn().catch((e) => (/email not confirmed/i.test(e?.message) ? (setSent(email.trim()), setByCode(false), setMode("code"), resendSignUp(email.trim()).then(() => setWait(30)), setNote("Confirm your email first: we sent you a new code.")) : setError(say(e)))).finally(() => setBusy(undefined));
   };
   // Signed in with a username: straight back to the app, no button to press (it stays, in case that fails).
   const sentBack = useRef(false);
@@ -66,11 +67,13 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
     run("back", handBack);
   }, [user?.id, profile?.handle, named]);
   const to = (m: Mode) => (setMode(m), setError(""), setNote(""));
-  const verify = (c: string) => sent && run("code", () => enterCode(sent, c).catch((e) => (setCode(""), Promise.reject(e))));
+  // Once per code: pasting or autofill can also submit the form, and a second check of a used code fails after the first signed you in.
+  const checked = useRef("");
+  const verify = (c: string) => sent && checked.current !== c && ((checked.current = c), run("code", () => enterCode(sent, c).catch((e) => (setCode(""), (checked.current = ""), Promise.reject(e)))));
   const submit = () =>
     mode === "in"
       ? run("password", () => signInWithPassword(email.trim(), password))
-      : run("password", () => signUp(email.trim(), password).then(({ confirm }) => (confirm ? (setSent(email.trim()), setWait(30), to("code")) : undefined)));
+      : run("password", () => signUp(email.trim(), password).then(({ confirm }) => (confirm ? (setSent(email.trim()), setByCode(false), setWait(30), to("code")) : undefined)));
 
   const s = poster
     ? {
@@ -143,7 +146,7 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
           <button disabled={!!busy} className={`${s.primary} mt-2`}>{busy === "password" ? "One moment…" : mode === "in" ? "Sign in" : "Create account"}</button>
         </form>
       ) : !sent ? (
-        <form onSubmit={(e) => (e.preventDefault(), run("email", () => sendCode(email.trim()).then(() => setSent(email.trim()))))} className="flex flex-col gap-5">
+        <form onSubmit={(e) => (e.preventDefault(), run("email", () => sendCode(email.trim()).then(() => (setSent(email.trim()), setByCode(true)))))} className="flex flex-col gap-5">
           <label className={s.label}>
             Email
             <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} name="email" autoComplete="email" spellCheck={false} className={s.field} />
@@ -179,7 +182,7 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
 
       <div className={`mt-6 flex flex-col gap-2 text-sm ${s.quiet}`}>
         {mode === "code" && sent && (
-          <p>No email? Check your spam, or {wait ? <span>send a new code in {wait}s</span> : <button onClick={() => run("resend", () => resendSignUp(sent).then(() => (setWait(30), setNote("Sent a new code."))))} className={s.link}>send a new code</button>}</p>
+          <p>No email? Check your spam, or {wait ? <span>send a new code in {wait}s</span> : <button onClick={() => run("resend", () => (byCode ? sendCode(sent) : resendSignUp(sent)).then(() => (setWait(30), setNote("Sent a new code."))))} className={s.link}>send a new code</button>}</p>
         )}
         {mode === "in" && <p>New here? <button onClick={() => to("up")} className={s.link}>Create an account</button></p>}
         {mode === "up" && <p>Have an account? <button onClick={() => to("in")} className={s.link}>Sign in</button></p>}

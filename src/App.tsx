@@ -28,10 +28,6 @@ function firstLaunch() {
 }
 
 export default function App() {
-  // Libraries from before the welcome only marked it done on this computer; tell the account too, so a new
-  // computer or the web doesn't show it again. Waits for the profile so it never syncs a blank name.
-  const signedIn = useAccount((s) => !!s.user), profile = useAccount((s) => s.profile);
-  useEffect(() => { if (signedIn && profile?.name && !profile.welcomed && localStorage.onboarded) setProfile({ welcomed: true }); }, [signedIn, profile]);
   // Settings → About can show it again ("preview"), after a reload.
   const [welcome, setWelcome] = useState<boolean | "preview">(() => (sessionStorage.welcome ? (delete sessionStorage.welcome, "preview") : firstLaunch()));
   // The owner only: ⌘⇧O replays the welcome from sign-in, without wiping anything.
@@ -43,12 +39,23 @@ export default function App() {
     return () => removeEventListener("keydown", key);
   }, [owner]);
   const locked = useAccount((s) => (mustSignIn || s.out) && !s.user) || !!handingOff(); // the app, signed out: sign in before anything else (and the website, signing the app in)
+  // An account that's never had the welcome gets it, even after a reload mid sign-in. One from before the
+  // welcome (it already has a library) is marked done instead. Not by this browser's onboarded flag: that
+  // belongs to whoever used it before. Waits for the profile so it never syncs a blank name.
+  const signedIn = useAccount((s) => !!s.user), profile = useAccount((s) => s.profile);
+  useEffect(() => {
+    if (!signedIn || locked || !profile?.name || profile.welcomed) return;
+    const l = useLibrary.getState();
+    if (l.liked.length || l.playlists.length || l.saved.length || l.followed.length) setProfile({ welcomed: true });
+    else setWelcome((w) => w || true);
+  }, [signedIn, locked, profile]);
   // Just signed in: the sign-in says hi and fades into the app, rather than vanishing the moment the account lands.
   const [leaving, setLeaving] = useState<false | "wait" | "hi" | "out">(false);
   const wasLocked = useRef(locked);
   useEffect(() => {
     const go = wasLocked.current && !locked && !!useAccount.getState().user; // not when you skip it
     wasLocked.current = locked;
+    if (locked) setLeaving(false); // signed out again mid-hi: back to the form, not a blank screen
     if (!go) return;
     setLeaving("wait"); // blank until the name comes, so it never says "You’re in." and then swaps
     const out = () => (setLeaving("out"), (t = setTimeout(() => setLeaving(false), 450)));

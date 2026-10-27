@@ -943,7 +943,7 @@ type Settings = {
   keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean; country: string;
   menuBar: "off" | "icon" | "song" | "lyrics"; // the menu bar (tray) player, and what shows beside its icon (Mac only)
   listenBrainzToken: string; lastfmSessionKey: string; lastfmUsername: string; discordRpc: boolean;
-  doubleClick: "play" | "queue"; resumeQueue: boolean; pauseOnDevice: boolean; // Settings → Playback
+  resumeQueue: boolean; pauseOnDevice: boolean; // Settings → Playback
 };
 export type LyricsSource = "apple" | "lrclib" | "netease";
 const defaultCountry = () => {
@@ -965,7 +965,7 @@ export const useSettings = create<Settings>()(
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "icon",
       country: defaultCountry(),
       listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "", discordRpc: false,
-      doubleClick: "play", resumeQueue: true, pauseOnDevice: true,
+      resumeQueue: true, pauseOnDevice: true,
     }),
     { name: "settings" },
   ),

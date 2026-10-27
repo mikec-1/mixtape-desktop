@@ -2954,7 +2954,7 @@ export async function restore(file: File) {
 
 // Grouped as what you'd tune, then the app itself. tint colours the icon's chip; find: extra words the search matches.
 const PANES: { group: string; id: string; tint: string; label: string; icon: LucideIcon; about: string; find: string; view: () => ReactNode }[] = [
-  { group: "Preferences", id: "playback", tint: "#ff9f0a", label: "Playback", icon: ListMusic, about: "What plays next, and what clicks do.", find: "autoplay double-click queue resume startup crossfade headphones device", view: Playback },
+  { group: "Preferences", id: "playback", tint: "#ff9f0a", label: "Playback", icon: ListMusic, about: "What plays next, and when.", find: "autoplay queue resume startup crossfade headphones device", view: Playback },
   { group: "Preferences", id: "audio", tint: "#ff375f", label: "Audio", icon: SlidersHorizontal, about: "Streaming quality, volume and the equalizer.", find: "quality data saver fetch ahead prefetch preload browsing hover normalise normalize loudness eq equalizer bass treble", view: AudioPane },
   { group: "Preferences", id: "lyrics", tint: "#bf5af2", label: "Lyrics", icon: MicVocal, about: "Where lyrics come from and how they move.", find: "translate romanise word by word sources player bar", view: LyricsPane },
   { group: "Preferences", id: "appearance", tint: "#0a84ff", label: "Appearance", icon: SunMoon, about: "Theme, colour and size.", find: "theme dark light colour color accent artwork motion zoom size", view: Appearance },
@@ -3245,15 +3245,12 @@ function Row({ label, detail, children }: { label: string; detail: ReactNode; ch
 }
 
 function Playback() {
-  const { crossfade, autoplay, doubleClick, resumeQueue, pauseOnDevice } = useSettings();
+  const { crossfade, autoplay, resumeQueue, pauseOnDevice } = useSettings();
   const set = useSettings.setState;
   return (
     <div className={card}>
       <Row label="Autoplay" detail={autoplay ? "When the queue runs out, similar songs keep playing" : "Music stops when the queue runs out"}>
         <Switch label="Autoplay" on={autoplay} onChange={(autoplay) => set({ autoplay })} />
-      </Row>
-      <Row label="Double-Click a Song" detail={doubleClick === "play" ? "Plays it, with the rest of the list after it" : "Adds it to the end of the queue"}>
-        <Segments label="Double-Click a Song" value={doubleClick} onPick={(doubleClick) => set({ doubleClick })} options={[["play", "Play"], ["queue", "Add to Queue"]]} />
       </Row>
       <Row label="On Launch" detail={resumeQueue ? "Your last queue is back, paused where you left it" : "The queue starts empty"}>
         <Segments label="On Launch" value={resumeQueue ? "resume" : "empty"} onPick={(v) => set({ resumeQueue: v === "resume" })} options={[["resume", "Resume Queue"], ["empty", "Start Empty"]]} />
@@ -4209,7 +4206,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
                 over === i && drag !== undefined && drag !== i ? (drag > i ? "shadow-[inset_0_2px_var(--color-accent)]" : "shadow-[inset_0_-2px_var(--color-accent)]") : ""
               }`}
             >
-              <button onClick={(e) => e.detail === 0 && onPlay(i)} onDoubleClick={() => (useSettings.getState().doubleClick === "queue" ? enqueue([t], false) : onPlay(i))} aria-label={`Play ${t.title}`} className="hit" />
+              <button onClick={(e) => e.detail === 0 && onPlay(i)} onDoubleClick={() => onPlay(i)} aria-label={`Play ${t.title}`} className="hit" />
               {num && <span className="text-center text-lg font-bold text-muted tabular-nums">{i + 1}</span>}
               <div className="flex min-w-0 items-center gap-3">
                 {!plain && <img src={art(t.thumb, 96)} alt="" loading="lazy" draggable={false} className={`size-12 shrink-0 rounded-lg bg-disc object-cover ${dim ? "opacity-40" : ""}`} />}

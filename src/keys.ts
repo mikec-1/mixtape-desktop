@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { inApp } from "./http";
 import { back, seekBy, cycleRepeat, forward, go, newPlaylist, next, nudgeVolume, open, prev, toggle, toggleLike, toggleShuffle, useSettings, useStore } from "./store";
 
 // Every shortcut, in one table: App.tsx runs them, Settings → Shortcuts lists them and remaps them
@@ -29,7 +30,7 @@ export const KEYS: { id: string; label: string; combo: string; run: () => unknow
   { id: "quieter", label: "Volume down", combo: "arrowdown", run: () => nudgeVolume(-0.1) },
   { id: "louder", label: "Volume up", combo: "arrowup", run: () => nudgeVolume(0.1) },
   { id: "shuffle", label: "Shuffle, then Smart Shuffle", combo: "mod+s", run: toggleShuffle },
-  { id: "repeat", label: "Repeat all, one or off", combo: "mod+r", run: cycleRepeat },
+  { id: "repeat", label: "Repeat all, one or off", combo: inApp ? "mod+r" : "", run: cycleRepeat }, // the web keeps ⌘R for reloading
   { id: "like", label: "Like the playing song", combo: "mod+l", run: () => {
     const { queue, index } = useStore.getState();
     if (queue[index]) toggleLike(queue[index]);

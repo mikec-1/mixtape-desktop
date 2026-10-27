@@ -3770,7 +3770,10 @@ function Privacy() {
 }
 
 function Startup() {
-  const { loginHidden, closeToTray, menuBar } = useSettings();
+  const { loginHidden, closeToTray, menuBarFor } = useSettings(), id = useAccount((a) => a.user?.id);
+  // On for this account only: picking a mode turns it on for whoever is signed in, Off turns it off for them.
+  const menuBar = id && menuBarFor.includes(id) ? useSettings.getState().menuBar : "off";
+  const setMenuBar = (m: typeof menuBar) => id && set({ menuBar: m === "off" ? useSettings.getState().menuBar : m, menuBarFor: m === "off" ? menuBarFor.filter((u) => u !== id) : [...new Set([...menuBarFor, id])] });
   const set = useSettings.setState;
   const [login, setLogin] = useState<boolean>();
   useEffect(() => void import("@tauri-apps/plugin-autostart").then((a) => a.isEnabled()).then(setLogin, () => setLogin(false)), []);
@@ -3785,13 +3788,13 @@ function Startup() {
       <Row label="Open in the Background" detail={login ? "Opened at login, the window stays out of the way until you click Mixtape" : "Once Open at Login is on"}>
         <Switch label="Open in the Background" on={loginHidden} onChange={(loginHidden) => set({ loginHidden })} />
       </Row>
-      {isMac ? (
+      {!id ? null : isMac ? (
         <Row label="Menu Bar Player" detail={menuBar === "off" ? "No player in the menu bar" : `Click the icon for the player and a search that plays anything${menuBar === "song" ? ", with the song beside it" : menuBar === "lyrics" ? ", with the line being sung beside it" : ""}`}>
-          <Segments label="Menu Bar Player" value={menuBar} options={[["off", "Off"], ["icon", "Icon"], ["song", "Song"], ["lyrics", "Lyrics"]]} onPick={(menuBar) => set({ menuBar })} />
+          <Segments label="Menu Bar Player" value={menuBar} options={[["off", "Off"], ["icon", "Icon"], ["song", "Song"], ["lyrics", "Lyrics"]]} onPick={setMenuBar} />
         </Row>
       ) : (
         <Row label="Tray Player" detail="Click the tray icon for the player and a search that plays anything">
-          <Switch label="Tray Player" on={menuBar !== "off"} onChange={(on) => set({ menuBar: on ? "icon" : "off" })} />
+          <Switch label="Tray Player" on={menuBar !== "off"} onChange={(on) => setMenuBar(on ? (useSettings.getState().menuBar === "off" ? "icon" : useSettings.getState().menuBar) : "off")} />
         </Row>
       )}
       <Row label={isMac ? "Keep in the Menu Bar" : "Close to Tray"} detail={closeToTray ? `Closing the window keeps Mixtape playing, with its icon in the ${isMac ? "menu bar" : "tray"}` : "Closing the window quits Mixtape"}>

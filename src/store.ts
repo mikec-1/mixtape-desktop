@@ -942,6 +942,7 @@ type Settings = {
   autoplay: boolean; reduceMotion: boolean; zoom: number; lyricsOff: LyricsSource[]; history: boolean;
   keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean; country: string;
   menuBar: "off" | "icon" | "song" | "lyrics"; // the menu bar (tray) player, and what shows beside its icon (Mac only)
+  menuBarFor: string[]; // the accounts that turned it on; it only shows while one of them is signed in
   listenBrainzToken: string; lastfmSessionKey: string; lastfmUsername: string; discordRpc: boolean;
   resumeQueue: boolean; pauseOnDevice: boolean; // Settings → Playback
 };
@@ -962,12 +963,13 @@ export const useSettings = create<Settings>()(
       quality: "high", ahead: 1, browse: true, normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
       lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
       libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom", trackCols: TRACK_COLS,
-      autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "icon",
+      autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "off", menuBarFor: [],
       country: defaultCountry(),
       listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "", discordRpc: false,
       resumeQueue: true, pauseOnDevice: true,
     }),
-    { name: "settings" },
+    // Version 1: the menu bar player starts off, so it only appears once you turn it on.
+    { name: "settings", version: 1, migrate: (s) => ({ ...(s as Settings), menuBar: "off", menuBarFor: [] }) },
   ),
 );
 // Every preference back to how it started; Last.fm and ListenBrainz stay signed in.

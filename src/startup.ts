@@ -6,6 +6,7 @@ import { resolveResource } from "@tauri-apps/api/path";
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, monitorFromPoint, PhysicalPosition, type PhysicalSize } from "@tauri-apps/api/window";
+import { useAccount } from "./account";
 import { audio, cycleRepeat, fillUpNext, lyricNow, next, prev, spectrum, subscribeAudio, toggle, likedAs, toggleLike, toggleMini, toggleShuffle, useLibrary, useSettings, useStore } from "./store";
 
 // Settings → Startup, for the main window. Opened at login the window starts hidden (lib.rs), and shows
@@ -134,16 +135,18 @@ async function makeTray(player: boolean) {
   stop = () => (offs.forEach((off) => off()), hold(), void offBlur?.then((off) => off()), void bar?.close(), (bar = undefined));
   return made;
 }
-// There's an icon when the menu bar player is on, or closing the window leaves Mixtape playing (then just the menu).
+// There's an icon when you're signed in to an account that turned the menu bar player on, or closing the window leaves Mixtape playing (then just the menu).
 let made = "";
 const applyTray = () => {
-  const { menuBar, closeToTray } = useSettings.getState(), want = menuBar !== "off" ? "player" : closeToTray ? "menu" : "";
+  const { menuBar, menuBarFor, closeToTray } = useSettings.getState(), id = useAccount.getState().user?.id;
+  const want = menuBar !== "off" && !!id && menuBarFor.includes(id) ? "player" : closeToTray ? "menu" : "";
   if (want === made) return;
   if (tray) stop?.(), void tray.then((t) => t.close()), (tray = undefined);
   if ((made = want)) tray = makeTray(want === "player");
 };
 applyTray();
 useSettings.subscribe(applyTray);
+useAccount.subscribe(applyTray);
 
 void win.onCloseRequested((e) => {
   if (!useSettings.getState().closeToTray) return;

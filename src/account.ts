@@ -4,7 +4,6 @@ import { persist } from "zustand/middleware";
 import type { GoTrueClient, User } from "@supabase/auth-js";
 import { artistKey, clearHistory, deliberate, idbGet, idbPut, notify, open, plays, useLibrary, useRecents, useRecentSearches, useSettings, type Library, type Play, type Playlist, type View } from "./store";
 import { useMine, type Mine } from "./lyrics";
-import { md5 } from "js-md5";
 
 // Accounts: the desktop app needs one; the web works without. Signed in, your library syncs between your
 // devices through Supabase (supabase/migrations: one table of items and a sync function; docs/accounts.md
@@ -21,13 +20,11 @@ export const mustSignIn = canSignIn;
 
 // welcomed: this account has been through the welcome (Bring your music, Pick a few artists), on any computer.
 export type Profile = { name: string; handle?: string; avatar?: string; welcomed?: boolean };
-type Account = { user?: { id: string; email?: string }; profile?: Profile; out?: boolean; state: "idle" | "syncing" | "error"; synced?: number; error?: string };
+type Account = { user?: { id: string; email?: string }; owner?: boolean; profile?: Profile; out?: boolean; state: "idle" | "syncing" | "error"; synced?: number; error?: string };
 export const useAccount = create<Account>()(persist((): Account => ({ state: "idle" }), { name: "account", partialize: ({ user, profile, synced }) => ({ user, profile, synced }) }));
-// The owner's account (matched by its email's hash, so the address isn't in the code) gets the developer
-// tools: replaying the welcome (Settings → About, ⌘⇧O). ponytail: checked in the app only, which is fine
-// while they only touch your own screen; anything that reaches the server needs a server-side check.
-const OWNER = "c114ccc94d269c0f652316d71121a647";
-export const useOwner = () => useAccount((s) => !!s.user?.email && md5(s.user.email.toLowerCase()) === OWNER);
+// The owner's account gets the developer tools: replaying the welcome (Settings → About, ⌘⇧O). The database
+// decides (supabase owners table), asked on each sign-in; anything that reaches the server checks there again.
+export const useOwner = () => useAccount((s) => !!s.owner);
 export const setProfile = (p: Partial<Profile>) => useAccount.setState((s) => ({ profile: { name: "", ...s.profile, ...p } }));
 
 const STORAGE = "sleeve-auth";
@@ -166,6 +163,7 @@ function signedIn(user: User) {
   who = user;
   const was = useAccount.getState().user;
   if (was?.id !== user.id || was.email !== user.email) useAccount.setState({ user: { id: user.id, email: user.email }, out: false });
+  void token().then((t) => rpc<boolean>("am_owner", {}, t)).then((owner) => useAccount.setState({ owner }), () => {});
   if (watching && was?.id === user.id) return;
   // The library here belongs to whoever last signed in on this computer (it stays after signing out). Another
   // account starts empty and gets only its own; the old one's is still in that account. A library from before
@@ -192,7 +190,7 @@ function signedOut() {
   seen.clear();
   clearTimeout(soon);
   void idbPut("sync", undefined);
-  useAccount.setState({ user: undefined, profile: undefined, synced: undefined, state: "idle", error: undefined });
+  useAccount.setState({ user: undefined, owner: undefined, profile: undefined, synced: undefined, state: "idle", error: undefined });
 }
 export async function token() {
   const { data, error } = await (await auth()).getSession();

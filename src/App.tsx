@@ -4,7 +4,7 @@ import { ROOTS, audio, back, cycleRepeat, go, next, prev, seekTo, setMuted, setV
 import { actionFor, comboFrom, recording, searchTab } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, SongName, LikeButton, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, WebMenu, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
-import { handingOff, mustSignIn, publicProfile, setProfile, useAccount } from "./account";
+import { handingOff, mustSignIn, publicProfile, setProfile, useAccount, useOwner } from "./account";
 import { Welcome } from "./welcome";
 import { Hello } from "./hello";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -34,13 +34,14 @@ export default function App() {
   useEffect(() => { if (signedIn && profile?.name && !profile.welcomed && localStorage.onboarded) setProfile({ welcomed: true }); }, [signedIn, profile]);
   // Settings → About can show it again ("preview"), after a reload.
   const [welcome, setWelcome] = useState<boolean | "preview">(() => (sessionStorage.welcome ? (delete sessionStorage.welcome, "preview") : firstLaunch()));
-  // Dev only: ⌘⇧O replays the welcome from sign-in, without wiping anything.
+  // The owner only: ⌘⇧O replays the welcome from sign-in, without wiping anything.
+  const owner = useOwner();
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
+    if (!owner) return;
     const key = (e: KeyboardEvent) => e.metaKey && e.shiftKey && e.code === "KeyO" && (e.preventDefault(), setWelcome("preview"));
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
-  }, []);
+  }, [owner]);
   const locked = useAccount((s) => (mustSignIn || s.out) && !s.user) || !!handingOff(); // the app, signed out: sign in before anything else (and the website, signing the app in)
   // Just signed in: the sign-in says hi and fades into the app, rather than vanishing the moment the account lands.
   const [leaving, setLeaving] = useState<false | "wait" | "hi" | "out">(false);

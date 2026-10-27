@@ -17,7 +17,7 @@ import { albumByName, art, artist, artistByName, charts, collection as ytCollect
 import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, pin, topSongs as dzTop, useOriginals, withGuests, youtubeId } from "./deezer";
 import { addFolder, canHaveFiles, fileTrack, guessTags, identify, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
-import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, type Profile } from "./account";
+import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, useOwner, type Profile } from "./account";
 import { SignIn } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
@@ -3819,6 +3819,7 @@ const LICENCES: [string, string][] = [
 const openLink = (url: string) => void (canHaveFiles ? import("@tauri-apps/plugin-opener").then((o) => o.openUrl(url)) : window.open(url, "_blank", "noopener"));
 
 function About() {
+  const owner = useOwner();
   const [update, setUpdate] = useState<string>();
   const look = () => (setUpdate("Checking…"), import("./update").then((u) => u.checkForUpdate()).then(setUpdate, () => setUpdate("Couldn't check. Try again later.")));
   return (
@@ -3835,7 +3836,7 @@ function About() {
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           <button onClick={() => openLink("https://github.com/mikec-1/mixtape-desktop")} className={quiet}><CodeXml size={15} /> GitHub</button>
           <button onClick={() => openLink("https://github.com/mikec-1/mixtape-desktop/issues")} className={quiet}><LifeBuoy size={15} /> Report a Problem</button>
-          <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={quiet}>Show the Welcome Again</button>
+          {owner && <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={quiet}>Show the Welcome Again</button>}
         </div>
       </div>
       <section className="mt-8">

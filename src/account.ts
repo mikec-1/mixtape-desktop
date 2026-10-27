@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 import type { GoTrueClient, User } from "@supabase/auth-js";
 import { artistKey, clearHistory, deliberate, idbGet, idbPut, notify, open, plays, useLibrary, useRecents, useRecentSearches, useSettings, type Library, type Play, type Playlist, type View } from "./store";
 import { useMine, type Mine } from "./lyrics";
+import { md5 } from "js-md5";
 
 // Accounts: the desktop app needs one; the web works without. Signed in, your library syncs between your
 // devices through Supabase (supabase/migrations: one table of items and a sync function; docs/accounts.md
@@ -22,6 +23,11 @@ export const mustSignIn = canSignIn;
 export type Profile = { name: string; handle?: string; avatar?: string; welcomed?: boolean };
 type Account = { user?: { id: string; email?: string }; profile?: Profile; out?: boolean; state: "idle" | "syncing" | "error"; synced?: number; error?: string };
 export const useAccount = create<Account>()(persist((): Account => ({ state: "idle" }), { name: "account", partialize: ({ user, profile, synced }) => ({ user, profile, synced }) }));
+// The owner's account (matched by its email's hash, so the address isn't in the code) gets the developer
+// tools: replaying the welcome (Settings → About, ⌘⇧O). ponytail: checked in the app only, which is fine
+// while they only touch your own screen; anything that reaches the server needs a server-side check.
+const OWNER = "c114ccc94d269c0f652316d71121a647";
+export const useOwner = () => useAccount((s) => !!s.user?.email && md5(s.user.email.toLowerCase()) === OWNER);
 export const setProfile = (p: Partial<Profile>) => useAccount.setState((s) => ({ profile: { name: "", ...s.profile, ...p } }));
 
 const STORAGE = "sleeve-auth";

@@ -1,4 +1,5 @@
 import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { inApp } from "./http";
 import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
@@ -3828,6 +3829,7 @@ function About() {
           <span className="flex items-center gap-1.5 rounded-full bg-ink/[0.07] px-2 py-0.5 text-xs font-semibold tabular-nums"><span className="size-1.5 rounded-full bg-[#30d158]" />v{version} Beta</span>
         </div>
         <p className="mt-1 text-[13px] text-muted">Your library from anywhere, in one free player.</p>
+        <p className="mt-1 text-xs text-muted tabular-nums">{inApp ? (/Mac/.test(navigator.userAgent) ? "Mac" : /Win/.test(navigator.userAgent) ? "Windows" : "Linux") : "Web"} build {__BUILD__}</p>
         {canHaveFiles && <button onClick={look} disabled={update === "Checking…"} className={`${quiet} mt-4`}><RefreshCw size={15} className={update === "Checking…" ? "animate-spin" : ""} /> Check for Updates</button>}
         {update && <p className="mt-2 text-xs text-muted">{update}</p>}
         <div className="mt-5 flex flex-wrap justify-center gap-2">

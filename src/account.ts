@@ -141,6 +141,14 @@ export async function claimHandle(handle: string) {
   await table("handles", { method: "POST", headers: { prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ user_id, handle }) }).catch((e) => Promise.reject(e.code === "23505" ? new Error("Someone already has that one.") : e));
   setProfile({ handle });
 }
+// The @handle in your profile is only a copy: public.handles says whose it is. One that isn't yours there
+// (left over from another account) is dropped, and the welcome asks for a new one.
+async function checkHandle() {
+  const { user, profile } = useAccount.getState();
+  if (!user || !profile?.handle) return;
+  const [mine] = await table<{ handle: string }[]>(`handles?select=handle&user_id=eq.${user.id}`);
+  if (mine?.handle !== profile.handle) setProfile({ handle: mine?.handle });
+}
 // Signing out (or deleting your account) leaves your library on this computer (or in this browser). On
 // the web, where an account is optional, it goes back to the sign-in (out), which you can skip.
 const here = inApp ? "on this computer" : "in this browser";
@@ -162,7 +170,10 @@ export async function deleteAccount() {
 function signedIn(user: User) {
   who = user;
   const was = useAccount.getState().user;
-  if (was?.id !== user.id || was.email !== user.email) useAccount.setState({ user: { id: user.id, email: user.email }, out: false });
+  // Another account than the last one here: nothing of the last one's (its name, @handle, owner) carries over,
+  // or it would sync up as this one's.
+  if (was?.id !== user.id) useAccount.setState({ user: { id: user.id, email: user.email }, out: false, profile: undefined, owner: undefined, synced: undefined });
+  else if (was.email !== user.email) useAccount.setState({ user: { id: user.id, email: user.email }, out: false });
   void token().then((t) => rpc<boolean>("am_owner", {}, t)).then((owner) => useAccount.setState({ owner }), () => {});
   if (watching && was?.id === user.id) return;
   // The library here belongs to whoever last signed in on this computer (it stays after signing out). Another
@@ -179,7 +190,7 @@ function signedIn(user: User) {
     }
     localStorage.libraryOwner = user.id;
     watch();
-    void syncNow();
+    void syncNow().then(checkHandle, () => {});
   });
 }
 // Loaded late: spotify.ts needs this file first.

@@ -190,7 +190,7 @@ export default function App() {
 
 // Windows has no title bar here (lib.rs), so its three buttons sit in the strip above the cards, drawn in
 // its own icon font. They stay usable over the welcome.
-const onWindows = /Windows/.test(navigator.userAgent);
+const onWindows = "__TAURI_INTERNALS__" in window && /Windows/.test(navigator.userAgent);
 function WindowButtons() {
   const [win] = useState(getCurrentWindow);
   const [max, setMax] = useState(false);

@@ -18,8 +18,8 @@ import { albumByName, art, artist, artistByName, charts, collection as ytCollect
 import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, pin, topSongs as dzTop, useOriginals, withGuests, youtubeId } from "./deezer";
 import { addFolder, canHaveFiles, fileTrack, guessTags, identify, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
-import { canSignIn, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, useOwner, type Profile } from "./account";
-import { SignIn } from "./signin";
+import { canSignIn, claimHandle, cleanHandle, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, useOwner, type Profile } from "./account";
+import { SignIn, useFree } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
 import appIcon from "../src-tauri/icons/128x128@2x.png";
@@ -3069,6 +3069,7 @@ function AccountPane() {
   const picture = useRef<HTMLInputElement>(null);
   const choosePicture = () => pickImage(picture.current, (b) => coverFrom(b, 256).then((avatar) => setProfile({ avatar })));
   const [deleting, setDeleting] = useState<"ask" | "busy">();
+  const [blank, setBlank] = useState<string>(); // the name field while you've emptied it: an empty name isn't saved
   if (!canSignIn)
     return (
       <>
@@ -3099,11 +3100,12 @@ function AccountPane() {
         </button>
         <input ref={picture} type="file" accept="image/*" hidden onChange={(e) => (e.target.files?.[0] && void coverFrom(e.target.files[0], 256).then((avatar) => setProfile({ avatar }), report), (e.target.value = ""))} />
         <div className="min-w-0 flex-1">
-          <input value={profile?.name ?? ""} onChange={(e) => setProfile({ name: e.target.value })} placeholder="Your name" aria-label="Your name" name="profile-name" autoComplete="off" className="room w-full bg-transparent text-xl font-bold tracking-tight outline-none placeholder:text-muted" />
+          <input value={blank ?? profile?.name ?? ""} onChange={(e) => (e.target.value.trim() ? (setBlank(undefined), setProfile({ name: e.target.value })) : setBlank(e.target.value))} onBlur={() => setBlank(undefined)} placeholder="Your name" aria-label="Your name" name="profile-name" autoComplete="off" className="room w-full bg-transparent text-xl font-bold tracking-tight outline-none placeholder:text-muted" />
           <div className="truncate text-[13px] text-muted">{profile?.handle && `@${profile.handle} · `}{user.email}</div>
         </div>
       </div>
       <div className={`${card} mt-6`}>
+        <HandleRow />
         <Row label="Library Sync" detail={status}>
           <button onClick={() => void syncNow()} disabled={state === "syncing" || !online} className={quiet}>Sync Now</button>
         </Row>
@@ -3154,6 +3156,31 @@ function AccountPane() {
         )}
       </section>
     </>
+  );
+}
+
+// Your @, changed here once you have an account (the website asks for it when you make one). Saved with
+// the button, not as you type: each one you try is checked, and the last one you saved stays yours till then.
+function HandleRow() {
+  const mine = useAccount((s) => s.profile?.handle ?? "");
+  const [handle, setHandle] = useState(mine);
+  useEffect(() => setHandle(mine), [mine]);
+  const changed = handle !== mine;
+  const free = useFree(changed ? handle : "");
+  const [busy, setBusy] = useState(false);
+  const ok = changed && handle.length >= 3 && free !== false && !busy;
+  const save = () => (setBusy(true), claimHandle(handle).then(() => notify({ text: "Username Saved", detail: `You’re @${handle}` }), report).finally(() => setBusy(false)));
+  const detail = !changed ? (mine ? "Shows on your profile, next to your name" : "Pick one to show on your profile") : handle.length < 3 ? "At least 3 letters or numbers" : free === false ? <span className="text-[#ff375f]">Someone already has that one</span> : free ? "It’s yours" : "Checking…";
+  return (
+    <Row label="Username" detail={detail}>
+      <div className="flex gap-2">
+        <span className="relative">
+          <span className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-sm text-muted">@</span>
+          <input value={handle} onChange={(e) => setHandle(cleanHandle(e.target.value))} onKeyDown={(e) => e.key === "Enter" && ok && save()} placeholder="username" aria-label="Username" name="username" autoComplete="off" spellCheck={false} className="h-9 w-44 rounded-full bg-ink/[0.07] pr-3.5 pl-7 text-sm outline-none placeholder:text-muted focus-visible:ring-2 focus-visible:ring-accent" />
+        </span>
+        <button onClick={save} disabled={!ok} className={solid}>{busy ? "Saving…" : "Save"}</button>
+      </div>
+    </Row>
   );
 }
 

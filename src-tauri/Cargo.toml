@@ -27,7 +27,6 @@ tauri-plugin-dialog = "2.8.3"
 tauri-plugin-opener = "2.7.2"
 tauri-plugin-autostart = "2"
 discord-rich-presence = "1.1.0"
-ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-17"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2.4.0"
 
@@ -35,6 +34,10 @@ tauri-plugin-process = "2.4.0"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPanel", "NSWindow", "NSResponder", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSImage"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSGeometry"] }
+
+# Word timing from the song (align.rs). ort has no Intel Mac build, so Intel Macs highlight whole lines instead.
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+ort = { version = "2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "api-17"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2.14.0"

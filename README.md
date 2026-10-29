@@ -14,13 +14,11 @@ A free music player for Mac, Windows and the web. Bring the library you already 
 
 ## Installing
 
-**Mac (Apple silicon):** open the `.dmg` and drag Mixtape to Applications. The app isn't notarized yet, so the first time, right-click it and choose **Open**, or allow it in System Settings → Privacy & Security.
+**Mac:** open the `.dmg` and drag Mixtape to Applications. The app isn't notarized yet, so the first time, right-click it and choose **Open**, or allow it in System Settings → Privacy & Security.
 
 **Windows:** run the `-setup.exe`. If SmartScreen appears, choose **More info → Run anyway**.
 
 The app updates itself: it asks before downloading a new version.
-
-There's no Intel Mac build yet.
 
 ## Building it yourself
 

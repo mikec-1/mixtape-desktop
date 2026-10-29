@@ -7,7 +7,7 @@ import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { type LucideIcon, ArrowDown, ArrowUp, Ban, CircleCheck, CircleMinus, CirclePlus, Eye, FolderInput, FolderPlus, HeartOff, ImageOff, Import, ListEnd, ListMinus, ListPlus, ListStart, ListX, Lock, PinOff, RefreshCw, UserMinus, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, Submenu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
-  EQ_BANDS, EQ_PRESETS, addToPlaylist, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
+  EQ_BANDS, EQ_PRESETS, addToPlaylist, canAlign, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
   likedAs, meantIt, shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
   useRecentSearches, addRecentSearch, idbGet, idbPut, idbBytes, idbDelete, deleteAllPlaylists, clearLibrary, resetSettings, warm as fetchAhead, toggleShuffle, toggleListShuffle,
@@ -3401,9 +3401,11 @@ function LyricsPane() {
         <Row label="Lyrics on the Player Bar" detail="The line being sung, under the song’s name">
           <Switch label="Lyrics on the Player Bar" on={lyricsPeek} onChange={(lyricsPeek) => set({ lyricsPeek })} />
         </Row>
-        <Row label="Word by Word on Every Song" detail={lyricsWords ? "Songs that only time their lines get their words timed from the song itself, or by estimate" : "Only songs whose lyrics time each word"}>
-          <Switch label="Word by Word on Every Song" on={lyricsWords} onChange={(lyricsWords) => set({ lyricsWords })} />
-        </Row>
+        {canAlign && (
+          <Row label="Word by Word on Every Song" detail={lyricsWords ? "Songs that only time their lines get their words timed from the song itself, or by estimate" : "Only songs whose lyrics time each word"}>
+            <Switch label="Word by Word on Every Song" on={lyricsWords} onChange={(lyricsWords) => set({ lyricsWords })} />
+          </Row>
+        )}
         <Row label="Reduce Lyric Motion" detail={lyricsStill ? "Lines jump to the one being sung, and words stay put" : "Lines glide and words move, whatever the system’s Reduce Motion is set to"}>
           <Switch label="Reduce Lyric Motion" on={lyricsStill} onChange={(lyricsStill) => set({ lyricsStill })} />
         </Row>

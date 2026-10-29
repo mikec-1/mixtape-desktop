@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
@@ -972,10 +972,14 @@ export const useSettings = create<Settings>()(
     { name: "settings", version: 1, migrate: (s) => ({ ...(s as Settings), menuBar: "off", menuBarFor: [] }) },
   ),
 );
+// Intel Macs can't time words from the song (lib.rs can_align), so they highlight whole lines like Spotify:
+// lyricsWords stays off there and Settings → Lyrics hides its switch.
+export let canAlign = true;
+if ("__TAURI_INTERNALS__" in window) void invoke<boolean>("can_align").then((ok) => { canAlign = ok; if (!ok) useSettings.setState({ lyricsWords: false }); }, () => {});
 // Every preference back to how it started; Last.fm and ListenBrainz stay signed in.
 export function resetSettings() {
   const { listenBrainzToken, lastfmSessionKey, lastfmUsername } = useSettings.getState();
-  useSettings.setState({ ...useSettings.getInitialState(), listenBrainzToken, lastfmSessionKey, lastfmUsername });
+  useSettings.setState({ ...useSettings.getInitialState(), listenBrainzToken, lastfmSessionKey, lastfmUsername, lyricsWords: canAlign });
   notify({ text: "Settings Reset" });
 }
 useSettings.subscribe((s, was) => {

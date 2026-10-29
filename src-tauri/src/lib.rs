@@ -1,6 +1,7 @@
 use tauri::{webview::PageLoadEvent, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 mod account;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 mod align;
 mod discord;
 mod local;
@@ -14,6 +15,12 @@ mod offline;
 /// window as the page goes, and under another class that throws, which aborts the app.
 #[cfg(target_os = "macos")]
 static FLOATED: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether this build times lyrics' words from the song (align.rs): not on Intel Macs, which ort has no build for.
+#[tauri::command]
+fn can_align() -> bool {
+    cfg!(not(all(target_os = "macos", target_arch = "x86_64")))
+}
 
 #[tauri::command]
 fn float(window: tauri::WebviewWindow) {
@@ -116,7 +123,7 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = webview;
         })
-        .invoke_handler(tauri::generate_handler![float, popup, dance, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear, align::align_words])
+        .invoke_handler(tauri::generate_handler![float, popup, dance, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear, can_align, #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))] align::align_words])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.

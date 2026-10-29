@@ -101,7 +101,9 @@ function PickArtists({ onNext }: { onNext: () => void }) {
   }, []);
   const view = useRef<HTMLDivElement>(null), track = useRef<HTMLDivElement>(null), asked = useRef(new Set<string>()), growing = useRef(false);
   // The river is moved by hand, not scrolled: one offset that drifts on, follows a drag or a sideways swipe, and coasts after a flick.
-  const go = useRef({ at: 0, speed: 0, held: 0, down: undefined as number | undefined, from: 0, moved: false, t: 0 });
+  // to: the bubble it's gliding over to (a genre you picked), until you take hold of it.
+  // dir: which way it drifts. It turns back at the end until more river comes in, so it never stands still.
+  const go = useRef({ at: 0, speed: 0, held: 0, down: undefined as number | undefined, from: 0, moved: false, t: 0, to: undefined as number | undefined, dir: 1 });
   const grow = useRef(() => {});
   // Each bubble has a home along the river and floats near it; they nudge each other apart, so a picked one,
   // grown bigger, pushes its neighbours aside like Apple Music's.
@@ -115,21 +117,26 @@ function PickArtists({ onNext }: { onNext: () => void }) {
     ends[lane] += r * 2 / z + 34;
     return { key, r, h, x, y: (LANES[lane] - 10 + ((h >> 4) % 20)) * z };
   });
-  const live = useRef({ homes, picked, z });
-  live.current = { homes, picked, z };
+  const live = useRef({ homes, picked, z, shown });
+  live.current = { homes, picked, z, shown };
   useEffect(() => {
     let raf = 0, last = performance.now();
     const tick = (now: number) => {
       const g = go.current, dt = Math.min(now - last, 50), el = track.current, box = view.current;
       last = now;
       if (el && box) {
-        if (g.down === undefined) {
+        const { homes, picked, z } = live.current, end = Math.max(0, ...homes.slice(-3).map((b) => b.x)) + 200, max = Math.max(0, end - box.clientWidth);
+        const want = g.to === undefined || !homes[g.to] ? undefined : Math.min(Math.max(homes[g.to].x - homes[g.to].r - 100 * z, 0), max);
+        if (want !== undefined) {
+          g.at += (want - g.at) * (1 - Math.pow(0.995, dt)); // fast, then easing in
+          if (Math.abs(want - g.at) < 1) g.to = undefined;
+        } else if (g.down === undefined) {
           g.at += g.speed * dt;
           g.speed *= Math.pow(0.995, dt); // a flick slows to a stop
-          if (now > g.held && Math.abs(g.speed) < 0.03) g.at += 0.028 * dt;
+          if (now > g.held && Math.abs(g.speed) < 0.03) g.at += 0.028 * dt * g.dir;
         }
-        const { homes, picked, z } = live.current, end = Math.max(0, ...homes.slice(-3).map((b) => b.x)) + 200, max = Math.max(0, end - box.clientWidth);
         g.at = Math.min(Math.max(g.at, 0), max);
+        g.dir = g.at >= max ? -1 : g.at <= 0 || max - g.at > 1400 ? 1 : g.dir;
         el.style.transform = `translate3d(${-g.at}px,0,0)`;
         if (max - g.at < 1400) grow.current();
         // Only the bubbles near the window float; the rest wait at home.
@@ -167,38 +174,49 @@ function PickArtists({ onNext }: { onNext: () => void }) {
   }, []);
   const ids = (list: (Pick | string)[]) => new Set(list.flatMap((a) => (typeof a === "string" ? [] : [a.id])));
   // Names become artists as their answers come in; ones YouTube Music doesn't know, or already in the river, drop out.
-  useEffect(() => {
-    for (const name of GENRES[genre]) findArtist(name).then((a) => setShown((l) => (a && !ids(l).has(a.id) ? l.map((x) => (x === name ? a : x)) : l.filter((x) => x !== name))), () => setShown((l) => l.filter((x) => x !== name)));
-  }, [genre]);
-  // Someone's fans also like: put next to them when picked, or on the end as you get there.
+  const bring = (names: string[]) => {
+    for (const name of names) findArtist(name).then((a) => setShown((l) => (a && !ids(l).has(a.id) ? l.map((x) => (x === name ? a : x)) : l.filter((x) => x !== name))), () => setShown((l) => l.filter((x) => x !== name)));
+  };
+  useEffect(() => bring(GENRES[genre]), [genre]);
+  // Someone's fans also like: put next to them when picked, or on the end as you get there. Says how many it added.
   const fansOf = async (a: Pick, after?: string) => {
-    if (asked.current.has(a.id)) return;
+    if (asked.current.has(a.id)) return 0;
     asked.current.add(a.id);
     const fans = (await artist(a.id).catch(() => undefined))?.fans ?? [];
-    setShown((l) => {
-      // ytc is YouTube's made-up letter picture, for channels with no photo.
-      const have = ids(l), more = fans.filter((f) => !have.has(f.id) && !f.thumb?.includes("/ytc/")).slice(0, after ? 6 : 15);
-      more.length -= more.length % 3; // in threes, so every bubble after them keeps its lane and just slides along
+    // ytc is YouTube's made-up letter picture, for channels with no photo.
+    const have = ids(live.current.shown), more = fans.filter((f) => !have.has(f.id) && !f.thumb?.includes("/ytc/")).slice(0, after ? 6 : 15);
+    more.length -= more.length % 3; // in threes, so every bubble after them keeps its lane and just slides along
+    if (more.length) setShown((l) => {
       const at = after ? l.findIndex((x) => typeof x !== "string" && x.id === after) + 1 : l.length;
       return at > 0 ? [...l.slice(0, at), ...more, ...l.slice(at)] : [...l, ...more];
     });
+    return more.length;
   };
+  // Near the end, the river keeps going: fans of who's on it, or the next genre's artists when they give nothing
+  // (or there's no one left to ask), so a wide window never runs out of river.
   grow.current = () => {
     if (growing.current) return;
-    const next = [...picked, ...shown.filter((x): x is Pick => typeof x !== "string")].find((a) => !asked.current.has(a.id));
-    if (next) (growing.current = true), void fansOf(next).finally(() => (growing.current = false));
+    growing.current = true;
+    const l = live.current.shown, next = [...picked, ...l.filter((x): x is Pick => typeof x !== "string")].find((a) => !asked.current.has(a.id));
+    void (next ? fansOf(next) : Promise.resolve(0)).then((n) => {
+      if (n) return;
+      const have = new Set(live.current.shown.map((a) => (typeof a === "string" ? a : a.name)));
+      const more = Object.values(GENRES).map((g) => g.filter((n) => !have.has(n))).find((m) => m.length >= 3) ?? [];
+      more.length -= more.length % 3;
+      if (more.length) setShown((l) => [...l, ...more]), bring(more);
+    }).finally(() => (growing.current = false));
   };
-  // A genre flows in just out of sight on the right, so the river turns to it without a jump.
+  // A genre flows in just out of sight on the right, and the river glides over to it. One you've had before: back to its artists.
   const pickGenre = (x: string) => {
     if (x === genre) return;
     const edge = go.current.at + (view.current?.clientWidth ?? 1000) + 500; // past where bubbles float, so they arrive settled
+    const names = shown.map((a) => (typeof a === "string" ? a : a.name)), have = new Set(names);
+    const more = GENRES[x].filter((n) => !have.has(n));
+    more.length -= more.length % 3;
+    const i = homes.findIndex((b) => b.x > edge), at = !more.length ? names.findIndex((n) => GENRES[x].includes(n)) : i < 0 ? shown.length : i;
     setGenre(x);
-    setShown((l) => {
-      const i = homes.findIndex((b) => b.x > edge), at = i < 0 ? l.length : i, have = new Set(l.map((a) => (typeof a === "string" ? a : a.name)));
-      const more = GENRES[x].filter((n) => !have.has(n));
-      more.length -= more.length % 3;
-      return [...l.slice(0, at), ...more, ...l.slice(at)];
-    });
+    if (more.length) setShown([...shown.slice(0, at), ...more, ...shown.slice(at)]);
+    Object.assign(go.current, { to: at < 0 ? undefined : at, speed: 0 });
   };
   const toggle = (a: Pick) => (picked.some((p) => p.id === a.id) ? setPicked((p) => p.filter((x) => x.id !== a.id)) : (setPicked((p) => [...p, a]), void fansOf(a, a.id)));
   const next = () => (follow(picked), onNext());
@@ -210,8 +228,8 @@ function PickArtists({ onNext }: { onNext: () => void }) {
       </div>
       <div
         ref={view}
-        onWheel={(e) => Math.abs(e.deltaX) > Math.abs(e.deltaY) && ((g.at += e.deltaX), (g.speed = 0), (g.held = performance.now() + 1500))}
-        onPointerDown={(e) => (Object.assign(g, { down: e.clientX, from: g.at, moved: false, speed: 0, t: performance.now() }), view.current!.setPointerCapture(e.pointerId))}
+        onWheel={(e) => Math.abs(e.deltaX) > Math.abs(e.deltaY) && ((g.at += e.deltaX), (g.speed = 0), (g.to = undefined), (g.held = performance.now() + 1500))}
+        onPointerDown={(e) => (Object.assign(g, { down: e.clientX, from: g.at, moved: false, speed: 0, t: performance.now(), to: undefined }), view.current!.setPointerCapture(e.pointerId))}
         onPointerMove={(e) => {
           if (g.down === undefined || (!g.moved && Math.abs(e.clientX - g.down) < 5)) return;
           const now = performance.now(), at = g.from - (e.clientX - g.down);

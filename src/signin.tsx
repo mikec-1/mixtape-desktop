@@ -5,7 +5,7 @@ import { claimHandle, cleanHandle, handleFree, setProfile, cancelBrowserSignIn, 
 // Signing in: email and password, or Google. Making an account then asks for the
 // 6-digit code Supabase emails to confirm the address ({{ .Token }} in its "Confirm signup" template).
 // The app with a website to go to signs in there instead (viaBrowser), and the website, opened by the app,
-// ends with a Continue button that sends you back (handingOff).
+// sends you back once you've signed in, or when you press Continue if you already were (handingOff).
 // poster: the welcome's look (hello.tsx), with its own heading; otherwise Settings → Account's.
 type Mode = "in" | "up" | "code";
 const HEADINGS: Record<Mode, string> = { in: "Sign in", up: "Create an account", code: "Check your email" };
@@ -19,6 +19,7 @@ const say = (e: unknown) => {
   if (/password should|weak password/i.test(m)) return "Pick a stronger password: at least 8 characters.";
   if (/valid email|invalid format/i.test(m)) return "That doesn’t look like an email address.";
   if (/failed to fetch|network|load failed/i.test(m)) return "Can’t reach Mixtape. Check your connection.";
+  if (/started again/i.test(m)) return ""; // you pressed Cancel
   return m ? (/[.!?]$/.test(m) ? m : m + ".") : "Something went wrong. Try again."; // say what actually happened
 };
 
@@ -39,33 +40,27 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
   const [note, setNote] = useState("");
   const { user, profile } = useAccount();
   // Handing off: whether you've picked a username yet, asked for on its own rather than waiting out a whole
-  // library sync, so the right screen shows at once. null: still asking.
-  const [named, setNamed] = useState<boolean | null>(null);
+  // library sync, so the right screen shows at once. Kept with whose answer it is, so another account signing
+  // in doesn't get the last one's. null: still asking.
+  const [asked, setAsked] = useState<{ id: string; named: boolean }>();
+  const named = profile?.handle ? true : asked && asked.id === user?.id ? asked.named : null;
   useEffect(() => {
-    if (!handingOff() || !user) return;
-    if (profile?.handle) return setNamed(true);
+    if (!handingOff() || !user || profile?.handle) return;
     let on = true;
-    publicProfile(user.id).then((p) => on && setNamed(!!p?.profile?.handle), () => on && setNamed(false));
+    publicProfile(user.id).then((p) => on && setAsked({ id: user.id, named: !!p?.profile?.handle }), () => on && setAsked({ id: user.id, named: false }));
     return () => void (on = false);
   }, [user?.id, profile?.handle]);
   const run = (what: string, fn: () => Promise<unknown>) => {
-    if (["password", "code", "email", "google"].includes(what)) sessionStorage.justIn = 1; // kept through Google's round trip
+    if (handingOff() && ["password", "code", "email", "google"].includes(what)) sessionStorage.justIn = 1; // kept through Google's round trip
     setBusy(what), setError(""), setNote("");
-    fn().catch((e) => (/email not confirmed/i.test(e?.message) ? (setSent(email.trim()), setByCode(false), setMode("code"), resendSignUp(email.trim()).then(() => setWait(30)), setNote("Confirm your email first: we sent you a new code.")) : setError(say(e)))).finally(() => setBusy(undefined));
+    fn().catch((e) => (/email not confirmed/i.test(e?.message) ? (setSent(email.trim()), setByCode(false), setMode("code"), resendSignUp(email.trim()).then(() => setWait(30), (e) => setError(say(e))), setNote("Confirm your email first: we sent you a new code.")) : setError(say(e)))).finally(() => setBusy(undefined));
   };
-  // Signed in with a username: straight back to the app, no button to press (it stays, in case that fails).
-  const sentBack = useRef(false);
-  useEffect(() => {
-    if (!handingOff() || !user || !(profile?.handle || named) || sentBack.current) return;
-    sentBack.current = true;
-    run("back", handBack);
-  }, [user?.id, profile?.handle, named]);
   // Signed in just now, for the app: straight back to it. Already signed in here, you confirm the account first.
   useEffect(() => {
-    if (!sessionStorage.justIn || !handingOff() || !user || !(profile?.handle || named)) return;
+    if (!sessionStorage.justIn || !handingOff() || !user || !named) return;
     delete sessionStorage.justIn;
     run("back", handBack);
-  }, [user?.id, profile?.handle, named]);
+  }, [user?.id, named]);
   const to = (m: Mode) => (setMode(m), setError(""), setNote(""));
   // Once per code: pasting or autofill can also submit the form, and a second check of a used code fails after the first signed you in.
   const checked = useRef("");
@@ -111,13 +106,13 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
         {said}
       </div>
     );
-  if (handingOff() && user && !profile?.handle && named === null) return <span className="spinner mx-auto block size-6 text-white/50" />;
-  if (handingOff() && user && !profile?.handle && !named) return <NameYourself s={s} heading={heading} />;
+  if (handingOff() && user && named === null) return <span className="spinner mx-auto block size-6 text-white/50" />;
+  if (handingOff() && user && !named) return <NameYourself s={s} heading={heading} />;
   if (handingOff() && user)
     return (
       <div className="w-full max-w-sm">
         {heading("Back to the app")}
-        <p className={`mb-7 ${s.quiet}`}>Signed in as <span className="font-semibold text-ink">{user.email}</span>.</p>
+        <p className={`mb-7 ${s.quiet}`}>Signed in as <span className="font-semibold text-ink">{user.email}</span>. Mixtape takes this sign-in over, so this browser signs out.</p>
         <button onClick={() => run("back", handBack)} disabled={!!busy} className={s.primary}>{busy ? "Opening the app…" : "Continue to the app"}</button>
         <button onClick={() => run("out", signOut)} disabled={!!busy} className={`${s.quiet} mt-4 text-sm hover:underline`}>Use a different account</button>
         {said}
@@ -174,7 +169,7 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
               className={`${s.field} text-[22px] font-bold tracking-[0.35em] tabular-nums`}
             />
           </label>
-          <button type="button" onClick={() => (setSent(undefined), setCode(""), setError(""))} className={`${s.quiet} mt-1 self-start text-sm hover:underline`}>Use a different email</button>
+          <button type="button" onClick={() => (setSent(undefined), setCode(""), to(byCode ? "code" : "up"))} className={`${s.quiet} mt-1 self-start text-sm hover:underline`}>Use a different email</button>
         </form>
       )}
 
@@ -215,11 +210,13 @@ function NameYourself({ s, heading }: { s: Styles; heading: (t: string) => React
   const given = profile?.name && !user?.email?.toLowerCase().startsWith(profile.name.toLowerCase()) ? profile.name : ""; // a real name from Google, not the start of your email
   const [name, setName] = useState(given);
   const [handle, setHandle] = useState(() => cleanHandle(given.replace(/\s+/g, "")));
+  // The name from Google can land after this shows (the first sync makes the profile): filled in then, if still empty.
+  useEffect(() => void (given && !name && !handle && (setName(given), setHandle(cleanHandle(given.replace(/\s+/g, ""))))), [given]);
   const free = useFree(handle);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const ok = name.trim() && handle.length >= 3 && free !== false;
-  const save = () => (setBusy(true), setError(""), claimHandle(handle).then(() => setProfile({ name: name.trim() })).catch((e) => setError(e.message)).finally(() => setBusy(false)));
+  const save = () => (setBusy(true), setError(""), claimHandle(handle).then(() => setProfile({ name: name.trim() })).catch((e) => setError(say(e))).finally(() => setBusy(false)));
   return (
     <form onSubmit={(e) => (e.preventDefault(), ok && save())} className="w-full max-w-sm">
       {heading("What should we call you?")}
@@ -234,7 +231,7 @@ function NameYourself({ s, heading }: { s: Styles; heading: (t: string) => React
 }
 
 // Whether an @ is free, checked 300ms after you stop typing (undefined while checking).
-function useFree(handle: string) {
+export function useFree(handle: string) {
   const [free, setFree] = useState<boolean>();
   useEffect(() => {
     setFree(undefined);

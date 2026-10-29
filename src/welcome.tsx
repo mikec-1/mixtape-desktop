@@ -176,7 +176,8 @@ function PickArtists({ onNext }: { onNext: () => void }) {
     asked.current.add(a.id);
     const fans = (await artist(a.id).catch(() => undefined))?.fans ?? [];
     setShown((l) => {
-      const have = ids(l), more = fans.filter((f) => !have.has(f.id) && !f.thumb?.includes("/ytc/")) // ytc is YouTube's made-up letter picture, for channels with no photo.slice(0, after ? 6 : 15);
+      // ytc is YouTube's made-up letter picture, for channels with no photo.
+      const have = ids(l), more = fans.filter((f) => !have.has(f.id) && !f.thumb?.includes("/ytc/")).slice(0, after ? 6 : 15);
       more.length -= more.length % 3; // in threes, so every bubble after them keeps its lane and just slides along
       const at = after ? l.findIndex((x) => typeof x !== "string" && x.id === after) + 1 : l.length;
       return at > 0 ? [...l.slice(0, at), ...more, ...l.slice(at)] : [...l, ...more];

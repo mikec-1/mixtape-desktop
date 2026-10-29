@@ -25,13 +25,13 @@ pub fn oauth_start(port: Option<u16>) -> Result<u16, String> {
     Ok(port)
 }
 
-/// Waits up to five minutes for the browser to come back, answers it with a page that says to go back
+/// Waits up to fifteen minutes for the browser to come back, answers it with a page that says to go back
 /// to Mixtape, and returns the query string it brought (code and state, or error).
 #[tauri::command]
 pub async fn oauth_wait() -> Result<String, String> {
     let l = LISTENER.lock().unwrap().take().ok_or("Sign-in wasn't started")?;
     let round = ROUND.load(Ordering::SeqCst);
-    tauri::async_runtime::spawn_blocking(move || wait(&l, Duration::from_secs(300), || ROUND.load(Ordering::SeqCst) != round))
+    tauri::async_runtime::spawn_blocking(move || wait(&l, Duration::from_secs(900), || ROUND.load(Ordering::SeqCst) != round))
         .await
         .map_err(|e| e.to_string())?
 }

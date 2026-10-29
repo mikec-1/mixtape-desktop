@@ -89,8 +89,8 @@ export async function signInWith(provider: "google" | "apple") {
   if (failed) throw failed;
 }
 // Signing in on the website instead (the app with a site to go to): the site's own sign-in page, opened
-// with the port this app listens on and a one-off state. Signed in there, you press Continue and it sends
-// the session back to the listener (handBack), which checks the state.
+// with the port this app listens on and a one-off state. Once you sign in there (or press Continue, if you
+// already were) it sends the session back to the listener (handBack), which checks the state.
 const SITE = import.meta.env.VITE_SHARE_URL?.replace(/\/$/, "");
 export const viaBrowser = inApp && !!SITE;
 export async function signInInBrowser() {
@@ -105,8 +105,6 @@ export async function signInInBrowser() {
   if (!back.get("access_token") || !back.get("refresh_token")) throw new Error("The website didn’t send your account back. Press Sign in again.");
   const { error } = await c.setSession({ access_token: back.get("access_token")!, refresh_token: back.get("refresh_token")! });
   if (error) throw new Error(`Mixtape couldn’t use the website’s sign-in: ${error.message}`);
-  // A refresh swaps the refresh token the website also had for one only this app has.
-  await c.refreshSession();
 }
 export const cancelBrowserSignIn = () => void invoke("oauth_start").catch(() => {}); // a new start gives up on the wait
 // The website's half: opened by the app (?app=<port>&state=…), it remembers that for this tab, through a
@@ -120,10 +118,18 @@ export const handingOff = (): { port: string; state: string } | undefined => (se
 export async function handBack() {
   const h = handingOff();
   if (!h) throw new Error("This page wasn’t opened by the app. Press Sign in in Mixtape again.");
+  // What you just changed here (the name and @ you picked) goes up first, or the app starts without it. Twice,
+  // since one already running doesn't wait for what came in after it started.
+  await syncNow(), await syncNow();
   // Fresh tokens when it can (a tab signed in a while can hold an expired session), else the stored ones.
   const c = await auth(), fresh = await c.refreshSession().catch(() => undefined);
   const session = fresh?.data.session ?? (await c.getSession()).data.session;
   if (!session) throw new Error("You’re not signed in here any more. Sign in again.");
+  // The app takes the sign-in over and this browser forgets it, without telling the server: the two would share
+  // one refresh token, and the server signs both out when the second one uses it. ponytail: an edge function
+  // minting the app its own session (a magic link's token_hash) would keep both signed in.
+  await c.stopAutoRefresh();
+  for (const k of Object.keys(localStorage)) if (k.startsWith(STORAGE)) localStorage.removeItem(k);
   const data = { session };
   delete sessionStorage.handoff;
   // Posted, not put in the link, so the tokens never land in the address bar or the browser's history.
@@ -142,10 +148,10 @@ export async function claimHandle(handle: string) {
   setProfile({ handle });
 }
 // The @handle in your profile is only a copy: public.handles says whose it is. One that isn't yours there
-// (left over from another account) is dropped, and the welcome asks for a new one.
+// (left over from another account) is dropped, and one missing here (picked on the website) is filled in.
 async function checkHandle() {
   const { user, profile } = useAccount.getState();
-  if (!user || !profile?.handle) return;
+  if (!user || !profile) return;
   const [mine] = await table<{ handle: string }[]>(`handles?select=handle&user_id=eq.${user.id}`);
   if (mine?.handle !== profile.handle) setProfile({ handle: mine?.handle });
 }

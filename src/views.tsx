@@ -2736,7 +2736,7 @@ function LyricsEditor({ d }: { d: Extract<Dialog, { kind: "edit" }> }) {
           <h2 className="text-xl font-bold tracking-tight">Edit Lyrics</h2>
           <p className="truncate text-sm text-muted">{d.title} · {d.artist}</p>
         </div>
-        {found.loading && <span className="mt-0.5 inline-flex shrink-0 animate-enter items-center gap-1.5 rounded-full bg-accent-vivid px-3 py-1 text-sm font-semibold text-white shadow-sm"><span className="spinner size-3.5" /> Finding lyrics…</span>}
+        {found.loading && <span className="mt-0.5 inline-flex shrink-0 animate-enter items-center gap-1.5 rounded-full bg-accent-vivid [animation-delay:0.8s] px-3 py-1 text-sm font-semibold text-white shadow-sm"><span className="spinner size-3.5" /> Finding lyrics…</span>}
       </header>
       <textarea
         ref={area}

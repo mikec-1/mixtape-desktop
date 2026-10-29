@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { heard } from "./recognize";
 import { files, forget, idb, notify, plural, useStore } from "./store";
-import { searchKind, stripVersion, type Track } from "./yt";
+import { credits, searchKind, stripVersion, type Track } from "./yt";
 
 // Your own music: folders on this computer, read by src-tauri/src/local.rs. What a scan found is kept,
 // so Local Files is there at once on launch; a scan in the background then picks up what changed.
@@ -30,7 +30,7 @@ export const fileTrack = (f: LocalFile): Track => {
     id: `file:${f.path}`,
     file: f.path,
     title: e?.title || f.title,
-    artists: e ? [e.artist, ...e.feat.split(/\s*[,&]\s*/)].filter(Boolean).map((name) => ({ name })) : artists(f.artist || f.albumArtist),
+    artists: e ? [e.artist, ...credits(e.feat)].filter(Boolean).map((name) => ({ name })) : artists(f.artist || f.albumArtist),
     album: (e ? e.album : f.album) || undefined,
     thumb: e?.cover ?? (f.cover && convertFileSrc(f.cover)),
     duration: clock(f.duration),
@@ -109,7 +109,7 @@ function apple(e: SongEdit, results: Apple[], secs?: number): Found | undefined 
   // A file well off the original's length is likely sped up or slowed (or another cut), so it isn't sure and
   // gets heard too, which tells. ponytail: 4 s or 3%, a guess; widen it if radio edits get flagged.
   const off = secs && orig && Math.abs(secs - orig) > Math.max(4, orig * 0.03) ? secs - orig : 0;
-  const [artist, ...feat] = x.artistName.split(SPLIT).filter(Boolean);
+  const [artist, ...feat] = credits(x.artistName);
   return {
     edit: { ...e, artist, feat: e.feat || feat.join(", "), album: x.collectionName.replace(/\s*-\s*(Single|EP)$/i, ""), year: x.releaseDate?.slice(0, 4), genre: x.primaryGenreName, cover: x.artworkUrl100?.replace("100x100bb", "1000x1000bb") },
     source: "Apple Music",
@@ -125,7 +125,6 @@ function youtube(e: SongEdit, results: Track[]): Found | undefined {
   const y = results.slice(0, 5).find((y) => within(t, words(stripVersion(y.title))) && (!a.size || y.artists.some((n) => within(a, words(n.name)) || within(words(n.name), a))));
   return y && { edit: { ...e, album: e.album || y.album || "", cover: y.thumb }, source: "YouTube Music", sure: false };
 }
-const SPLIT = /\s*(?:,|&|\bfeat\.?|\bft\.?)\s*/i;
 const key = (s: string) => s.trim().toLowerCase();
 // A search that fails or takes over 6 s counts as finding nothing, so the sheet never waits on it.
 const capped = <T,>(p: Promise<T>, none: T) => Promise.race([p.catch(() => none), new Promise<T>((ok) => setTimeout(() => ok(none), 6000))]);
@@ -155,7 +154,7 @@ export async function lookUp(e: SongEdit, secs?: number): Promise<Found | undefi
   const hit = apple(e, songs, secs) ?? (e.artist ? apple(flip, flipped, secs) : undefined) ?? youtube(e, ys) ?? (e.artist ? youtube(flip, ys) : undefined);
   if (hit) return hit;
   // Found in neither (unreleased, say): the artists the searches did turn up still say which way round it is.
-  const apples = new Set(songs.flatMap((x) => x.artistName.split(SPLIT).map(key))), yts = new Set(ys.flatMap((y) => y.artists.map((n) => key(n.name))));
+  const apples = new Set(songs.flatMap((x) => credits(x.artistName).map(key))), yts = new Set(ys.flatMap((y) => y.artists.map((n) => key(n.name))));
   const named = (s: string) => apples.has(key(s)) || yts.has(key(s));
   const way = named(e.artist) ? e : e.artist && named(e.title) ? flip : undefined;
   if (way) return { edit: way, source: apples.has(key(way.artist)) ? "Apple Music" : "YouTube Music", sure: false };

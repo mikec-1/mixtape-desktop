@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as choose } from "@tauri-apps/plugin-dialog";
 import { fetch } from "./http";
-import { searchKind, searchYouTube, parseSecs, SEP, type Track } from "./yt";
+import { credits, searchKind, searchYouTube, parseSecs, type Track } from "./yt";
 import { likeAll, newPlaylist, notify, open, plural, useLibrary, useStore, type View } from "./store";
 import { covers, length, playlist as dzPlaylist } from "./deezer";
 
@@ -97,7 +97,7 @@ const keys = new WeakMap<Track, string>();
 export const songOf = (t: Track) => keys.get(t) ?? (keys.set(t, `${squash(norm(bareTitle(t.title)))}|${squash(norm(t.artists[0]?.name ?? ""))}`), keys.get(t)!);
 export const sameSong = (a: Track, b: Track) => a.id === b.id || (songOf(a) === songOf(b) && Math.abs((parseSecs(a.duration) ?? 0) - (parseSecs(b.duration) ?? 0)) <= (a.duration && b.duration ? 10 : Infinity));
 
-const rowArtists = (s: string) => s.split(/[;/]/).flatMap((p) => p.split(SEP)).map((a) => a.trim()).filter(Boolean);
+const rowArtists = (s: string) => s.split(/[;/]/).flatMap(credits);
 
 const EXTRA = new Set("remix mix edit version vip flip bootleg sped speed up slowed reverb tiktok tik tok nightcore extended radio club original remaster remastered live acoustic instrumental deluxe explicit clean bonus single prod feat ft featuring with lofi lo fi bass boosted 8d".split(" "));
 
@@ -337,5 +337,6 @@ export function demo() {
   ok(!best(rows[8], [t("Popular", "The Weeknd", "3:35")]), "same name, other artist");
   ok(!best({ title: "Love Me Like You Do", artist: "Ellie Goulding" }, [t("Love", "Ellie Goulding")]), "a shorter title that's another song");
   ok(!!best({ title: "Save Your Tears (Remix) (with Ariana Grande)", artist: "The Weeknd;Ariana Grande" }, [t("Save Your Tears", "The Weeknd")]), "the original for a remix");
+  ok(rowArtists("Tyler, The Creator;Kali Uchis").join("|") === "Tyler, The Creator|Kali Uchis" && rowArtists("Drake, 21 Savage & Future").length === 3 && rowArtists("Earth, Wind & Fire featuring The Emotions").join("|") === "Earth, Wind & Fire|The Emotions", "bands with a comma stay one artist");
   return "ok";
 }

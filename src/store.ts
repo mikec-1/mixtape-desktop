@@ -4,7 +4,7 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import { art, beats, details, edges, fetchAudio, hear, parseSecs, playAudio, radio, searchKind, SEP, type Album, type Artist, type Quality, type Track } from "./yt";
+import { art, beats, details, edges, fetchAudio, hear, parseSecs, playAudio, radio, searchKind, credits, type Album, type Artist, type Quality, type Track } from "./yt";
 import { findAgain, foundWhenPlayed, known, original, recording, releasedCut, youtubeId } from "./deezer";
 import { sameSong, songOf } from "./import";
 import { clearDiscordRpc, sendNowPlaying, sendScrobble } from "./scrobble";
@@ -316,7 +316,7 @@ export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" :
 // before artists were read properly can have two in one ("Jazeek & Luciano"). Each is looked up once a
 // launch, two at a time, from its own entry on YT Music, and the answer written back wherever it's kept.
 // Songs found on YouTube when played (deezer.ts) have no entry there to read.
-const needsFill = (t: Track) => !t.file && !foundWhenPlayed(t.id) && (t.album === undefined || !t.duration || (!t.albumId && t.artists.some((a) => SEP.test(a.name))));
+const needsFill = (t: Track) => !t.file && !foundWhenPlayed(t.id) && (t.album === undefined || !t.duration || (!t.albumId && t.artists.some((a) => credits(a.name).length > 1)));
 const asked = new Set<string>();
 const toFill: Track[] = [];
 let filling = 0;

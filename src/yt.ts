@@ -53,7 +53,14 @@ export const art = (url: string | undefined, w: number, h = w) => url && (covers
 // Luciano" with only Jazeek linked). Every name in text becomes an artist, in the order written: a linked
 // one with its page, the others split at , & + x feat. ft. with vs., and given a page by search when
 // opened (artistByName). A linked name is never split ("Mumford & Sons").
-export const SEP = /\s*(?:,|&|\+|\s+x\s+|\bfeat\.?(?=\s)|\bft\.?(?=\s)|\bwith\b|\bvs\.?(?=\s))\s*/i;
+export const SEP = /\s*(?:,|&|\+|\s+x\s+|\bfeat\.?(?=\s)|\bft\.?(?=\s)|\bfeaturing\b|\bwith\b|\bvs\.?(?=\s))\s*/i;
+// Bands with a , & + or "and" in their name, kept whole wherever a credit is split.
+const ACTS = /earth, wind & fire|tyler, the creator|crosby, stills(?:, nash)? & (?:nash|young)|emerson, lake & palmer|blood, sweat & tears|peter, paul and mary|florence \+ the machine|simon & garfunkel|hall & oates|kool & the gang|sam & dave|mumford & sons|echo & the bunnymen|chase & status|above & beyond|years & years/gi;
+// A credit's artists in order: "Drake, 21 Savage & Future" is three, "Tyler, The Creator" one.
+export function credits(text: string) {
+  const acts: string[] = [];
+  return text.replace(ACTS, (m) => `\0${acts.push(m) - 1}\0`).split(SEP).map((x) => x.replace(/\0(\d+)\0/g, (_, i) => acts[+i]).trim()).filter(Boolean);
+}
 export function withUnlinked(linked: Artist[], text = ""): Artist[] {
   const marks: [number, Artist][] = [];
   let left = text;
@@ -65,7 +72,7 @@ export function withUnlinked(linked: Artist[], text = ""): Artist[] {
   for (const m of left.matchAll(/[^\0]+/g)) for (const name of splits(m[0])) marks.push([m.index + m[0].indexOf(name), { name }]);
   return marks.sort((a, b) => a[0] - b[0]).map(([, a]) => a);
 }
-const splits = (text: string) => text.split(SEP).map((x) => x.trim()).filter((x) => x && !STAT.test(x));
+const splits = (text: string) => credits(text).filter((x) => !STAT.test(x));
 // Not names: a count ("1.2M plays"), a year, a length.
 const STAT = /^([\d.,]+[KMB]?\s+\w+|\d{4}|\d+:\d\d(:\d\d)?)$/i;
 // The part of a list item's second line that holds its artists ("Jazeek & Luciano • STARBOYZ • 2:38"):

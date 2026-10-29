@@ -38,7 +38,9 @@ export default function App() {
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
   }, [owner]);
-  const locked = useAccount((s) => (mustSignIn || s.out) && !s.user) || !!handingOff(); // the app, signed out: sign in before anything else (and the website, signing the app in)
+  // The app, signed out: sign in before anything else (and the website, signing the app in). Signed in without an
+  // @ yet (or still asking): pick one first, on the app and the website alike.
+  const locked = useAccount((s) => ((mustSignIn || s.out) && !s.user) || (!!s.user && !s.profile?.handle && !s.named)) || !!handingOff();
   // An account that's never had the welcome gets it, even after a reload mid sign-in. One from before the
   // welcome (it already has a library) is marked done instead. Not by this browser's onboarded flag: that
   // belongs to whoever used it before. Waits for the profile so it never syncs a blank name.

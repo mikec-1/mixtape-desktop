@@ -1,6 +1,6 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { claimHandle, cleanHandle, handleFree, setProfile, cancelBrowserSignIn, enterCode, handBack, handingOff, publicProfile, resendSignUp, sendCode, signInInBrowser, signInWith, signInWithPassword, signOut, signUp, useAccount, viaBrowser } from "./account";
+import { claimHandle, cleanHandle, handleFree, setProfile, cancelBrowserSignIn, enterCode, handBack, handingOff, resendSignUp, sendCode, signInInBrowser, signInWith, signInWithPassword, signOut, signUp, useAccount, viaBrowser } from "./account";
 
 // Signing in: email and password, or Google. Making an account then asks for the
 // 6-digit code Supabase emails to confirm the address ({{ .Token }} in its "Confirm signup" template).
@@ -38,18 +38,8 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const { user, profile } = useAccount();
-  // Handing off: whether you've picked a username yet, asked for on its own rather than waiting out a whole
-  // library sync, so the right screen shows at once. Kept with whose answer it is, so another account signing
-  // in doesn't get the last one's. null: still asking.
-  const [asked, setAsked] = useState<{ id: string; named: boolean }>();
-  const named = profile?.handle ? true : asked && asked.id === user?.id ? asked.named : null;
-  useEffect(() => {
-    if (!handingOff() || !user || profile?.handle) return;
-    let on = true;
-    publicProfile(user.id).then((p) => on && setAsked({ id: user.id, named: !!p?.profile?.handle }), () => on && setAsked({ id: user.id, named: false }));
-    return () => void (on = false);
-  }, [user?.id, profile?.handle]);
+  const { user } = useAccount();
+  const named = useAccount((s) => (s.profile?.handle ? true : s.named)); // picked an @ yet (undefined: still asking)
   const run = (what: string, fn: () => Promise<unknown>) => {
     if (handingOff() && ["password", "code", "email", "google"].includes(what)) sessionStorage.justIn = 1; // kept through Google's round trip
     setBusy(what), setError(""), setNote("");
@@ -93,6 +83,8 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
   const heading = (text: string) => poster && <h1 className="mb-5 text-[clamp(48px,6vw,84px)] leading-[0.9] font-black tracking-[-0.05em] text-balance">{text}</h1>;
   const bad = error ? { "aria-invalid": true, "aria-describedby": "said" } : {};
   const said = (error || note) && <p id="said" role={error ? "alert" : "status"} className={`mt-4 text-sm font-medium ${error ? s.error : s.quiet}`}>{error || note}</p>;
+  if (user && named === undefined) return <span className="spinner mx-auto block size-6 text-white/50" />;
+  if (user && !named) return <NameYourself s={s} heading={heading} />;
   if (viaBrowser)
     return (
       <div className="w-full max-w-sm">
@@ -106,8 +98,6 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
         {said}
       </div>
     );
-  if (handingOff() && user && named === null) return <span className="spinner mx-auto block size-6 text-white/50" />;
-  if (handingOff() && user && !named) return <NameYourself s={s} heading={heading} />;
   if (handingOff() && user)
     return (
       <div className="w-full max-w-sm">
@@ -202,7 +192,7 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
   );
 }
 
-// A new account (or one from before @handles), on the website: what to call you, and your @, like
+// A new account (or one from before @handles), on the app or the website: what to call you, and your @, like
 // Spotify's last sign-up step. The name's yours to change any time; the @ is unique.
 type Styles = Record<"label" | "field" | "primary" | "quiet" | "error", string>;
 function NameYourself({ s, heading }: { s: Styles; heading: (t: string) => React.ReactNode }) {
@@ -247,13 +237,13 @@ function NameFields({ s, name, setName, handle, setHandle, free, autoFocus }: { 
     <>
       <label className={s.label}>
         Display name
-        <input autoFocus={autoFocus} required value={name} onChange={(e) => setName(e.target.value)} name="name" autoComplete="name" maxLength={40} className={s.field} />
+        <input autoFocus={autoFocus} required value={name} onChange={(e) => setName(e.target.value)} name="nickname" autoComplete="nickname" maxLength={40} className={s.field} />
       </label>
       <label className={s.label}>
         Username
         <span className="relative block">
           <span className="pointer-events-none absolute top-1/2 left-4 mt-[3px] -translate-y-1/2 text-[16px] opacity-40">@</span>
-          <input required value={handle} onChange={(e) => setHandle(cleanHandle(e.target.value))} name="username" autoComplete="username" spellCheck={false} minLength={3} className={`${s.field} pl-9`} />
+          <input required value={handle} onChange={(e) => setHandle(cleanHandle(e.target.value))} name="handle" autoComplete="off" spellCheck={false} minLength={3} className={`${s.field} pl-9`} />
         </span>
         <span className={`mt-2 block text-[13px] font-medium ${handle.length < 3 ? s.quiet : free === false ? s.error : free ? "text-[#3ddc84]" : s.quiet}`}>{handle.length < 3 ? "At least 3 letters or numbers." : free === false ? "Someone already has that one." : free ? "It’s yours." : "Checking…"}</span>
       </label>

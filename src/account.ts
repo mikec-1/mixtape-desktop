@@ -20,7 +20,9 @@ export const mustSignIn = canSignIn;
 
 // welcomed: this account has been through the welcome (Bring your music, Pick a few artists), on any computer.
 export type Profile = { name: string; handle?: string; avatar?: string; welcomed?: boolean };
-type Account = { user?: { id: string; email?: string }; owner?: boolean; profile?: Profile; out?: boolean; state: "idle" | "syncing" | "error"; synced?: number; error?: string };
+// named: whether this account has picked an @ yet (undefined: still asking). The app and the website ask for
+// one before anything else.
+type Account = { user?: { id: string; email?: string }; owner?: boolean; profile?: Profile; named?: boolean; out?: boolean; state: "idle" | "syncing" | "error"; synced?: number; error?: string };
 export const useAccount = create<Account>()(persist((): Account => ({ state: "idle" }), { name: "account", partialize: ({ user, profile, synced }) => ({ user, profile, synced }) }));
 // The owner's account gets the developer tools: replaying the welcome (Settings → About, ⌘⇧O). The database
 // decides (supabase owners table), asked on each sign-in; anything that reaches the server checks there again.
@@ -178,8 +180,12 @@ function signedIn(user: User) {
   const was = useAccount.getState().user;
   // Another account than the last one here: nothing of the last one's (its name, @handle, owner) carries over,
   // or it would sync up as this one's.
-  if (was?.id !== user.id) useAccount.setState({ user: { id: user.id, email: user.email }, out: false, profile: undefined, owner: undefined, synced: undefined });
+  if (was?.id !== user.id) useAccount.setState({ user: { id: user.id, email: user.email }, out: false, profile: undefined, owner: undefined, named: undefined, synced: undefined });
   else if (was.email !== user.email) useAccount.setState({ user: { id: user.id, email: user.email }, out: false });
+  // Picked an @ yet? Asked on its own rather than after a whole library sync, so the right screen shows at once.
+  // Not knowing (offline) doesn't hold you up: it asks again next time.
+  const { profile, named } = useAccount.getState();
+  if (!profile?.handle && named === undefined) void table<{ handle: string }[]>(`handles?select=handle&user_id=eq.${user.id}`).then(([m]) => !!m, () => true).then((named) => useAccount.getState().user?.id === user.id && useAccount.setState({ named }));
   void token().then((t) => rpc<boolean>("am_owner", {}, t)).then((owner) => useAccount.setState({ owner }), () => {});
   if (watching && was?.id === user.id) return;
   // The library here belongs to whoever last signed in on this computer (it stays after signing out). Another
@@ -207,7 +213,7 @@ function signedOut() {
   seen.clear();
   clearTimeout(soon);
   void idbPut("sync", undefined);
-  useAccount.setState({ user: undefined, owner: undefined, profile: undefined, synced: undefined, state: "idle", error: undefined });
+  useAccount.setState({ user: undefined, owner: undefined, profile: undefined, named: undefined, synced: undefined, state: "idle", error: undefined });
 }
 export async function token() {
   const { data, error } = await (await auth()).getSession();
@@ -419,10 +425,11 @@ export function syncNow(): Promise<void> {
       const bearer = await token();
       for (let i = 0; i < 20 && m === meta && (await round(m, bearer)); i++);
       if (m === meta) useAccount.setState({ state: "idle", synced: Date.now(), error: undefined });
-      // A new account's profile: the name and picture the sign-in gave, or the start of your email.
+      // A new account's profile: the name and picture the sign-in gave (Google's), if any. Never your email:
+      // you pick a name and an @ first (NameYourself).
       if (m === meta && !useAccount.getState().profile && who) {
         const d = who.user_metadata ?? {};
-        setProfile({ name: d.full_name ?? d.name ?? who.email?.split("@")[0] ?? "", ...((d.avatar_url ?? d.picture) && { avatar: d.avatar_url ?? d.picture }) });
+        setProfile({ name: d.full_name ?? d.name ?? "", ...((d.avatar_url ?? d.picture) && { avatar: d.avatar_url ?? d.picture }) });
       }
     } catch (e) {
       // Deleted from another device: signed out here too, library kept.

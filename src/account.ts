@@ -160,6 +160,16 @@ async function checkHandle() {
 // Signing out (or deleting your account) leaves your library on this computer (or in this browser). On
 // the web, where an account is optional, it goes back to the sign-in (out), which you can skip.
 const here = inApp ? "on this computer" : "in this browser";
+// Changes here that haven't reached your account, after one last try to send them. Signing out keeps them
+// here, but signing in with another account here clears them (signedIn), so Sign Out asks first.
+export async function unsynced() {
+  const { user } = useAccount.getState();
+  if (!user) return false;
+  const left = async () => useAccount.getState().user?.id === user.id && changes(await loadMeta(user.id)).length > 0;
+  if (!(await left())) return false;
+  await syncNow(), await syncNow(); // twice: one already running doesn't send what changed after it started
+  return left();
+}
 export async function signOut() {
   await (await auth()).signOut({ scope: "local" });
   signedOut();

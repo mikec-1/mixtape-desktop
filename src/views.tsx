@@ -18,7 +18,7 @@ import { albumByName, art, artist, artistByName, charts, collection as ytCollect
 import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, pin, topSongs as dzTop, useOriginals, withGuests, youtubeId } from "./deezer";
 import { addFolder, canHaveFiles, fileTrack, guessTags, identify, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
-import { canSignIn, claimHandle, cleanHandle, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, useAccount, useOwner, type Profile } from "./account";
+import { canSignIn, claimHandle, cleanHandle, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, unsynced, useAccount, useOwner, type Profile } from "./account";
 import { SignIn, useFree } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
@@ -3141,7 +3141,7 @@ function AccountPane() {
         <h3 className={`${subhead} mb-3`}>Your Data</h3>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => void exportAll()} className={quiet}><Download size={16} /> Export Your Data</button>
-          <button onClick={() => void signOut().catch(report)} className={quiet}>Sign Out</button>
+          <button onClick={() => void unsynced().then((left) => (left ? warn("Sign out before your changes sync?", "Sign Out", () => void signOut().catch(report), `Your latest changes haven’t reached your account${navigator.onLine ? "" : " because you’re offline"}. They stay ${inApp ? "on this computer" : "in this browser"}, but signing in with another account here clears them.`) : signOut())).catch(report)} className={quiet}>Sign Out</button>
           <button onClick={() => setDeleting("ask")} className={`${quiet} text-[#ff375f]`}>Delete Account…</button>
         </div>
         {deleting && (

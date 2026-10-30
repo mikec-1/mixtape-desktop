@@ -471,17 +471,21 @@ export function lookAgain(t: Track) {
 export const keepLyrics = (t: Track) => stored(t).then(() => {}, () => {});
 
 // Lyrics found are kept on disk, so a song heard before has them at once, even offline, with no request.
-// A miss is kept two days, then asked again, as sources keep adding songs. ponytail: never pruned (a
-// few KB a song); bump the version when a source is added, or what's read from one changes (v2: Apple's
-// backing-vocal timings and duet sides; v3: Mixtape's matching; v4: no copies that can't fit the song).
+// A miss is kept two days, then asked again, as sources keep adding songs. It's only a miss for the name it
+// was asked with: a recording heard under YouTube's Latin "Bla Bla" first finds "Бла Бла" when a song
+// carrying that name plays it (missed, read by useLyrics). ponytail: never pruned (a few KB a song); bump
+// the version when a source is added, or what's read from one changes (v2: Apple's backing-vocal timings
+// and duet sides; v3: Mixtape's matching; v4: no copies that can't fit the song).
+const missed = new Map<string, string>();
 async function stored(t: Track): Promise<Lyrics | null> {
   const own = t.file ? await fromFile(t.file) : undefined;
   if (own) return own;
-  const key = `lyrics:v4:${heard(t)}`;
-  const kept = await idbGet<{ at: number; lyrics: Lyrics | null }>(key).catch(() => undefined);
-  if (kept && (kept.lyrics ? !off(kept.lyrics.source) : Date.now() - kept.at < 2 * 86_400_000)) return kept.lyrics;
-  const lyrics = await find(t);
-  idbPut(key, { at: Date.now(), lyrics }).catch(() => {});
+  const key = `lyrics:v4:${heard(t)}`, asked = songKey(t);
+  const kept = await idbGet<{ at: number; lyrics: Lyrics | null; asked?: string }>(key).catch(() => undefined);
+  const use = kept && (kept.lyrics ? !off(kept.lyrics.source) : kept.asked === asked && Date.now() - kept.at < 2 * 86_400_000);
+  const lyrics = use ? kept.lyrics : await find(t);
+  if (!use) idbPut(key, { at: Date.now(), lyrics, asked }).catch(() => {});
+  if (!lyrics) missed.set(heard(t), asked);
   return lyrics;
 }
 
@@ -634,6 +638,10 @@ export function useLyrics(t?: Track, words = false) {
   const mine = useMine((s) => (t ? s.songs[songKey(t)] : undefined));
   const by = useTiming((s) => (t ? s.songs[songKey(t)] : undefined));
   const fetched = useResult(t && !mine ? `lyrics:${heard(t)}` : undefined, () => stored(t!));
+  // None found under the name it had then (renamed to its original title since, or another song playing
+  // the same recording): ask again under this one.
+  const name = t && songKey(t);
+  useEffect(() => void (t && !mine && fetched.value === null && missed.get(heard(t)) !== name && lookAgain(t)), [fetched.value, name]);
   const base = mine ? fromMine(mine) : fetched.value;
   // Aligned before the timing nudge, so nudging shifts the found words instead of looking again in the wrong place.
   const want = useSettings((s) => s.lyricsWords) && words && "__TAURI_INTERNALS__" in window && !!t && !!base?.synced;

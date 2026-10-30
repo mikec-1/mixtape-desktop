@@ -2086,7 +2086,8 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
   const held = useRef(0); // when you last scrolled by hand: the view leaves you there for five seconds
   const [scrolling, setScrolling] = useState(false);
   const motion = useRef<Motion>({ springs: new Map(), tops: new WeakMap(), width: 0 });
-  const shown = useRef<Lyrics | null>(null); // the lyrics last laid out: new ones jump, rather than glide
+  const shown = useRef<string | null>(null); // the song last laid out: a new one jumps, rather than glides
+  const whole = useRef(-1); // the line being sung lit whole, before its words came
   const synced = !!value?.synced;
   const lines = value?.lines ?? [];
   const sz = SIZES[size];
@@ -2105,8 +2106,10 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
       const roman = extras.romanised?.[i];
       const real = !!line.words && !roman;
       const words = real ? line.words! : estimate ? estimateWords(lines, i, roman ?? line.text) : undefined;
-      if (words) out.set(i, { words, groups: groups(words, real) });
+      // Words that land partway through a line start on the next one, so the line being sung doesn't dim back to them.
+      if (words && !(i === at && whole.current === at)) out.set(i, { words, groups: groups(words, real) });
     }
+    if (synced && lines[at]?.text && !out.has(at)) whole.current = at;
     return out;
   }, [value, at, ahead, extras.romanised, estimate]);
 
@@ -2118,8 +2121,9 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
     const root = box.current;
     if (!live || !root || !value) return void (shown.current = null);
     const el = synced && Date.now() - held.current >= 5000 ? root.querySelector<HTMLElement>(`[data-line="${Math.max(0, ahead)}"]`) : null;
-    const glide = shown.current === value && !still;
-    shown.current = value;
+    // The same song's lyrics changing (its words found, or moved to fit the song) glide too.
+    const glide = shown.current === track?.id && !still;
+    shown.current = track?.id ?? null;
     cascade(root, el, Math.max(0, ahead), motion.current, glide);
   });
 

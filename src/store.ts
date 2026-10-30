@@ -977,6 +977,7 @@ type Settings = {
   listenBrainzToken: string; lastfmSessionKey: string; lastfmUsername: string; discordRpc: boolean;
   resumeQueue: boolean; pauseOnDevice: boolean; // Settings → Playback
   autoUpdate: boolean; // Settings → About: small updates install as you quit (update.ts)
+  crashReports: boolean; // Settings → Privacy: off until you turn it on (crash.ts)
 };
 export type LyricsSource = "apple" | "lrclib" | "netease";
 const defaultCountry = () => {
@@ -998,7 +999,7 @@ export const useSettings = create<Settings>()(
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "off", menuBarFor: [],
       country: defaultCountry(),
       listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "", discordRpc: false,
-      resumeQueue: true, pauseOnDevice: true, autoUpdate: true,
+      resumeQueue: true, pauseOnDevice: true, autoUpdate: true, crashReports: false,
     }),
     // Version 1: the menu bar player starts off, so it only appears once you turn it on.
     { name: "settings", version: 1, migrate: (s) => ({ ...(s as Settings), menuBar: "off", menuBarFor: [] }) },

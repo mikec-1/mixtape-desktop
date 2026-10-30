@@ -4,7 +4,7 @@ import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
-import { type LucideIcon, ArrowDown, ArrowUp, Ban, CircleCheck, CircleMinus, CirclePlus, Eye, FolderInput, FolderPlus, HeartOff, ImageOff, Import, ListEnd, ListMinus, ListPlus, ListStart, ListX, Lock, PinOff, RefreshCw, UserMinus, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { type LucideIcon, ArrowDown, ArrowUp, Ban, CircleCheck, CircleMinus, CirclePlus, Eye, FolderInput, FolderPlus, HeartOff, ImageOff, Import, ListEnd, ListMinus, ListPlus, ListStart, ListX, Lock, PinOff, RefreshCw, UserMinus, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MessageSquare, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
 import { Menu, Submenu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, canAlign, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
@@ -3867,7 +3867,7 @@ function DangerZone() {
 }
 
 function Privacy() {
-  const history = useSettings((s) => s.history);
+  const history = useSettings((s) => s.history), crashes = useSettings((s) => s.crashReports);
   const priv = usePrivate((s) => s.on);
   return (
     <>
@@ -3881,8 +3881,11 @@ function Privacy() {
             <Switch label="Listening History" on={history} onChange={(history) => useSettings.setState({ history })} />
           </div>
         </Row>
+        <Row label="Send Crash Reports" detail={crashes ? "When something breaks, what went wrong is sent to help fix it, without your email, files or songs" : "Nothing is sent when something breaks"}>
+          <Switch label="Send Crash Reports" on={crashes} onChange={(on) => (on ? void import("./crash").then((c) => c.turnOn()) : useSettings.setState({ crashReports: false }))} />
+        </Row>
       </div>
-      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">Mixtape sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
+      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">{crashes ? "Besides crash reports, Mixtape" : "Mixtape"} sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
     </>
   );
 }
@@ -3957,6 +3960,7 @@ function About() {
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           <button onClick={() => openLink("https://github.com/mikec-1/mixtape-desktop")} className={quiet}><CodeXml size={15} /> GitHub</button>
           <button onClick={() => openLink("https://github.com/mikec-1/mixtape-desktop/issues")} className={quiet}><LifeBuoy size={15} /> Report a Problem</button>
+          <button onClick={() => void import("./crash").then((c) => c.feedback())} className={quiet}><MessageSquare size={15} /> Send Feedback</button>
           {owner && <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={quiet}>Show the Welcome Again</button>}
         </div>
       </div>

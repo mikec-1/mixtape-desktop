@@ -21,6 +21,7 @@ try {
     Root = (await import("./App")).default;
     if (label !== false) void import("./startup").catch(console.error); // never holds the window up
     if (label !== false && /Mac/.test(navigator.userAgent)) void import("./menubar").catch(console.error);
+    void import("./crash").catch(console.error); // crash reports, once you turn them on
     // Draw once the library, your own lyrics, what's downloaded and your files are read (a few ms), so none
     // flashes in late, and offline the first covers come from disk. A store that can't be read (it never
     // says it's done) doesn't hold the window up past a second.
@@ -34,27 +35,35 @@ try {
   Root = () => <Broken error={e} />;
 }
 
-function Broken({ error }: { error: unknown }) {
+function Broken({ error, ask }: { error: unknown; ask?: boolean }) {
+  const [sent, setSent] = React.useState(false);
   return (
     <div className="grid h-full place-items-center bg-paper p-10 text-center">
       <div className="max-w-lg">
         <h1 className="text-3xl font-extrabold tracking-[-0.03em]">Mixtape couldn’t start</h1>
         <p className="mt-3 break-words text-muted">{error instanceof Error ? error.message : String(error)}</p>
         {import.meta.env.DEV && <p className="mt-3 text-sm text-muted">Just updated? Run <code className="rounded bg-ink/[0.07] px-1.5 py-0.5">pnpm install</code>, then start Mixtape again. The details are in the console (⌥⌘I).</p>}
-        <button onClick={() => location.reload()} className="press mt-6 h-9 rounded-full bg-ink px-4 text-sm font-semibold text-paper">Try Again</button>
+        <div className="mt-6 flex justify-center gap-2">
+          {ask && <button onClick={() => void import("./crash").then((c) => (c.turnOn(error), setSent(true)))} disabled={sent} className="press h-9 rounded-full bg-ink/[0.07] px-4 text-sm font-semibold">{sent ? "Sent. Thank You" : "Send Crash Report"}</button>}
+          <button onClick={() => location.reload()} className="press h-9 rounded-full bg-ink px-4 text-sm font-semibold text-paper">Try Again</button>
+        </div>
+        {ask && !sent && <p className="mt-3 text-xs text-muted">This also turns on crash reports, in Settings → Privacy.</p>}
       </div>
     </div>
   );
 }
 
 // And one that breaks while drawing says so too, rather than leaving the window empty.
-class Guard extends React.Component<{ children: ReactNode }, { error?: unknown }> {
-  state: { error?: unknown } = {};
+class Guard extends React.Component<{ children: ReactNode }, { error?: unknown; ask?: boolean }> {
+  state: { error?: unknown; ask?: boolean } = {};
   static getDerivedStateFromError(error: unknown) {
     return { error };
   }
+  componentDidCatch(error: unknown) {
+    void import("./crash").then((c) => this.setState({ ask: c.firstCrash() }, () => c.crashed(error)));
+  }
   render() {
-    return "error" in this.state ? <Broken error={this.state.error} /> : this.props.children;
+    return "error" in this.state ? <Broken error={this.state.error} ask={this.state.ask} /> : this.props.children;
   }
 }
 

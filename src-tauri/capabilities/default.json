@@ -95,6 +95,9 @@
         },
         {
           "url": "https://ws.audioscrobbler.com/*"
+        },
+        {
+          "url": "https://*.sentry.io/*"
         }
       ]
     }

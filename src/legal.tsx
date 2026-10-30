@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 // The website's privacy policy and terms of use (mixtaped.tech/privacy and /terms), drawn without the app
 // like done.tsx. Written from what Mixtape actually does: change them when that changes, and the date.
 const UPDATED = "30 October 2026";
-const MAIL = import.meta.env.VITE_FEEDBACK_EMAIL || "support@mixtaped.tech";
+const MAIL = "legal@mixtaped.tech";
 const Mail = () => <a href={`mailto:${MAIL}`}>{MAIL}</a>;
 const Out = ({ to, children }: { to: string; children: ReactNode }) => <a href={to} target="_blank" rel="noopener">{children}</a>;
 

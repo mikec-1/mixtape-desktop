@@ -133,7 +133,8 @@ export default function Legal() {
   const { title, short, sections } = PAGES[path];
   document.title = `${title} · Mixtape`;
   return (
-    <main className="dark min-h-screen bg-[#0b0b0c] px-[clamp(20px,6vw,88px)] pt-[clamp(40px,8vw,96px)] pb-24 text-white [color-scheme:dark]">
+    // Scrolls itself: the app's body never does (index.css). And its text can be selected, unlike the app's.
+    <main className="dark h-dvh overflow-y-auto bg-[#0b0b0c] select-text px-[clamp(20px,6vw,88px)] pt-[clamp(40px,8vw,96px)] pb-24 text-white [color-scheme:dark]">
       <div className="mx-auto max-w-[1080px] animate-[rise_600ms_var(--ease-out)_both]">
         <nav className="mb-14 flex items-center gap-6 text-[15px] font-semibold">
           <a href="/" className="mr-auto"><img src="/favicon.svg" alt="Mixtape" className="size-9" /></a>

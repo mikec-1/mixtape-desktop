@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { ChevronLeft, House, Library as LibraryIcon, ListMusic, Maximize2, MicVocal, Moon, Music, PanelLeftClose, PanelLeftOpen, Pause, PictureInPicture2, Play, Repeat, Repeat1, Search as SearchIcon, Settings as SettingsIcon, Shuffle, SkipBack, Sparkle, SkipForward, TriangleAlert, Volume2, VolumeX, WifiOff, X, type LucideIcon } from "lucide-react";
-import { ROOTS, audio, back, cycleRepeat, go, next, prev, seekTo, setMuted, setVolume, sleepIn, subscribeAudio, toggle, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
+import { ROOTS, SPEEDS, audio, back, cycleRepeat, go, next, prev, seekTo, setMuted, setVolume, sleepIn, subscribeAudio, toggle, toggleMini, toggleSheet, toggleShuffle, useAudio, useLibrary, useOnline, useSettings, useStore } from "./store";
 import { actionFor, comboFrom, recording, searchTab } from "./keys";
 import { useExtras, useLine, useLyrics } from "./lyrics";
 import { Artist, Artists, SongName, LikeButton, ChartsPage, CollectionPage, DiscographyPage, Explicit, Dialogs, WebMenu, FolderPage, HistoryPage, Home, Library, LocalPage, NowPlaying, PlaylistPage, popup, ProfilePage, QueuePanel, ReleasesPage, Search, Settings, SharedPage, trackMenu, WrappedPage } from "./views";
@@ -274,7 +274,7 @@ function PlayerBar() {
   const { paused, time, duration, volume, muted } = useAudio();
   const shuffle = useStore((s) => s.shuffle);
   const repeat = useStore((s) => s.repeat);
-  const sleep = useStore((s) => s.sleep);
+  const sleep = useStore((s) => s.sleep), speed = useSettings((s) => s.speed);
   const lyrics = useStore((s) => s.sheet === "lyrics");
   const open = useStore((s) => !!s.sheet); // over Now Playing or lyrics: the same bar, white in a faint glass box
   const queue = useSettings((s) => s.queue);
@@ -325,6 +325,7 @@ function PlayerBar() {
             <span className="w-9 text-right">{fmt(time)}</span>
             <input type="range" aria-label="Seek" min={0} max={duration || 0} step={0.1} value={time} onChange={(e) => seekTo(+e.target.value)} style={fill(time, duration)} className="flex-1" />
             <span className="w-9">{fmt(duration)}</span>
+            {speed !== 1 && <button onClick={speedMenu} aria-label="Playback Speed" title="Playback Speed" className="press -ml-1 rounded-full bg-ink/[0.07] px-1.5 py-px font-semibold text-ink hover:bg-ink/[0.12]">{speed}×</button>}
           </div>
         </div>
 
@@ -397,6 +398,7 @@ function Peek({ track }: { track: Track }) {
   );
 }
 
+const speedMenu = () => popup(SPEEDS.map((x) => ({ text: x === 1 ? "Normal" : `${x}×`, checked: useSettings.getState().speed === x, action: () => useSettings.setState({ speed: x }) })));
 const sleepMenu = () =>
   popup([
     ...[15, 30, 45, 60].map((m) => ({ text: `${m} Minutes`, action: () => sleepIn(m) })),

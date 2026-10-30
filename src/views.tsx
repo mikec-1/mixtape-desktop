@@ -3362,7 +3362,7 @@ function Row({ label, detail, children }: { label: string; detail: ReactNode; ch
 }
 
 function Playback() {
-  const { crossfade, autoplay, resumeQueue, pauseOnDevice } = useSettings();
+  const { crossfade, autoplay, resumeQueue, pauseOnDevice, speed } = useSettings();
   const set = useSettings.setState;
   return (
     <div className={card}>
@@ -3379,6 +3379,12 @@ function Playback() {
         <div className="flex items-center gap-3">
           <input type="range" aria-label="Crossfade" min={0} max={12} step={1} value={crossfade} onChange={(e) => set({ crossfade: +e.target.value })} style={fill(crossfade, 0, 12)} className="w-36" />
           <span className="w-10 text-right text-xs tabular-nums">{crossfade ? `${crossfade} s` : "Off"}</span>
+        </div>
+      </Row>
+      <Row label="Speed" detail={speed === 1 ? "Songs play at their normal speed" : "Faster or slower, at the same pitch. The player bar shows the speed beside the time"}>
+        <div className="flex items-center gap-3">
+          <input type="range" aria-label="Speed" min={0.5} max={2} step={0.25} value={speed} onChange={(e) => set({ speed: +e.target.value })} style={fill(speed, 0.5, 2)} className="w-36" />
+          <span className="w-10 text-right text-xs tabular-nums">{speed}×</span>
         </div>
       </Row>
     </div>

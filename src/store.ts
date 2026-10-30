@@ -978,6 +978,7 @@ type Settings = {
   resumeQueue: boolean; pauseOnDevice: boolean; // Settings → Playback
   autoUpdate: boolean; // Settings → About: small updates install as you quit (update.ts)
   crashReports: boolean; // Settings → Privacy: off until you turn it on (crash.ts)
+  speed: number; // Settings → Playback, 0.5× to 2×
 };
 export type LyricsSource = "apple" | "lrclib" | "netease";
 const defaultCountry = () => {
@@ -999,12 +1000,16 @@ export const useSettings = create<Settings>()(
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "off", menuBarFor: [],
       country: defaultCountry(),
       listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "", discordRpc: false,
-      resumeQueue: true, pauseOnDevice: true, autoUpdate: true, crashReports: false,
+      resumeQueue: true, pauseOnDevice: true, autoUpdate: true, crashReports: false, speed: 1,
     }),
     // Version 1: the menu bar player starts off, so it only appears once you turn it on.
     { name: "settings", version: 1, migrate: (s) => ({ ...(s as Settings), menuBar: "off", menuBarFor: [] }) },
   ),
 );
+// Both players keep your speed from song to song (a new song resets playbackRate to the default), pitch kept.
+const speed = () => players.forEach((p) => (p.defaultPlaybackRate = p.playbackRate = useSettings.getState().speed));
+speed(), useSettings.subscribe(speed);
+export const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 // Intel Macs can't time words from the song (lib.rs can_align), so they highlight whole lines like Spotify:
 // lyricsWords stays off there and Settings → Lyrics hides its switch.
 export let canAlign = true;

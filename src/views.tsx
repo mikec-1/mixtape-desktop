@@ -94,7 +94,8 @@ export function Search() {
     if (view) useStore.setState({ query: "" }), open(view);
   }, [query]);
   const go = (q: string) => (useStore.setState({ query: q }), setTerm(q), setTyping(false), addRecentSearch({ id: q.toLowerCase(), kind: "query", title: q }));
-  const playFrom = (list: Track[]) => (i: number) => (rememberTrack(list[i]), play(list, i));
+  // A song picked from results plays alone, then its radio (Mixtape §9), not the rest of the results.
+  const playFrom = (list: Track[]) => (i: number) => (rememberTrack(list[i]), startRadio(list[i]));
   const all = tab === "all" ? found.data : undefined;
   const list = kind.data?.tab === tab ? kind.data.items : undefined;
   const top = all?.top;
@@ -150,7 +151,7 @@ export function Search() {
                 {recents.map((r) => (
                   <div key={r.id} className="group relative w-36 shrink-0">
                     <button
-                      onClick={() => (r.kind === "query" ? go(r.title) : r.kind === "artist" ? open({ name: "artist", id: r.id, by: r.title }) : r.kind === "album" ? open({ name: "collection", id: r.id }) : r.track && play([r.track], 0))}
+                      onClick={() => (r.kind === "query" ? go(r.title) : r.kind === "artist" ? open({ name: "artist", id: r.id, by: r.title }) : r.kind === "album" ? open({ name: "collection", id: r.id }) : r.track && startRadio(r.track))}
                       className="press block w-full text-left"
                     >
                       <div className={`grid aspect-square place-items-center overflow-hidden bg-ink/[0.06] text-muted ${r.kind === "artist" ? "rounded-full" : "rounded-xl"}`}>

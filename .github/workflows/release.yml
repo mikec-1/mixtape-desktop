@@ -45,6 +45,7 @@ jobs:
           VITE_SHARE_URL: ${{ secrets.VITE_SHARE_URL }}
           VITE_LASTFM_KEY: ${{ secrets.VITE_LASTFM_KEY }}
           VITE_LASTFM_SECRET: ${{ secrets.VITE_LASTFM_SECRET }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
         with:
           tagName: ${{ github.ref_name }}

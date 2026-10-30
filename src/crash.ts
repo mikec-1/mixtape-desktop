@@ -36,7 +36,7 @@ export const crashed = (e: unknown) => (on() ? send(e) : firstCrash() && notify(
 
 // Send Feedback (Settings → About): Sentry's form with reports on, your mail app otherwise.
 export const feedback = () => (on() && dsn ? void start().then(async (S) => { const form = await S.getFeedback()?.createForm(); form?.appendToDom(); form?.open(); })
-  : mail(`mailto:${import.meta.env.VITE_FEEDBACK_EMAIL ?? ""}?subject=${encodeURIComponent(`Mixtape ${version} feedback`)}`));
+  : mail(`mailto:feedback@mixtaped.tech?subject=${encodeURIComponent(`Mixtape ${version} feedback`)}`));
 const mail = (url: string) => void ("__TAURI_INTERNALS__" in window ? import("@tauri-apps/plugin-opener").then((o) => o.openUrl(url)) : (location.href = url));
 
 if (on()) void start(); // Sentry's own handlers catch what happens from here on

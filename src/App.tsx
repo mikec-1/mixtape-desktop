@@ -168,7 +168,7 @@ export default function App() {
 
       <NowPlaying />
       <Dialogs />
-      <Offline />
+      <Notices />
     </div>
     {dragging && (
       <div className="pointer-events-none fixed inset-2 z-50 grid animate-[fade_0.15s_ease-out] place-items-center rounded-2xl bg-black/40 ring-4 ring-accent backdrop-blur-sm ring-inset">
@@ -404,11 +404,40 @@ const sleepMenu = () =>
     ...(useStore.getState().sleep ? [{ item: "Separator" as const }, { text: "Turn Off Timer", action: () => sleepIn() }] : []),
   ]);
 
+// News that stays (offline, a new version) waits at the top, over the drag strip, where it covers no page or player.
+function Notices() {
+  return (
+    <div className="fixed top-3 left-1/2 z-50 flex -translate-x-1/2 flex-col items-center gap-2">
+      <Offline />
+      <UpdateNotice />
+    </div>
+  );
+}
+
 function Offline() {
   if (useOnline()) return null;
   return (
-    <div role="status" className="glass fixed top-3 left-1/2 z-50 flex -translate-x-1/2 animate-enter items-center gap-2.5 rounded-full py-2 pr-5 pl-4 text-sm font-semibold">
+    <div role="status" className="glass flex animate-enter items-center gap-2.5 rounded-full py-2 pr-5 pl-4 text-sm font-semibold">
       <WifiOff size={16} /> You’re offline. Your library is still here.
+    </div>
+  );
+}
+
+// The news on top and what to do about it underneath, so they don't read as three equal words in a row.
+// Closing it hides it till the next launch, or Settings → About.
+function UpdateNotice() {
+  const update = useStore((s) => s.update);
+  if (!update) return null;
+  return (
+    <div role="status" className="relative flex w-max max-w-[min(460px,calc(100vw-32px))] animate-enter flex-col items-center gap-2.5 rounded-[10px] bg-white px-10 py-3 text-black shadow-xl shadow-black/25">
+      <div className="max-w-full truncate text-[15px] font-semibold">{update.run ? `Mixtape ${update.version} is out` : `Updating to ${update.version}…`}</div>
+      {update.run && <>
+        <div className="flex gap-2 text-[14px] font-semibold">
+          {update.notes && <button onClick={() => useStore.setState({ dialog: { kind: "update" } })} className="press h-8 rounded-lg bg-black/[0.07] px-3.5 hover:bg-black/[0.12]">See Changes</button>}
+          <button onClick={update.run} className="press h-8 rounded-lg bg-accent px-3.5 text-white">Update</button>
+        </div>
+        <button onClick={() => useStore.setState({ update: undefined })} aria-label="Close" className="press absolute top-2 right-2 grid size-6 place-items-center rounded-full text-black/40 hover:bg-black/[0.06] hover:text-black"><X size={15} /></button>
+      </>}
     </div>
   );
 }

@@ -2372,7 +2372,7 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "versions" ? <Versions d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : dialog?.kind === "saved" ? <SavedIn key={dialog.track.id} d={dialog} /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "versions" ? <Versions d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : dialog?.kind === "saved" ? <SavedIn key={dialog.track.id} d={dialog} /> : dialog?.kind === "update" ? <UpdateNotes /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
 
@@ -2384,6 +2384,37 @@ function Warning({ d }: { d: Extract<Dialog, { kind: "warn" }> }) {
       <div className="mt-6 flex justify-end gap-2">
         <button onClick={closeDialog} className={quiet}>Cancel</button>
         <button autoFocus onClick={() => (meantIt(), closeDialog(), d.then())} className={`${btn} bg-[#ff375f] text-white`}>{d.yes}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// What's in a new version (its release notes, from the tag's message in release.yml), before you update.
+// Laid out like Sparkle's update window. Cancel keeps the note at the top of the window; Remind Me Later
+// hides it till the next launch.
+const bullet = /^[-*•]\s+/;
+function UpdateNotes() {
+  const update = useStore((s) => s.update);
+  if (!update?.run) return null;
+  const run = update.run, lines = (update.notes ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const changes = lines.some((l) => bullet.test(l)) ? lines.filter((l) => bullet.test(l)).map((l) => l.replace(bullet, "")) : lines; // the tag's "Patch notes" title line repeats the heading
+  return (
+    <Modal label={`Mixtape ${update.version}`} onClose={closeDialog} className="w-[540px] rounded-xl! p-5">
+      <div className="flex min-h-0 gap-4">
+        <img src={appIcon} alt="" className="size-14 shrink-0 rounded-[12px]" />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <p className="text-[15px] font-semibold">Mixtape {update.version} is out</p>
+          <p className="mt-0.5 text-[13px] text-muted">You have {version}.</p>
+          <ul className="mt-4 min-h-0 list-disc overflow-y-auto rounded-md border border-ink/10 py-3 pr-4 pl-8 text-sm leading-relaxed">
+            {changes.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+          {/* Squared-off like the note at the top of the window (App.tsx UpdateNotice), not the app's round pills. */}
+          <div className="mt-5 flex items-center gap-2 text-[15px] font-semibold">
+            <button onClick={closeDialog} className="press h-9 rounded-lg bg-ink/[0.07] px-4 hover:bg-ink/[0.12]">Cancel</button>
+            <button onClick={() => useStore.setState({ dialog: undefined, update: undefined })} className="press ml-auto h-9 rounded-lg bg-ink/[0.07] px-4 hover:bg-ink/[0.12]">Remind Me Later</button>
+            <button autoFocus onClick={() => (closeDialog(), run())} className="press h-9 rounded-lg bg-accent px-4 text-paper">Update</button>
+          </div>
+        </div>
       </div>
     </Modal>
   );

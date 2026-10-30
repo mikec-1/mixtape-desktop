@@ -268,7 +268,7 @@ const fmt = (s: number) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String
 const fill = (v: number, max: number) => ({ "--p": `${(v / max) * 100 || 0}%` }) as CSSProperties;
 
 function PlayerBar() {
-  const track = useStore((s) => s.queue[s.index]);
+  const track = useStore((s) => s.held ?? s.queue[s.index]); // the old song till the new list plays
   const loading = useStore((s) => s.loading);
   const error = useStore((s) => s.error);
   const { paused, time, duration, volume, muted } = useAudio();

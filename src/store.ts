@@ -41,6 +41,7 @@ type State = {
   toast?: Toast;
   update?: { version: string; notes?: string; run?: () => void; done?: true }; // a new version, at the top of the window (update.ts); no run while it downloads, done once it went in (What's New)
   more?: "finding" | "none"; // Autoplay looking for similar songs, or finding none
+  held?: Track; // the song the player bar keeps showing while a new list's first song loads (Mixtape §8)
   passed?: Track[]; // songs this queue skipped because they aren't available, for the strip's View
 };
 // A modal over everything: the lyrics editor (for a song, by its key in lyrics.ts useMine; track when it's
@@ -598,7 +599,7 @@ export function play(queue: Track[], index: number, from?: string, shuffle = fro
   if (from) touch(from);
   const original = shuffle ? queue : undefined;
   if (original) (queue = [queue[index], ...shuffled(queue.filter((_, i) => i !== index))]), (index = 0);
-  set({ queue, original, shuffle, added: 0, source: from, radio: undefined, more: undefined, passed: undefined });
+  set({ queue, original, shuffle, added: 0, source: from, radio: undefined, more: undefined, passed: undefined, held: get().queue[get().index] });
   const loading = load(index); // sets index before its first await, which recommend() reads
   if (get().shuffle === "smart") void recommend();
   return loading;
@@ -695,7 +696,7 @@ async function load(index: number, start = 0, fade = 0) {
     notify({ warn: true, text: navigator.onLine ? `Couldn’t find “${track.title}”` : "You’re offline", detail: after < get().queue.length ? `Skipped · ${by}` : by, action: { label: "Try Again", run: () => (set({ toast: undefined }), void load(index)) } });
     if (after < get().queue.length) return void load(after);
   } finally {
-    if (me === latest) set({ loading: false });
+    if (me === latest) set({ loading: false, held: undefined });
   }
 }
 // "Skipped 2 songs that aren't available" over the player bar, with View listing them (views.tsx Passed).
@@ -745,7 +746,7 @@ on("timeupdate", () => {
   if (left < fade + 20 && ready?.id !== t.id) void preload(t);
   if (fade && left <= fade) advance(fade); // load() swaps audio, so this fires once
 });
-on("playing", () => set({ loading: false }));
+on("playing", () => set({ loading: false, held: undefined }));
 // A song that came without a length gets the one its stream says.
 on("durationchange", () => {
   const t = get().queue[get().index];

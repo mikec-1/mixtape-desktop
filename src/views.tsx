@@ -489,10 +489,31 @@ export function Home() {
   return (
     <div className="animate-enter px-8 pt-14">
       <h1 className="text-display">Home</h1>
+      <NewComputer />
       <Shelves>
         <RecentlyPlayed />
         <OnThisDay />
       </Shelves>
+    </div>
+  );
+}
+
+// Your account brings the library to a new computer, but not the songs saved on it: the welcome's done, so this
+// asks once for the folder instead. Gone for good on this computer once a folder's added or it's closed.
+function NewComputer() {
+  const show = useAccount((s) => !!s.user && !!s.profile?.welcomed), folders = useLocal((s) => s.folders.length);
+  const [closed, setClosed] = useState(() => !!localStorage.onboarded);
+  if (!canHaveFiles || !show || folders || closed) return null;
+  const done = () => ((localStorage.onboarded = 1), setClosed(true));
+  return (
+    <div className="mt-6 flex items-center gap-4 rounded-2xl bg-ink/[0.05] py-3 pr-3 pl-4">
+      <FolderPlus size={22} className="shrink-0 text-accent" />
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold">New computer?</p>
+        <p className="text-sm text-muted">Your library’s here. Add this computer’s music folder to play the songs on it.</p>
+      </div>
+      <button onClick={() => void addFolder().then((ok) => ok && done())} className={solid}>Add Folder…</button>
+      <button onClick={done} aria-label="Close" className={round2}><X size={16} /></button>
     </div>
   );
 }

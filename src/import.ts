@@ -101,9 +101,15 @@ const rowArtists = (s: string) => s.split(/[;/]/).flatMap(credits);
 
 const EXTRA = new Set("remix mix edit version vip flip bootleg sped speed up slowed reverb tiktok tik tok nightcore extended radio club original remaster remastered live acoustic instrumental deluxe explicit clean bonus single prod feat ft featuring with lofi lo fi bass boosted 8d".split(" "));
 
+// Someone else's recording of it: karaoke, instrumentals, covers. Their titles name the real artist
+// ("I Love It (Originally Performed By Icona Pop) [Karaoke Version]"), so they'd pass the artist check.
+const FAKE = /\b(?:karaoke|instrumental|tribute|covers?|made famous|originally performed|in the style of|backing track)\b/g;
+
 // The wrong song is worse than no song: the title must be there, and one of the artists.
 function matches(row: CsvTrack, c: Track) {
   const hay = norm(`${c.title} ${c.artists.map((a) => a.name).join(" ")} ${c.album ?? ""}`);
+  const wanted = norm(`${row.title} ${row.artist} ${row.album ?? ""}`);
+  if (hay.match(FAKE)?.some((w) => !wanted.includes(w))) return false;
   const plain = squash(hay);
   const has = (w: string) => plain.includes(w);
 

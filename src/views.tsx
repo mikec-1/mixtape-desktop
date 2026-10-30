@@ -1842,8 +1842,7 @@ export function NowPlaying() {
   const [tab, setTab] = useState<"lyrics" | "queue">("lyrics");
   const lyrics = useLyrics(track, true);
   const extras = useExtras(track, lyrics.value);
-  const karaoke = !!lyrics.value?.lines.some((l) => l.words);
-  const still = useSettings((s) => s.lyricsStill);
+  const drift = useSettings((s) => s.lyricsDrift);
   const close = useRef<HTMLButtonElement>(null);
 
   // Focus moves into the sheet, and back to wherever it was when the sheet closes.
@@ -1869,7 +1868,7 @@ export function NowPlaying() {
       style={{ "--from": from() } as CSSProperties}
     >
       {drawn && track && <img src={art(track.thumb, 120)} alt="" className={`absolute inset-0 size-full scale-125 object-cover blur-3xl saturate-150 transition-opacity duration-300 ${big ? "opacity-0" : "opacity-35"}`} />}
-      {drawn && big && karaoke && <Drift moving={open && !still} />}
+      {drawn && big && <Drift moving={open && drift} />}
       <div className={`absolute inset-0 transition-opacity duration-300 ${big ? "bg-linear-to-b from-black/0 to-black/15" : "bg-linear-to-t from-black/45 to-black/5"}`} />
       {/* Everything on the sheet is white: the palette is remapped rather than restyled. */}
       {!drawn ? null : big ? (
@@ -1960,9 +1959,9 @@ export function NowPlaying() {
   );
 }
 
-// The karaoke view's own backdrop, for word-timed lyrics: soft blobs of the artwork's colours drifting
+// The lyrics view's own backdrop, whether lines or words are lit: soft blobs of the artwork's colours drifting
 // under the words. Only transforms move, which the GPU does without repainting; it stops while the sheet
-// is going away, and stays still with Reduce Lyric Motion.
+// is going away, and stays still with Moving Lyrics Background off.
 function Drift({ moving }: { moving: boolean }) {
   return (
     <div aria-hidden data-paused={!moving || undefined} className="drift absolute inset-0 overflow-hidden [contain:strict]">
@@ -3502,7 +3501,7 @@ const LYRIC_SOURCES: [LyricsSource, string, string][] = [
 ];
 
 function LyricsPane() {
-  const { lyricsPeek, lyricsWords, lyricsStill, translateTo, lyricsOff } = useSettings();
+  const { lyricsPeek, lyricsWords, lyricsStill, lyricsDrift, translateTo, lyricsOff } = useSettings();
   const set = useSettings.setState;
   const mine = Object.entries(useMine((s) => s.songs)).sort((a, b) => b[1].at - a[1].at);
   return (
@@ -3518,6 +3517,9 @@ function LyricsPane() {
         )}
         <Row label="Reduce Lyric Motion" detail={lyricsStill ? "Lines jump to the one being sung, and words stay put" : "Lines glide and words move, whatever the system’s Reduce Motion is set to"}>
           <Switch label="Reduce Lyric Motion" on={lyricsStill} onChange={(lyricsStill) => set({ lyricsStill })} />
+        </Row>
+        <Row label="Moving Lyrics Background" detail={lyricsDrift ? "The artwork’s colours drift behind the lyrics, whatever Reduce Motion is set to" : "The artwork’s colours stay still behind the lyrics"}>
+          <Switch label="Moving Lyrics Background" on={lyricsDrift} onChange={(lyricsDrift) => set({ lyricsDrift })} />
         </Row>
         <Row label="Translate To" detail="What Translate turns lyrics in other languages into">
           <Picker label="Translate To" value={translateTo} options={[["", `System (${languageName(translateTarget(""))})`], ...LANGUAGES.map((code) => [code, languageName(code)] as const)]} onPick={(translateTo) => set({ translateTo })} className="h-9 pr-3 pl-4" />

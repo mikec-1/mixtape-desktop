@@ -962,7 +962,8 @@ export const EQ_BANDS = [60, 150, 400, 1000, 2400, 15000];
 // crossfade is in seconds (0 is gapless); eq is dB per EQ_BANDS band. lyricsPeek is the line on the player bar;
 // lyricsWords times the words of lyrics that only time lines (from the song, lyrics.ts align, or by estimate); translateTo is a language code, "" for
 // the system's (lyrics.ts translateTarget). lyricsStill keeps the lyrics from moving: they don't follow the
-// system's Reduce Motion, so they look the same for everyone unless this is on. The Library page keeps
+// system's Reduce Motion, so they look the same for everyone unless this is on. lyricsDrift keeps the lyrics
+// backdrop's colours drifting, whatever either Reduce Motion says. The Library page keeps
 // its view, order and filter; likedSort is how Liked Songs lists its songs (a playlist keeps its own).
 export type LibrarySort = "recents" | "added" | "name" | "creator";
 // trackCols: how song lists share their width between Title, Album and Date Added (views.tsx TrackList).
@@ -971,7 +972,7 @@ export type LibraryFilter = "playlists" | "albums" | "artists" | "songs" | "down
 type Settings = {
   theme: "system" | "light" | "dark"; artworkAccent: boolean; sidebar: boolean; sidebarWidth: number; queue: boolean; queueWidth: number;
   quality: Quality; ahead: number; browse: boolean; normalize: boolean; crossfade: number; eq: number[];
-  lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean;
+  lyricsPeek: boolean; lyricsWords: boolean; lyricsTranslate: boolean; lyricsRomanise: boolean; translateTo: string; lyricsStill: boolean; lyricsDrift: boolean;
   libraryView: "grid" | "list"; librarySort: LibrarySort; libraryFilter?: LibraryFilter; likedSort: TrackSort; localSort: TrackSort; trackCols: [number, number, number];
   autoplay: boolean; reduceMotion: boolean; zoom: number; lyricsOff: LyricsSource[]; history: boolean;
   keymap: Record<string, string>; loginHidden: boolean; closeToTray: boolean; country: string;
@@ -998,7 +999,7 @@ export const useSettings = create<Settings>()(
     (): Settings => ({
       theme: "system", artworkAccent: true, sidebar: true, sidebarWidth: 220, queue: false, queueWidth: 320,
       quality: "high", ahead: 1, browse: true, normalize: true, crossfade: 0, eq: EQ_BANDS.map(() => 0),
-      lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false,
+      lyricsPeek: true, lyricsWords: true, lyricsTranslate: false, lyricsRomanise: false, translateTo: "", lyricsStill: false, lyricsDrift: true,
       libraryView: "grid", librarySort: "recents", likedSort: "custom", localSort: "custom", trackCols: TRACK_COLS,
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "off", menuBarFor: [],
       country: defaultCountry(),

@@ -9,7 +9,7 @@ import { Menu, Submenu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, canAlign, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
   copyPlaylist, movePlaylistTrack, moveToFolder, newFolder, newPlaylist, notify, open, play, plays, plural, removeFromPlaylist, radioFrom, removeFromQueue, renameFolder, renamePlaylist, report, restoreLibrary, setCover, setPublic,
-  likedAs, meantIt, shufflePlay, skipped, sortPlaylist, unavailable, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
+  likedAs, meantIt, shufflePlay, skipped, sortPlaylist, unavailable, gone, useMissing, patch, TRACK_COLS, startRadio, subscribeAudio, toggle, toggleBlock, toggleFollow, toggleHide, toggleLike, likeAll, togglePin, toggleSave, useAudio, useHistory, useLibrary, useOnline, usePrivate, useRecents, useSettings, useStore, type LyricsSource,
   useRecentSearches, addRecentSearch, idbGet, idbPut, idbBytes, idbDelete, deleteAllPlaylists, clearLibrary, resetSettings, warm as fetchAhead, toggleShuffle, toggleListShuffle,
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
@@ -2411,7 +2411,7 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "versions" ? <Versions d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : dialog?.kind === "saved" ? <SavedIn key={dialog.track.id} d={dialog} /> : dialog?.kind === "update" ? <UpdateNotes /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "versions" ? <Versions d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : dialog?.kind === "saved" ? <SavedIn key={dialog.track.id} d={dialog} /> : dialog?.kind === "update" ? <UpdateNotes /> : dialog?.kind === "passed" ? <Passed /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
 
@@ -2423,6 +2423,23 @@ function Warning({ d }: { d: Extract<Dialog, { kind: "warn" }> }) {
       <div className="mt-6 flex justify-end gap-2">
         <button onClick={closeDialog} className={quiet}>Cancel</button>
         <button autoFocus onClick={() => (meantIt(), closeDialog(), d.then())} className={`${btn} bg-[#ff375f] text-white`}>{d.yes}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// The songs the queue skipped because they aren't available (store.ts pass). Double-click tries one again.
+function Passed() {
+  const passed = useStore((s) => s.passed) ?? [];
+  return (
+    <Modal label="Skipped Songs" onClose={closeDialog} className="flex max-h-[86vh] w-[min(560px,94vw)] flex-col p-5">
+      <p className="text-lg font-bold">Skipped {passed.length === 1 ? "1 song" : `${passed.length} songs`}</p>
+      <p className="mt-0.5 mb-3 text-sm text-muted">{passed.length === 1 ? "It" : "They"} couldn’t be found or played, so the queue moved on. Double-click one to try again.</p>
+      <div data-scroller className="-mx-3 min-h-0 overflow-y-auto">
+        <TrackList tracks={passed} header={false} />
+      </div>
+      <div className="mt-4 flex justify-end">
+        <button autoFocus onClick={closeDialog} className={quiet}>Done</button>
       </div>
     </Modal>
   );
@@ -3978,6 +3995,9 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
+// A song that can't be found or played (store.ts gone), in red beside it.
+const Unavailable = () => <span className="shrink-0 rounded-full bg-[#ff375f]/12 px-2 py-0.5 text-[11px] font-semibold text-[#ff375f]">Unavailable</span>;
+
 // The "E" Spotify and Apple Music put on explicit songs, before the artists.
 export const Explicit = () => (
   <span aria-label="Explicit" title="Explicit" className="mr-1.5 inline-grid size-[15px] -translate-y-px place-items-center rounded-[3px] bg-current/20 align-middle text-[10px] leading-none font-bold">
@@ -4135,7 +4155,7 @@ export function QueuePanel() {
 type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number[], to: number) => void; times?: number[]; added?: boolean; header?: boolean; onPlay?: (i: number) => void };
 function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, added, header = true, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
   const current = useStore((s) => s.queue[s.index]), on = (t: Track) => !!current && sameSong(current, t);
-  useLibrary((s) => s.hidden), useLibrary((s) => s.blocked), useOnline(); // re-dim as they change
+  useLibrary((s) => s.hidden), useLibrary((s) => s.blocked), useOnline(), useMissing((s) => s.songs); // re-dim as they change
   const saved = useOffline((s) => s.songs);
   useOffline((s) => s.art); // a cover just kept is drawn from disk
   const cols = useSettings((s) => s.trackCols);
@@ -4336,6 +4356,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
                     <Artists list={t.artists} />
                   </div>
                 </div>
+                {gone(t) && <Unavailable />}
               </div>
               {!plain && (
                 <div className={`min-w-0 truncate text-sm text-muted ${dim ? "opacity-45" : ""}`}>

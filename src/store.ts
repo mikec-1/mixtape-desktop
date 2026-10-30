@@ -41,6 +41,7 @@ type State = {
   toast?: Toast;
   update?: { version: string; notes?: string; run?: () => void; done?: true }; // a new version, at the top of the window (update.ts); no run while it downloads, done once it went in (What's New)
   more?: "finding" | "none"; // Autoplay looking for similar songs, or finding none
+  passed?: Track[]; // songs this queue skipped because they aren't available, for the strip's View
 };
 // A modal over everything: the lyrics editor (for a song, by its key in lyrics.ts useMine; track when it's
 // one Mixtape knows, to stamp times with while it plays), or a lyric card of the playing song.
@@ -53,7 +54,8 @@ export type Dialog =
   | { kind: "link" }
   | { kind: "spotify" }
   | { kind: "saved"; track: Track }
-  | { kind: "update" };
+  | { kind: "update" }
+  | { kind: "passed" };
 // Feedback for a library change: what happened, to what, and a way back.
 // ms: how long it stays (a card with choices to make stays longer); actions: more than one button.
 export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; actions?: { label: string; run: () => void }[]; ms?: number; sticky?: boolean; warn?: boolean };
@@ -512,7 +514,12 @@ export const shuffled = <T,>(list: T[]) => list.map((x) => [Math.random(), x] as
 // that isn't on this computer (synced from another) can't play either; local.ts says which are.
 export const downloads: { read?: (id: string) => ReturnType<typeof fetchAudio> | undefined; has?: (id: string) => boolean } = {};
 export const files: { has?: (path: string) => boolean } = {};
-export const unavailable = (t: Track) => (t.file ? files.has?.(t.file) === false : !navigator.onLine && !downloads.has?.(t.id));
+// A song that couldn't be found or played (online) is marked Unavailable and passed over for a day, then
+// tried again; picking it tries at once. Mixtape §4: never "something close" in its place.
+export const useMissing = create<{ songs: Record<string, number> }>()(persist(() => ({ songs: {} }), { name: "missing" }));
+const missing = (t: Track, on: boolean) => useMissing.setState((s) => (!on === !(s.songs[t.id] ?? 0) ? s : on ? { songs: { ...s.songs, [t.id]: Date.now() } } : { songs: Object.fromEntries(Object.entries(s.songs).filter(([id]) => id !== t.id)) }));
+export const gone = (t: Track) => (t.file ? files.has?.(t.file) === false : Date.now() - (useMissing.getState().songs[t.id] ?? 0) < 86_400_000);
+export const unavailable = (t: Track) => gone(t) || (!t.file && !navigator.onLine && !downloads.has?.(t.id));
 const playable = (t: Track) => !skipped(t) && !unavailable(t);
 
 // Instant skip: the songs coming up are fetched while this one plays, and recent ones are kept.
@@ -591,7 +598,7 @@ export function play(queue: Track[], index: number, from?: string, shuffle = fro
   if (from) touch(from);
   const original = shuffle ? queue : undefined;
   if (original) (queue = [queue[index], ...shuffled(queue.filter((_, i) => i !== index))]), (index = 0);
-  set({ queue, original, shuffle, added: 0, source: from, radio: undefined, more: undefined });
+  set({ queue, original, shuffle, added: 0, source: from, radio: undefined, more: undefined, passed: undefined });
   const loading = load(index); // sets index before its first await, which recommend() reads
   if (get().shuffle === "smart") void recommend();
   return loading;
@@ -673,6 +680,7 @@ async function load(index: number, start = 0, fade = 0) {
       await playAudio(audio, data, start, true, recording(track));
     }
     if (me !== latest) return;
+    missing(track, false);
     prefetch();
     if (fade) crossfade(old, audio, fade);
   } catch (e) {
@@ -682,11 +690,21 @@ async function load(index: number, start = 0, fade = 0) {
     // Say so where it can't be missed, and move on to the next song, never wrapping round, so a queue of
     // songs that won't play can't loop forever.
     const after = nextIndex(index, false), by = track.artists.map((a) => a.name).join(", ");
+    if (navigator.onLine) missing(track, true);
+    if (after < get().queue.length && navigator.onLine) return pass([track, ...get().queue.slice(index + 1, after).filter(gone)]), void load(after);
     notify({ warn: true, text: navigator.onLine ? `Couldn’t find “${track.title}”` : "You’re offline", detail: after < get().queue.length ? `Skipped · ${by}` : by, action: { label: "Try Again", run: () => (set({ toast: undefined }), void load(index)) } });
     if (after < get().queue.length) return void load(after);
   } finally {
     if (me === latest) set({ loading: false });
   }
+}
+// "Skipped 2 songs that aren't available" over the player bar, with View listing them (views.tsx Passed).
+function pass(tracks: Track[]) {
+  const was = get().passed ?? [], add = tracks.filter((t) => !was.some((p) => p.id === t.id));
+  if (!add.length) return;
+  const passed = [...was, ...add];
+  set({ passed });
+  notify({ warn: true, text: `Skipped ${passed.length} ${passed.length === 1 ? "song" : "songs"} that ${passed.length === 1 ? "isn’t" : "aren’t"} available`, ms: 8000, action: { label: "View", run: () => (set({ toast: undefined }), set({ dialog: { kind: "passed" } })) } });
 }
 // Equal-power curves, so the overlap doesn't dip in the middle.
 function crossfade(from: HTMLAudioElement, to: HTMLAudioElement, seconds: number) {
@@ -758,7 +776,11 @@ export function fillUpNext() {
 }
 
 export const jump = (index: number) => load(index);
-const advance = (fade = 0) => load(nextIndex(get().index), 0, fade);
+function advance(fade = 0) {
+  const { queue, index } = get(), i = nextIndex(index);
+  pass(queue.slice(index + 1, i).filter(gone));
+  return load(i, 0, fade);
+}
 export const next = () => advance();
 export function prev() {
   const { queue, index } = get();

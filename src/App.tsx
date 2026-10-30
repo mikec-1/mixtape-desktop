@@ -194,6 +194,20 @@ export default function App() {
 // Windows has no title bar here (lib.rs), so its three buttons sit in the strip above the cards, drawn in
 // its own icon font. They stay usable over the welcome.
 const onWindows = "__TAURI_INTERNALS__" in window && /Windows/.test(navigator.userAgent);
+// macOS: double-clicking anywhere that drags the window zooms it, like a title bar. Tauri's own double-click
+// never fires there, since the drag each click starts swallows the click count, so this counts clicks itself.
+if ("__TAURI_INTERNALS__" in window && /Mac/.test(navigator.userAgent)) {
+  const drags = (e: MouseEvent) => e.button === 0 && e.target instanceof HTMLElement && e.target.hasAttribute("data-tauri-drag-region");
+  let last = { at: -1e9, x: 0, y: 0 };
+  addEventListener("mousedown", (e) => {
+    if (!drags(e)) return;
+    const twice = e.timeStamp - last.at < 500 && Math.abs(e.screenX - last.x) + Math.abs(e.screenY - last.y) < 6;
+    last = twice ? { at: -1e9, x: 0, y: 0 } : { at: e.timeStamp, x: e.screenX, y: e.screenY };
+    if (twice) (e.preventDefault(), e.stopImmediatePropagation(), void getCurrentWindow().toggleMaximize());
+  }, true);
+  // Should Tauri's double-click ever fire, it would zoom straight back.
+  addEventListener("mouseup", (e) => drags(e) && e.detail === 2 && e.stopImmediatePropagation(), true);
+}
 function WindowButtons() {
   const [win] = useState(getCurrentWindow);
   const [max, setMax] = useState(false);

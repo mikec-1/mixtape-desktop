@@ -1872,8 +1872,8 @@ export function NowPlaying() {
       <div className={`absolute inset-0 transition-opacity duration-300 ${big ? "bg-linear-to-b from-black/0 to-black/15" : "bg-linear-to-t from-black/45 to-black/5"}`} />
       {/* Everything on the sheet is white: the palette is remapped rather than restyled. */}
       {!drawn ? null : big ? (
-        <div key="lyrics" className="relative flex h-full animate-enter flex-col pt-[42px] pb-24 text-white [--color-accent:white] [--color-ink:white] [--color-muted:rgb(255_255_255/0.75)]">
-          <header className="mb-4 flex min-h-12 items-center gap-6 pr-20 pl-16">
+        <div key="lyrics" data-tauri-drag-region className="relative flex h-full animate-enter flex-col pt-[42px] pb-24 text-white [--color-accent:white] [--color-ink:white] [--color-muted:rgb(255_255_255/0.75)]">
+          <header data-tauri-drag-region className="mb-4 flex min-h-12 items-center gap-6 pr-20 pl-16">
             {track && (
               <div className="flex min-w-0 items-center gap-3">
                 <button onClick={() => useStore.setState({ sheet: "playing" })} aria-label="Now Playing" title="Now Playing" className="press size-12 shrink-0 overflow-hidden rounded-lg shadow-lg shadow-black/20">
@@ -1893,7 +1893,7 @@ export function NowPlaying() {
           <LyricLines track={track} lyrics={lyrics} extras={extras} live={open} size="big" />
         </div>
       ) : (
-        <div key="playing" className="relative grid h-full animate-enter grid-cols-2 gap-16 px-16 pt-20 pb-32 text-white [--color-accent:white] [--color-ink:white] [--color-paper:black] [--color-muted:rgb(255_255_255/0.68)]">
+        <div key="playing" data-tauri-drag-region className="relative grid h-full animate-enter grid-cols-2 gap-16 px-16 pt-20 pb-32 text-white [--color-accent:white] [--color-ink:white] [--color-paper:black] [--color-muted:rgb(255_255_255/0.68)]">
           <div className="flex min-h-0 flex-col justify-end">
             {track ? (
               <>

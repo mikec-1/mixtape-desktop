@@ -121,22 +121,22 @@ export async function handBack() {
   const h = handingOff();
   if (!h) throw new Error("This page wasn’t opened by the app. Press Sign in in Mixtape again.");
   // What you just changed here (the name and @ you picked) goes up first, or the app starts without it. Twice,
-  // since one already running doesn't wait for what came in after it started.
-  await syncNow(), await syncNow();
-  // Fresh tokens when it can (a tab signed in a while can hold an expired session), else the stored ones.
-  const c = await auth(), fresh = await c.refreshSession().catch(() => undefined);
-  const session = fresh?.data.session ?? (await c.getSession()).data.session;
-  if (!session) throw new Error("You’re not signed in here any more. Sign in again.");
+  // since one already running doesn't wait for what came in after it started. Not for long, though: pressing
+  // Continue on a tab signed in a while waits on a whole library catching up, and the app pulls that itself.
+  await Promise.race([syncNow().then(syncNow), new Promise((r) => setTimeout(r, 4000))]);
+  // The tokens as kept, read straight from storage: asking the client waits on a lock that another tab of this
+  // site can hold for good (one the browser froze in the background). An expired one is fine: the app's setSession refreshes it.
+  const c = await auth(), session = (() => { try { return JSON.parse(localStorage[STORAGE]) as { access_token?: string; refresh_token?: string }; } catch { return undefined; } })();
+  if (!session?.access_token || !session.refresh_token) throw new Error("You’re not signed in here any more. Sign in again.");
   // The app takes the sign-in over and this browser forgets it, without telling the server: the two would share
   // one refresh token, and the server signs both out when the second one uses it. ponytail: an edge function
   // minting the app its own session (a magic link's token_hash) would keep both signed in.
   await c.stopAutoRefresh();
   for (const k of Object.keys(localStorage)) if (k.startsWith(STORAGE)) localStorage.removeItem(k);
-  const data = { session };
   delete sessionStorage.handoff;
   // Posted, not put in the link, so the tokens never land in the address bar or the browser's history.
   const form = Object.assign(document.createElement("form"), { method: "POST", action: `http://127.0.0.1:${h.port}/callback` });
-  for (const [name, value] of Object.entries({ state: h.state, access_token: data.session.access_token, refresh_token: data.session.refresh_token })) form.append(Object.assign(document.createElement("input"), { type: "hidden", name, value }));
+  for (const [name, value] of Object.entries({ state: h.state, access_token: session.access_token, refresh_token: session.refresh_token })) form.append(Object.assign(document.createElement("input"), { type: "hidden", name, value }));
   document.body.append(form);
   form.submit();
 }

@@ -3193,7 +3193,7 @@ function AccountPane() {
         <h3 className={`${subhead} mb-3`}>Your Data</h3>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => void exportAll()} className={quiet}><Download size={16} /> Export Your Data</button>
-          <button onClick={() => void unsynced().then((left) => (left ? warn("Sign out before your changes sync?", "Sign Out", () => void signOut().catch(report), `Your latest changes haven’t reached your account${navigator.onLine ? "" : " because you’re offline"}. They stay ${inApp ? "on this computer" : "in this browser"}, but signing in with another account here clears them.`) : signOut())).catch(report)} className={quiet}>Sign Out</button>
+          <button onClick={() => void unsynced().then((left) => (left ? warn("Sign out before your changes sync?", "Sign Out", () => void signOut().catch(report), `Your latest changes haven’t reached your account${navigator.onLine ? "" : " because you’re offline"}. Signing out clears them from ${inApp ? "this computer" : "this browser"}.`) : signOut())).catch(report)} className={quiet}>Sign Out</button>
           <button onClick={() => setDeleting("ask")} className={`${quiet} text-[#ff375f]`}>Delete Account…</button>
         </div>
         {deleting && (

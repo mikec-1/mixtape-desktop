@@ -2,8 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { GoTrueClient, User } from "@supabase/auth-js";
-import { artistKey, clearHistory, deliberate, idbGet, idbPut, notify, open, plays, useLibrary, useRecents, useRecentSearches, useSettings, type Library, type Play, type Playlist, type View } from "./store";
-import { useMine, type Mine } from "./lyrics";
+import { artistKey, canAlign, clearHistory, deliberate, idbGet, idbPut, notify, open, plays, resetPlayer, useLibrary, useStore, useRecents, useRecentSearches, useSettings, type Library, type Play, type Playlist, type View } from "./store";
+import { useMine, useTiming, type Mine } from "./lyrics";
+import { useLocal } from "./local";
+import { removeAllDownloads, useOffline } from "./offline";
 
 // Accounts: the desktop app needs one; the web works without. Signed in, your library syncs between your
 // devices through Supabase (supabase/migrations: one table of items and a sync function; docs/accounts.md
@@ -157,11 +159,11 @@ async function checkHandle() {
   const [mine] = await table<{ handle: string }[]>(`handles?select=handle&user_id=eq.${user.id}`);
   if (mine?.handle !== profile.handle) setProfile({ handle: mine?.handle });
 }
-// Signing out (or deleting your account) leaves your library on this computer (or in this browser). On
-// the web, where an account is optional, it goes back to the sign-in (out), which you can skip.
-const here = inApp ? "on this computer" : "in this browser";
-// Changes here that haven't reached your account, after one last try to send them. Signing out keeps them
-// here, but signing in with another account here clears them (signedIn), so Sign Out asks first.
+// Signing out (or deleting your account) clears this computer (or browser): your library stays in your account.
+// On the web, where an account is optional, it goes back to the sign-in (out), which you can skip.
+const here = inApp ? "this computer" : "this browser";
+// Changes here that haven't reached your account, after one last try to send them. Signing out clears
+// them (wipe), so Sign Out asks first.
 export async function unsynced() {
   const { user } = useAccount.getState();
   if (!user) return false;
@@ -172,16 +174,16 @@ export async function unsynced() {
 }
 export async function signOut() {
   await (await auth()).signOut({ scope: "local" });
-  signedOut();
+  signedOut(), wipe();
   useAccount.setState({ out: !inApp });
-  notify({ text: "Signed Out", detail: `Your library is still ${here}` });
+  notify({ text: "Signed Out", detail: "Your library is safe in your account" });
 }
 export async function deleteAccount() {
   await rpc("delete_me", {}, await token());
   await (await auth()).signOut({ scope: "local" }).catch(() => {});
-  signedOut();
+  signedOut(), wipe();
   useAccount.setState({ out: !inApp });
-  notify({ text: "Account Deleted", detail: `Your library is still ${here}` });
+  notify({ text: "Account Deleted", detail: `Nothing of it is left on ${here}` });
 }
 
 // Also on each token refresh (hourly), which changes nothing.
@@ -198,18 +200,15 @@ function signedIn(user: User) {
   if (!profile?.handle && named === undefined) void table<{ handle: string }[]>(`handles?select=handle&user_id=eq.${user.id}`).then(([m]) => !!m, () => true).then((named) => useAccount.getState().user?.id === user.id && useAccount.setState({ named }));
   void token().then((t) => rpc<boolean>("am_owner", {}, t)).then((owner) => useAccount.setState({ owner }), () => {});
   if (watching && was?.id === user.id) return;
-  // The library here belongs to whoever last signed in on this computer (it stays after signing out). Another
-  // account starts empty and gets only its own; the old one's is still in that account. A library from before
-  // any account goes up into the first one.
-  // Waits for both to load from disk first, or loading would bring the old one back.
-  const loaded = (st: typeof useLibrary | typeof useMine) => new Promise<void>((r) => (st.persist.hasHydrated() ? r() : st.persist.onFinishHydration(() => r())));
-  void Promise.all([loaded(useLibrary), loaded(useMine)]).then(() => {
-    if (localStorage.libraryOwner && localStorage.libraryOwner !== user.id) {
-      // Everything else the last account left here goes too: its Spotify, history, recents and scrobbling.
-      useLibrary.setState(useLibrary.getInitialState()), useMine.setState({ songs: {} });
-      dropSpotify(), useRecents.setState({}, true), useRecentSearches.setState({ items: [] }), clearHistory(true);
-      useSettings.setState({ listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "" });
-    }
+  // Signing in opens on Home, wherever you were before.
+  useStore.setState({ stack: [{ name: "home" }], ahead: [], tabs: {}, sheet: undefined, pane: undefined });
+  // What's here belongs to whoever last signed in on this computer: signing out clears it, but a session that
+  // ran out doesn't. Another account starts empty (wipe) and gets only its own; the old one's is still in that
+  // account. A library from before any account goes up into the first one.
+  // Waits for everything to load from disk first, or loading would bring the old one back.
+  const loaded = (st: { persist: { hasHydrated: () => boolean; onFinishHydration: (f: () => void) => void } }) => new Promise<void>((r) => (st.persist.hasHydrated() ? r() : st.persist.onFinishHydration(() => r())));
+  void Promise.all([useLibrary, useMine, useTiming, useRecents, useRecentSearches, useLocal, useOffline].map(loaded)).then(() => {
+    if (localStorage.libraryOwner && localStorage.libraryOwner !== user.id) wipe();
     localStorage.libraryOwner = user.id;
     watch();
     void syncNow().then(checkHandle, () => {});
@@ -217,6 +216,15 @@ function signedIn(user: User) {
 }
 // Loaded late: spotify.ts needs this file first.
 const dropSpotify = () => void import("./spotify").then((s) => s.useSpotify.setState({}, true));
+// Everything one account leaves here, back to a new install's: library, lyrics, player and queue, history,
+// recents, Spotify, scrobbling, settings, local files and downloads. Nothing carries over to the next account.
+function wipe() {
+  useLibrary.setState(useLibrary.getInitialState()), useMine.setState({ songs: {} }), useTiming.setState({ songs: {} });
+  dropSpotify(), useRecents.setState({}, true), useRecentSearches.setState({ items: [] }), clearHistory(true);
+  resetPlayer(), useSettings.setState({ ...useSettings.getInitialState(), lyricsWords: canAlign });
+  useLocal.setState({ folders: [], files: {}, edits: {}, skip: [] }), removeAllDownloads();
+  for (const k of ["libraryOwner", "onboarded", "upNext"]) localStorage.removeItem(k);
+}
 function signedOut() {
   dropSpotify(); // Spotify belongs to the account, not this computer
   meta = undefined;
@@ -442,8 +450,8 @@ export function syncNow(): Promise<void> {
         setProfile({ name: d.full_name ?? d.name ?? "", ...((d.avatar_url ?? d.picture) && { avatar: d.avatar_url ?? d.picture }) });
       }
     } catch (e) {
-      // Deleted from another device: signed out here too, library kept.
-      if ((e as { code?: string }).code === "SV001") void (await auth()).signOut({ scope: "local" }), signedOut(), notify({ text: "Your Account Was Deleted", detail: `Your library is still ${here}` });
+      // Deleted from another device: signed out here too, and cleared.
+      if ((e as { code?: string }).code === "SV001") void (await auth()).signOut({ scope: "local" }), signedOut(), wipe(), notify({ text: "Your Account Was Deleted" });
       // Lots went missing here without you removing them: forget they were here and read everything again,
       // which puts them back.
       else if ((e as { code?: string }).code === "SV002" && meta) {

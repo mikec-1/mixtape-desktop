@@ -368,6 +368,11 @@ export function forget(ids: string[]) {
   });
   useHistory.setState((s) => ({ recent: keep(s.recent) }));
 }
+// Another account (or none): nothing plays, and the queue, pages and sheets are a new install's. A new version's banner stays.
+export function resetPlayer() {
+  latest++, pause(), players.forEach((p) => (p.removeAttribute("src"), p.load())), (resume.time = 0);
+  set({ ...useStore.getInitialState(), update: get().update });
+}
 
 // When each thing in your library was last opened or played from, for the Library's Recents order.
 export const useRecents = create<Record<string, number>>()(persist(() => ({}), { name: "recents", storage: createJSONStorage(() => idb) }));

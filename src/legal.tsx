@@ -13,8 +13,8 @@ const PAGES: Record<string, Page> = {
     title: "Privacy Policy",
     short: [
       "Mixtape has no ads, no analytics and no tracking, and sets no cookies.",
-      "Without an account, your library, history and settings stay on your device.",
-      "With one, your library syncs through Supabase, and you can export or delete it all from Settings → Account.",
+      "Mixtape needs an account. Your library syncs with it through Supabase, and you can export or delete it all from Settings → Account.",
+      "Your listening history and settings stay on your device.",
       "To find and play songs, Mixtape asks services like YouTube Music and Apple Music directly, so they see your IP address and what you looked up.",
       "Crash reports, scrobbling and Spotify history are off until you turn them on.",
     ],
@@ -24,13 +24,13 @@ const PAGES: Record<string, Page> = {
       </>],
       ["what", "What Mixtape handles, and why", <>
         <h3>On your device</h3>
-        <p>Your library (songs, playlists, likes, folders), listening history, recent searches, settings, edits to song info, your own lyrics, and songs you download for offline (encrypted with a key that stays on the device). Local audio files are read where they are and never uploaded. None of this leaves your device unless something below says so.</p>
-        <h3>Your account (optional)</h3>
-        <p>To make one you give an email address and password, or sign in with Google, which shares your name, email address and profile picture with Mixtape. Your profile starts with that name and picture; you can change both. With an account, Mixtape keeps a copy of your library, your lyrics and timing edits, and your profile so it can sync them between your devices. Signing in also leaves the usual technical records with the account service (your IP address, browser or app version, and when you signed in), which it uses to keep accounts secure.</p>
+        <p>Your library (songs, playlists, likes, folders), listening history, recent searches, settings, edits to song info, your own lyrics, and songs you download for offline (encrypted with a key that stays on the device). Local audio files are read where they are and never uploaded. Only what the sections below describe leaves your device.</p>
+        <h3>Your account</h3>
+        <p>Mixtape needs an account to work. To make one you give an email address and password, or sign in with Google, which shares your name, email address and profile picture with Mixtape. Your profile starts with that name and picture; you can change both. Mixtape keeps a copy of your library, your lyrics and timing edits, and your profile so it can sync them between your devices. Signing in also leaves the usual technical records with the account service (your IP address, browser or app version, and when you signed in), which it uses to keep accounts secure.</p>
         <h3>Your @handle and what you share</h3>
         <p>Your @handle, display name and picture are public, so people can find and follow you. A playlist you share, or your public profile, can be opened by anyone with the link. You choose what to share and can stop sharing at any time.</p>
         <h3>Spotify (if you connect it)</h3>
-        <p>Connecting Spotify lets Mixtape import your playlists and saved songs. Signed in to a Mixtape account, Mixtape also keeps a Spotify sign-in token on its server and, every half hour, fetches the last songs you played on Spotify into your History. Sign out of Spotify in Mixtape’s Spotify import to stop this and delete the token.</p>
+        <p>Connecting Spotify lets Mixtape import your playlists and saved songs. Mixtape also keeps a Spotify sign-in token on its server and, every half hour, fetches the last songs you played on Spotify into your History. Sign out of Spotify in Mixtape’s Spotify import to stop this and delete the token.</p>
         <h3>Finding and playing music</h3>
         <p>When you search, play a song, or open lyrics, artwork or song details, Mixtape asks the service that has them, straight from your device: YouTube Music (songs, search, artwork), Apple Music, the iTunes Search API and Deezer (song details, artwork and charts), LRCLIB, binimum, lrc.red and NetEase Cloud Music (lyrics), and Google Translate (only when you translate lyrics). They see your IP address and what was asked for, such as a search term or song title. Identifying a local song sends Shazam a short audio fingerprint made from the file, never sound from your microphone.</p>
         <p>In the web version, browsers block most of these requests, so they go through Mixtape’s own relay (a Supabase Edge Function), which passes them on without your cookies or sign-in details. Mixtape doesn’t store them; Supabase keeps short-lived request logs. Playing a song in the web version also sends its YouTube ID, and nothing else about you, to Mixtape’s resolver, which finds a playable stream.</p>
@@ -101,7 +101,7 @@ const PAGES: Record<string, Page> = {
         <p>Mixtape doesn’t host, sell or own any music. Songs, artwork and lyrics come from other services and stay the property of their rights holders. Those services set their own rules, and they can stop working with Mixtape at any time. You’re responsible for the files you add and for how you use what you play.</p>
       </>],
       ["account", "Your account", <>
-        <p>An account is optional. Keep your password to yourself; you’re responsible for what happens on your account. You need to be at least 14 to make one.</p>
+        <p>You need an account to use Mixtape. Keep your password to yourself; you’re responsible for what happens on your account. You need to be at least 14 to make one.</p>
         <p>Your @handle and display name are public. Don’t pick ones that impersonate someone, mislead, or offend. Mixtape can change or take back a handle that does.</p>
       </>],
       ["sharing", "What you share", <>

@@ -3895,7 +3895,7 @@ function Privacy() {
           <Switch label="Send Crash Reports" on={crashes} onChange={(on) => (on ? void import("./crash").then((c) => c.turnOn()) : useSettings.setState({ crashReports: false }))} />
         </Row>
       </div>
-      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">Mixtape has no ads or tracking. Your history and settings stay on this computer, and with an account your library syncs. Searches and songs go to the services that have them, like YouTube Music, and plays go to Last.fm or ListenBrainz once you connect them. <button onClick={() => openLink(legal("privacy"))} className="underline underline-offset-2 hover:text-ink">Privacy Policy</button></p>
+      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">Mixtape has no ads or tracking. Your history and settings stay on this computer, and your library syncs with your account. Searches and songs go to the services that have them, like YouTube Music, and plays go to Last.fm or ListenBrainz once you connect them. <button onClick={() => openLink(legal("privacy"))} className="underline underline-offset-2 hover:text-ink">Privacy Policy</button></p>
     </>
   );
 }

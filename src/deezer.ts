@@ -1,8 +1,9 @@
 import { fetch } from "./http";
 import { create } from "zustand";
-import { findSong, latin, rowOf } from "./import";
+import { persist } from "zustand/middleware";
+import { findSong, latin, rowOf, versions } from "./import";
 import { heard } from "./recognize";
-import { patch, patchAll, replay } from "./store";
+import { notify, patch, patchAll, replay } from "./store";
 import { parseSecs, type Artist, type Collection, type Track } from "./yt";
 
 // Albums saved from Deezer (when artist pages came from there) still open from it, as in Mixtape. A song
@@ -143,7 +144,31 @@ export function youtubeId(t: Track): Promise<string> {
   return finding.get(t.id)!;
 }
 const hear = (t: Track) => heard(t.file!, { title: t.title, artist: t.artists.map((a) => a.name).join(", "), feat: "", album: t.album ?? "" }).then((f) => f && findSong({ ...rowOf(t), title: f.edit.title, artist: [f.edit.artist, f.edit.feat].filter(Boolean).join(", "), album: f.edit.album, isrc: f.edit.isrc }), () => undefined);
-export const pin = (t: Track, yt: string) => (keep(t.id, yt), replay(t.id));
+// A version you pick (Wrong Version…) is pinned and synced (account.ts version:<id>), so every computer plays
+// it; the ones you turned down are passed over by Try Another. Mixtape §4.
+type Version = { id: string; no?: string[] };
+export const useVersions = create<{ songs: Record<string, Version> }>()(persist(() => ({ songs: {} }), { name: "versions" }));
+useVersions.subscribe((s, was) => {
+  for (const id of new Set([...Object.keys(s.songs), ...Object.keys(was.songs)])) {
+    const v = s.songs[id]?.id;
+    if (v !== was.songs[id]?.id) (v ? keep(id, v) : findAgain([id])), replay(id);
+  }
+});
+export function pin(t: Track, yt: string) {
+  const was = found[t.id] ?? t.id, no = useVersions.getState().songs[t.id]?.no ?? [];
+  if (yt === was) return;
+  useVersions.setState((s) => ({ songs: { ...s.songs, [t.id]: { id: yt, no: [...new Set([...no, was])].filter((x) => x !== yt && !foundWhenPlayed(x)) } } }));
+  notify({ text: "Playing a different version", detail: `${t.title} · ${t.artists.map((a) => a.name).join(", ")}`, thumb: t.thumb, ms: 8000, actions: [...(foundWhenPlayed(was) ? [] : [{ label: "Go Back", run: () => pin(t, was) }]), { label: "Try Another", run: () => void tryAnother(t) }] });
+}
+// The next likeliest copy you haven't turned down. Once every one has been tried, back to the first.
+async function tryAnother(t: Track) {
+  const list = await versions(t).catch(() => []), no = useVersions.getState().songs[t.id]?.no ?? [];
+  const next = list.find((c) => c.id !== found[t.id] && !no.includes(c.id));
+  if (next) return pin(t, next.id);
+  if (!list[0]) return notify({ warn: true, text: "No other versions found" });
+  useVersions.setState((s) => ({ songs: { ...s.songs, [t.id]: { id: list[0].id } } }));
+  notify({ text: "That was every version", detail: "Back to the first one" });
+}
 // A YouTube song whose sound runs well over or under its listed length is another cut of it: YouTube Music's
 // albums sometimes point a song at its music video ("Isterichka": listed 3:42, heard 4:09). Its released
 // copy is looked up as an imported song's would be, and played from then on.

@@ -6,6 +6,7 @@ import { artistKey, canAlign, clearHistory, deliberate, idbGet, idbPut, notify, 
 import { useMine, useTiming, type Mine } from "./lyrics";
 import { useLocal } from "./local";
 import { removeAllDownloads, useOffline } from "./offline";
+import { useVersions } from "./deezer";
 
 // Accounts: the desktop app needs one; the web works without. Signed in, your library syncs between your
 // devices through Supabase (supabase/migrations: one table of items and a sync function; docs/accounts.md
@@ -207,7 +208,7 @@ function signedIn(user: User) {
   // account. A library from before any account goes up into the first one.
   // Waits for everything to load from disk first, or loading would bring the old one back.
   const loaded = (st: { persist: { hasHydrated: () => boolean; onFinishHydration: (f: () => void) => void } }) => new Promise<void>((r) => (st.persist.hasHydrated() ? r() : st.persist.onFinishHydration(() => r())));
-  void Promise.all([useLibrary, useMine, useTiming, useRecents, useRecentSearches, useLocal, useOffline].map(loaded)).then(() => {
+  void Promise.all([useLibrary, useMine, useTiming, useVersions, useRecents, useRecentSearches, useLocal, useOffline].map(loaded)).then(() => {
     if (localStorage.libraryOwner && localStorage.libraryOwner !== user.id) wipe();
     localStorage.libraryOwner = user.id;
     watch();
@@ -219,7 +220,7 @@ const dropSpotify = () => void import("./spotify").then((s) => s.useSpotify.setS
 // Everything one account leaves here, back to a new install's: library, lyrics, player and queue, history,
 // recents, Spotify, scrobbling, settings, local files and downloads. Nothing carries over to the next account.
 function wipe() {
-  useLibrary.setState(useLibrary.getInitialState()), useMine.setState({ songs: {} }), useTiming.setState({ songs: {} });
+  useLibrary.setState(useLibrary.getInitialState()), useMine.setState({ songs: {} }), useTiming.setState({ songs: {} }), useVersions.setState({ songs: {} });
   dropSpotify(), useRecents.setState({}, true), useRecentSearches.setState({ items: [] }), clearHistory(true);
   resetPlayer(), useSettings.setState({ ...useSettings.getInitialState(), lyricsWords: canAlign });
   useLocal.setState({ folders: [], files: {}, edits: {}, skip: [] }), removeAllDownloads();
@@ -280,6 +281,8 @@ function items() {
   for (const [kind, field] of LISTS) for (const x of l[field] as Entry[]) m.set(`${kind}:${idOf(kind, x)}`, x);
   if (l.pinned.length) m.set("pins:all", l.pinned);
   for (const [k, v] of Object.entries(useMine.getState().songs)) m.set(`lyrics:${k}`, v);
+  for (const [k, v] of Object.entries(useVersions.getState().songs)) m.set(`version:${k}`, v);
+  for (const [k, v] of Object.entries(useTiming.getState().songs)) m.set(`timing:${k}`, v);
   const { profile } = useAccount.getState();
   if (profile) m.set("profile:me", profile);
   return m;
@@ -424,6 +427,20 @@ function apply(puts: Map<string, unknown>) {
       for (const [k, v] of lyrics) v ? (songs[k] = v as Mine) : delete songs[k];
       return { songs };
     });
+  const versions = by.get("version");
+  if (versions)
+    useVersions.setState((s) => {
+      const songs = { ...s.songs };
+      for (const [k, v] of versions) v ? (songs[k] = v as (typeof songs)[string]) : delete songs[k];
+      return { songs };
+    });
+  const timing = by.get("timing");
+  if (timing)
+    useTiming.setState((s) => {
+      const songs = { ...s.songs };
+      for (const [k, v] of timing) typeof v === "number" ? (songs[k] = v) : delete songs[k];
+      return { songs };
+    });
   if (by.has("profile")) useAccount.setState({ profile: (by.get("profile")!.get("me") as Profile | null) ?? undefined });
 }
 
@@ -477,6 +494,8 @@ function watch() {
   const changed = () => useAccount.getState().user && (clearTimeout(look), (look = window.setTimeout(check, 300)));
   useLibrary.subscribe(changed);
   useMine.subscribe(changed);
+  useVersions.subscribe(changed);
+  useTiming.subscribe(changed);
   useAccount.subscribe((s, was) => s.profile !== was.profile && changed());
 }
 function check() {

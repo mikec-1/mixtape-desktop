@@ -452,7 +452,7 @@ function Toast() {
   useEffect(() => {
     if (!toast || hold || toast.sticky) return;
     // Long enough to reach Undo; just news goes sooner.
-    const t = setTimeout(() => useStore.setState({ toast: undefined }), toast.undo || toast.action ? 5000 : 2500);
+    const t = setTimeout(() => useStore.setState({ toast: undefined }), toast.ms ?? (toast.undo || toast.action ? 5000 : 2500));
     return () => clearTimeout(t);
   }, [toast, hold]);
   const t = toast ?? last;
@@ -482,10 +482,12 @@ function Toast() {
               {t.detail && <div className="truncate text-[13px] text-black/55">{t.detail}</div>}
             </div>
           </div>
-          {t.action ? (
-            <button onClick={t.action.run} className="press shrink-0 text-[15px] font-bold text-accent hover:underline">
-              {t.action.label}
-            </button>
+          {t.action || t.actions ? (
+            (t.actions ?? [t.action!]).map((a) => (
+              <button key={a.label} onClick={a.run} className="press shrink-0 text-[15px] font-bold text-accent hover:underline">
+                {a.label}
+              </button>
+            ))
           ) : t.undo ? (
             <button onClick={t.undo} className="press shrink-0 text-[15px] font-bold text-accent hover:underline">
               Undo

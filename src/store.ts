@@ -55,7 +55,8 @@ export type Dialog =
   | { kind: "saved"; track: Track }
   | { kind: "update" };
 // Feedback for a library change: what happened, to what, and a way back.
-export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; sticky?: boolean; warn?: boolean };
+// ms: how long it stays (a card with choices to make stays longer); actions: more than one button.
+export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; actions?: { label: string; run: () => void }[]; ms?: number; sticky?: boolean; warn?: boolean };
 
 // The queue and modes survive a relaunch; where you were in the track is in localStorage.resume.
 export const useStore = create<State>()(

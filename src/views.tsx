@@ -15,7 +15,7 @@ import {
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, isRtl, lineNow, lookAgain, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { albumByName, art, artist, artistByName, charts, collection as ytCollection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
-import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, pin, topSongs as dzTop, useOriginals, withGuests, youtubeId } from "./deezer";
+import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, pin, topSongs as dzTop, useOriginals, useVersions, withGuests, youtubeId } from "./deezer";
 import { addFolder, canHaveFiles, fileTrack, guessTags, identify, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
 import { canSignIn, claimHandle, cleanHandle, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, unsynced, useAccount, useOwner, type Profile } from "./account";
@@ -2743,7 +2743,7 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
 // it for this song from then on.
 function Versions({ d }: { d: Extract<Dialog, { kind: "versions" }> }) {
   const t = d.track, { data, loading } = useAsync(() => versions(t), [t.id]);
-  const [now, setNow] = useState<string>();
+  const [found, setNow] = useState<string>(), now = useVersions((s) => s.songs[t.id]?.id) ?? found;
   useEffect(() => void youtubeId(t).then(setNow, () => {}), [t.id]);
   return (
     <Modal label="Pick the Right Version" onClose={closeDialog} className="flex max-h-[86vh] w-[min(520px,94vw)] flex-col">
@@ -2758,7 +2758,7 @@ function Versions({ d }: { d: Extract<Dialog, { kind: "versions" }> }) {
           const on = now === v.id;
           return (
             <div key={v.id} className={`group relative flex items-center gap-2.5 rounded-xl p-1.5 ${on ? "bg-accent/15 ring-1 ring-accent" : "bg-ink/[0.05] hover:bg-ink/[0.09]"}`}>
-              <button onClick={() => (setNow(v.id), pin(t, v.id))} aria-pressed={on} aria-label={`Use ${v.title} by ${v.artists[0]?.name}`} className="hit" />
+              <button onClick={() => pin(t, v.id)} aria-pressed={on} aria-label={`Use ${v.title} by ${v.artists[0]?.name}`} className="hit" />
               <button onClick={() => play([v], 0)} aria-label={`Play ${v.title}`} className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
                 <img src={art(v.thumb, 80)} alt="" className="absolute inset-0 size-full object-cover" />
                 <Play size={14} className="relative fill-white text-white opacity-0 drop-shadow group-hover:opacity-100" />

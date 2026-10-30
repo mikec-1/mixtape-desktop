@@ -225,19 +225,29 @@ const count = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
 // Right-click menus are the OS's own, shown by lib.rs's popup, not Tauri's, which froze the app if the menu-bar
 // icon changed while it was open. The browser has none, so the web build draws the same entries itself (WebMenu).
 export const popup = (items: Entry[]) => canHaveFiles ? withIcons(items).then((items) => Menu.new({ items })).then((m) => invoke("popup", { rid: m.rid }), report) : showMenu({ items, at: pointer });
-let pointer = [0, 0], showMenu: (m: { items: Entry[]; at: number[] } | undefined) => void = () => {};
+// Pickers (a sort order, a country) are Mixtape's own menu, opened under the button, so they look like the app.
+export const pick = (items: Entry[], from: HTMLElement) => { const r = from.getBoundingClientRect(); showMenu({ items, at: [r.left, r.bottom + 6, r.top - 6], from }); };
+type Shown = { items: Entry[]; at: number[]; from?: HTMLElement };
+let pointer = [0, 0], showMenu: (m: Shown | undefined) => void = () => {};
 addEventListener("pointerdown", (e) => (pointer = [e.clientX, e.clientY]), true);
 export function WebMenu() {
-  const [menu, setMenu] = useState<{ items: Entry[]; at: number[] }>();
+  const [menu, setMenu] = useState<Shown>();
   useEffect(() => ((showMenu = setMenu), () => void (showMenu = () => {})), []);
+  const close = () => (setMenu(undefined), menu?.from?.focus({ preventScroll: true }));
   useEffect(() => {
     if (!menu) return;
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && (e.stopPropagation(), setMenu(undefined));
-    addEventListener("keydown", esc, true);
-    return () => removeEventListener("keydown", esc, true);
+    // Escape closes it; the arrows move between rows, and Return picks one (they're buttons).
+    const keys = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return e.stopPropagation(), close();
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      e.preventDefault(), e.stopPropagation();
+      const rows = [...document.querySelectorAll<HTMLElement>("[data-menu] > div > [role=menuitem]:enabled")], i = rows.indexOf(document.activeElement as HTMLElement), down = e.key === "ArrowDown";
+      rows.at(i < 0 ? (down ? 0 : -1) : (i + (down ? 1 : -1)) % rows.length)?.focus();
+    };
+    addEventListener("keydown", keys, true);
+    return () => removeEventListener("keydown", keys, true);
   }, [menu]);
   if (!menu) return null;
-  const close = () => setMenu(undefined);
   return (
     <div className="fixed inset-0 z-[100]" onPointerDown={(e) => e.target === e.currentTarget && close()} onContextMenu={(e) => e.target === e.currentTarget && close()}>
       <MenuList items={menu.items} close={close} at={menu.at} />
@@ -251,17 +261,22 @@ function MenuList({ items, close, at }: { items: Entry[]; close: () => void; at?
     const el = box.current;
     if (!el) return;
     if (!at) return void (el.getBoundingClientRect().right > innerWidth - 4 && (el.style.left = "auto", el.style.right = "100%", el.style.margin = "0 4px 0 0"));
+    const up = at[1] + el.offsetHeight > innerHeight - 4; // no room below: above the pointer, or the button
     el.style.left = `${Math.max(4, Math.min(at[0], innerWidth - el.offsetWidth - 4))}px`;
-    el.style.top = `${Math.max(4, at[1] + el.offsetHeight > innerHeight - 4 ? at[1] - el.offsetHeight : at[1])}px`;
+    el.style.top = `${Math.max(4, up ? (at[2] ?? at[1]) - el.offsetHeight : at[1])}px`;
+    el.style.transformOrigin = up ? "bottom left" : "top left";
+    const on = el.querySelector<HTMLElement>("[aria-checked=true]"); // a long list opens on your choice
+    on?.scrollIntoView({ block: "nearest" }), on?.focus({ preventScroll: true });
   }, [at]);
+  const long = at && !items.some((e) => e.items); // a submenu would be cut off by scrolling
   return (
-    <div ref={box} role="menu" className={`${at ? "fixed" : "absolute top-0 left-full ml-1"} min-w-52 rounded-xl border border-ink/10 bg-paper/95 p-1 text-[13px] text-ink shadow-2xl backdrop-blur-xl`}>
+    <div ref={box} role="menu" data-menu={at ? "" : undefined} className={`${at ? "fixed animate-menu" : "absolute top-0 left-full ml-1"} ${long ? "max-h-[min(26rem,calc(100vh-8px))] overflow-y-auto" : ""} min-w-52 rounded-xl border border-ink/10 bg-paper/95 p-1 text-[13px] text-ink shadow-2xl backdrop-blur-xl`}>
       {items.map((e, i) => {
         if (e.item === "Separator") return <div key={i} className="mx-2 my-1 h-px bg-ink/10" />;
         const Icon = e.checked ? Check : e.icon, off = e.enabled === false;
         return (
           <div key={i} className="relative" onMouseEnter={() => setOpen(i)}>
-            <button role="menuitem" disabled={off} onClick={() => (e.items ? setOpen(i) : (close(), (e.action as (() => void) | undefined)?.()))} className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left enabled:hover:bg-ink/8 disabled:opacity-40">
+            <button role="menuitem" aria-checked={e.checked as boolean | undefined} disabled={off} onClick={() => (e.items ? setOpen(i) : (close(), (e.action as (() => void) | undefined)?.()))} className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left outline-none focus-visible:bg-ink/8 enabled:hover:bg-ink/8 disabled:opacity-40">
               {Icon ? <Icon size={15} className="shrink-0 text-ink/70" /> : <span className="w-[15px] shrink-0" />}
               <span className="flex-1 truncate">{e.text as string}</span>
               {e.items && <ChevronRight size={14} className="text-muted" />}
@@ -688,26 +703,24 @@ export function Library() {
   const songs = useMemo(() => (filter === "songs" ? sorted(library.liked, SONG_ORDER[sort]).filter((r) => !q || matches(r.t, q)) : []), [library.liked, filter, sort, q]);
   useEffect(() => void (filter === "songs" && fillIn(library.liked)), [filter, library.liked]);
   const set = useSettings.setState;
-  const chip = (on: boolean) => `press h-8 rounded-full px-3.5 text-sm font-semibold transition-colors ${on ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`;
+  const chip = (on: boolean) => `press h-8 shrink-0 rounded-full px-3.5 text-sm font-semibold transition-colors ${on ? "bg-ink text-paper" : "bg-ink/[0.07] hover:bg-ink/[0.12]"}`;
 
   return (
     <div className="animate-enter px-8 pt-14">
       <h1 className="text-display">Library</h1>
       {hero && <LikedHero liked={library.liked} />}
-      <div className="mt-8 flex flex-wrap items-center gap-2">
-        <div role="radiogroup" aria-label="Show" className="flex flex-wrap gap-2">
+      {/* One row, like Spotify's: the search opens from a button, and the chips scroll (fading out) when there's no room. */}
+      <div className="mt-8 flex items-center gap-2">
+        <div role="radiogroup" aria-label="Show" className="flex min-w-0 gap-2 overflow-x-auto pr-6 [mask-image:linear-gradient(to_left,transparent,black_1.5rem)] [scrollbar-width:none]">
           {FILTERS.map(([f, label]) => (
             <button key={f} role="radio" aria-checked={filter === f} onClick={() => set({ libraryFilter: filter === f ? undefined : f })} className={chip(filter === f)}>
               {label}
             </button>
           ))}
         </div>
-        <div className="ml-auto flex items-center gap-1">
-          <label className="flex h-8 w-44 items-center gap-2 rounded-full bg-ink/[0.07] px-3 focus-within:bg-ink/[0.1] @3xl:w-56">
-            <SearchIcon size={15} className="shrink-0 text-muted" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} placeholder="Search in Library" aria-label="Search in Library" data-find autoComplete="off" spellCheck={false} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted" />
-          </label>
-          <button onClick={() => popup(LIBRARY_SORTS.map(([s, label]) => ({ text: filter === "songs" ? SONG_SORT_LABEL[s] : label, checked: sort === s, action: () => set({ librarySort: s }) })))} aria-label={`Order: ${LIBRARY_SORTS.find(([s]) => s === sort)?.[1]}`} title="Order" className={`${round2} w-auto gap-1.5 px-3 text-sm font-semibold`}>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <PlaylistSearch value={query} onChange={setQuery} label="Search in Library" />
+          <button onClick={(e) => pick(LIBRARY_SORTS.map(([s, label]) => ({ text: filter === "songs" ? SONG_SORT_LABEL[s] : label, checked: sort === s, action: () => set({ librarySort: s }) })), e.currentTarget)} aria-label={`Order: ${LIBRARY_SORTS.find(([s]) => s === sort)?.[1]}`} title="Order" className={`${round2} w-auto gap-1.5 px-3 text-sm font-semibold`}>
             <ArrowUpDown size={15} /> <span className="hidden @3xl:inline">{filter === "songs" ? SONG_SORT_LABEL[sort] : LIBRARY_SORTS.find(([s]) => s === sort)?.[1]}</span>
           </button>
           <button onClick={() => set({ libraryView: view === "grid" ? "list" : "grid" })} aria-label={view === "grid" ? "Show as List" : "Show as Grid"} title={view === "grid" ? "Show as List" : "Show as Grid"} className={round2}>
@@ -980,15 +993,17 @@ function sorted(tracks: Track[], sort: TrackSort) {
 // custom: what Custom Order is called where the list's own order means something else (and there's then
 // no Date Added to offer): Liked Songs' newest first, Local Files' by artist and album.
 function SortSelect({ value, onChange, custom }: { value: TrackSort; onChange: (s: TrackSort) => void; custom?: string }) {
+  const options = (Object.keys(TRACK_SORTS) as TrackSort[]).filter((s) => !(custom && s === "added")).map((s) => [s, custom && s === "custom" ? custom : TRACK_SORTS[s].label] as const);
+  return <Picker label="Order" value={value} options={options} onPick={onChange} className="h-8 pr-2.5 pl-3.5" />;
+}
+
+// A choice from a list, like a select, but in Mixtape's own menu (pick).
+function Picker<T extends string>({ label, value, options, onPick, className }: { label: string; value: T; options: readonly (readonly [T, string])[]; onPick: (v: T) => void; className: string }) {
   return (
-    <div className="relative">
-      <select value={value} onChange={(e) => onChange(e.target.value as TrackSort)} aria-label="Order" className="press h-8 appearance-none rounded-full bg-ink/[0.07] pr-8 pl-3.5 text-sm font-semibold outline-none hover:bg-ink/[0.12] focus-visible:outline-2 focus-visible:outline-accent">
-        {(Object.keys(TRACK_SORTS) as TrackSort[]).filter((s) => !(custom && s === "added")).map((s) => (
-          <option key={s} value={s}>{custom && s === "custom" ? custom : TRACK_SORTS[s].label}</option>
-        ))}
-      </select>
-      <ChevronDown size={15} aria-hidden className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-muted" />
-    </div>
+    <button onClick={(e) => pick(options.map(([v, text]) => ({ text, checked: v === value, action: () => onPick(v) })), e.currentTarget)} aria-label={label} aria-haspopup="menu" className={`press flex items-center gap-1.5 rounded-full bg-ink/[0.07] text-sm font-semibold hover:bg-ink/[0.12] ${className}`}>
+      {options.find(([v]) => v === value)?.[1]}
+      <ChevronDown size={15} aria-hidden className="text-muted" />
+    </button>
   );
 }
 
@@ -1757,12 +1772,7 @@ export function ChartsPage() {
     <div className="animate-enter px-8 pt-14">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <h1 className="text-display">Charts</h1>
-        <label className="relative">
-          <select value={country} onChange={(e) => useSettings.setState({ country: e.target.value })} aria-label="Country" className={`${pill} appearance-none bg-ink/[0.07] pr-9 hover:bg-ink/[0.12]`}>
-            {(COUNTRIES.includes(country) ? COUNTRIES : [country, ...COUNTRIES]).map((c) => <option key={c} value={c}>{countryName(c)}</option>)}
-          </select>
-          <ChevronDown size={15} aria-hidden className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-muted" />
-        </label>
+        <Picker label="Country" value={country} options={(COUNTRIES.includes(country) ? COUNTRIES : [country, ...COUNTRIES]).map((c) => [c, countryName(c)] as const)} onPick={(country) => useSettings.setState({ country })} className={pill} />
       </div>
       {error ? (
         <p title={error} className="mt-8 text-muted">Couldn’t load the charts. Check your connection and try again.</p>
@@ -3506,18 +3516,7 @@ function LyricsPane() {
           <Switch label="Reduce Lyric Motion" on={lyricsStill} onChange={(lyricsStill) => set({ lyricsStill })} />
         </Row>
         <Row label="Translate To" detail="What Translate turns lyrics in other languages into">
-          <div className="relative">
-            <select
-              value={translateTo}
-              onChange={(e) => set({ translateTo: e.target.value })}
-              aria-label="Translate To"
-              className="press h-9 appearance-none rounded-full bg-ink/[0.07] pr-9 pl-4 text-sm font-semibold outline-none hover:bg-ink/[0.12] focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              <option value="">System ({languageName(translateTarget(""))})</option>
-              {LANGUAGES.map((code) => <option key={code} value={code}>{languageName(code)}</option>)}
-            </select>
-            <ChevronDown size={16} aria-hidden className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-muted" />
-          </div>
+          <Picker label="Translate To" value={translateTo} options={[["", `System (${languageName(translateTarget(""))})`], ...LANGUAGES.map((code) => [code, languageName(code)] as const)]} onPick={(translateTo) => set({ translateTo })} className="h-9 pr-3 pl-4" />
         </Row>
       </div>
       <section className="mb-6">

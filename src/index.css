@@ -37,6 +37,10 @@
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
   --animate-enter: enter 0.3s var(--ease-out) both;
+  --animate-menu: menu 0.16s var(--ease-out) both;
+  @keyframes menu {
+    from { opacity: 0; transform: scale(0.96); }
+  }
   --animate-pop: pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
   /* Checking it off: the accent floods the chip from the middle, it gives a little bounce, then the tick draws. */
   --animate-done: fill 0.45s var(--ease-out) both, done 0.55s 0.25s var(--ease-out) both;
@@ -470,6 +474,9 @@ input[type="range"].knob::-webkit-slider-thumb {
       opacity: 0;
     }
   }
+  @keyframes menu {
+    from { opacity: 0; }
+  }
   .slide {
     white-space: normal;
   }
@@ -483,7 +490,7 @@ input[type="range"].knob::-webkit-slider-thumb {
 :root[data-motion="reduce"] :not(.lyrics *)::after {
   transition-property: opacity, color, background-color, --accent-raw !important;
 }
-:root[data-motion="reduce"] .animate-enter {
+:root[data-motion="reduce"] :is(.animate-enter, .animate-menu) {
   animation-name: fade;
 }
 @keyframes fade {

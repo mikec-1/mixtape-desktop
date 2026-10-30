@@ -182,8 +182,9 @@ export async function releasedCut(t: Track, heard: number) {
 }
 // Lets these be looked for again next time they play.
 export const findAgain = (ids: string[]) => (ids.forEach((id) => delete found[id]), (localStorage.youtubeIds = JSON.stringify(found)));
-// Once, after karaoke and instrumental copies stopped counting as matches: every song not pinned is looked for again.
-if (!localStorage.refound) (localStorage.refound = 1), findAgain(Object.keys(found).filter((id) => !useVersions.getState().songs[id]));
+// Once, after karaoke and instrumental copies stopped counting as matches, and again after other people's uploads
+// went behind the artist's own: every song not pinned is looked for again.
+if (localStorage.refound !== "2") (localStorage.refound = 2), findAgain(Object.keys(found).filter((id) => !useVersions.getState().songs[id]));
 
 // Covers (and lengths) for songs that came without them (a CSV), by ISRC, three calls out at a time so
 // others still get in. The songs on screen go first (onScreen: replacing the last screen's) and are drawn

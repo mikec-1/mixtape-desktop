@@ -132,12 +132,15 @@ function matches(row: CsvTrack, c: Track) {
 const NOISE = ["official video", "music video", "lyric video", "live", "cover", "remix", "sped up", "slowed", "reverb", "mashup", "intro", "trailer", "8d", "extended"];
 const BOOTLEG = ["ai cover", "ai verse", "leak", "unreleased", "snippet", "bootleg", "fan made", "fanmade", "concept", "remake", "reimagined", "open verse", "added verse"];
 
-// Lower is better: search rank and length difference, Topic channels and audio uploads first, covers and bootlegs last.
+// Lower is better: search rank and length difference, Topic channels and audio uploads first, other people's uploads, covers and bootlegs last.
 function score(row: CsvTrack, c: Track, rank: number) {
   const title = c.title.toLowerCase(), wanted = row.title.toLowerCase();
   const off = row.secs && Math.abs((parseSecs(c.duration) ?? row.secs) - row.secs);
   let s = rank * 2 + (off ? off + (off > 20 ? 60 : 0) : 0);
   if (c.artists.some((a) => a.name.endsWith("- Topic"))) s -= 120;
+  // Someone else's upload ("Drake Media", "FUEGO 95.9") goes after the artist's own, even their music video.
+  const mine = new Set(rowArtists(row.artist).map((a) => squash(norm(a))));
+  if (!c.artists.some((a) => mine.has(squash(norm(a.name).replace(/\s*-\s*topic$|vevo$/, ""))))) s += 150;
   if (/official audio|[([]audio[)\]]/.test(title)) s -= 40;
   for (const w of NOISE) if (title.includes(w) && !wanted.includes(w)) s += 40;
   for (const w of BOOTLEG) if (title.includes(w) && !wanted.includes(w)) s += 100;

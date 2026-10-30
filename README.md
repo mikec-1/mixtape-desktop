@@ -14,7 +14,7 @@ A free music player for Mac, Windows and the web. Bring the library you already 
 
 ## Installing
 
-**Mac:** open the `.dmg` and drag Mixtape to Applications. The app isn't notarized yet, so the first time, right-click it and choose **Open**, or allow it in System Settings → Privacy & Security.
+**Mac:** open the `.dmg` and drag Mixtape to Applications. The app isn't notarized yet, so the first time macOS says it can't check it: click **Done**, then go to System Settings → Privacy & Security and choose **Open Anyway**.
 
 **Windows:** run the `-setup.exe`. If SmartScreen appears, choose **More info → Run anyway**.
 

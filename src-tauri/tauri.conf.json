@@ -45,7 +45,8 @@
     "resources": [
       "icons/tray.png"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "macOS": { "signingIdentity": "-" }
   },
   "plugins": {
     "updater": {

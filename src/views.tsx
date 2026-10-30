@@ -1894,7 +1894,11 @@ export function NowPlaying() {
                 </div>
               </>
             ) : (
-              <h1 className="text-display">Nothing playing</h1>
+              <>
+                <div className="aspect-square w-full max-w-[min(100%,50vh)] rounded-2xl ring-1 ring-white/20 ring-inset" />
+                <h1 className="mt-10 text-[clamp(40px,5vw,72px)] leading-[0.95] font-extrabold tracking-[-0.04em]">Nothing playing</h1>
+                <Start />
+              </>
             )}
           </div>
           <div className="flex min-h-0 flex-col">
@@ -1956,6 +1960,20 @@ function Drift({ moving }: { moving: boolean }) {
   );
 }
 
+// Nothing playing: a way to start something, where the song would be.
+function Start() {
+  const liked = useLibrary((s) => s.liked);
+  const pill = "press h-10 rounded-full px-5 text-[15px] font-bold";
+  return (
+    <>
+      <p className="mt-3 text-xl text-white/75">{liked.length ? "Pick a song, or shuffle the ones you love." : "Search for anything to play."}</p>
+      <div className="mt-6 flex gap-2">
+        {liked.length > 0 && <button onClick={() => shufflePlay(liked, libraryKey("liked"))} className={`${pill} bg-white text-black`}>Shuffle Liked Songs</button>}
+        <button onClick={() => (useStore.setState({ sheet: undefined }), go("search"))} className={`${pill} ${liked.length ? "bg-white/15 hover:bg-white/25" : "bg-white text-black"}`}>Search</button>
+      </div>
+    </>
+  );
+}
 const round = "press grid size-8 shrink-0 place-items-center rounded-full bg-white/15 hover:bg-white/25";
 
 type Extras = ReturnType<typeof useExtras>;
@@ -2153,7 +2171,7 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
   const note = `font-bold ${sz.note}`;
   const google = extras.translation && extras.romanised && !value?.lines.some((l) => l.roman) ? "Translation and romanisation" : extras.translation ? "Translation" : extras.romanised && !value?.lines.some((l) => l.roman) ? "Romanisation" : "";
 
-  if (!track) return null;
+  if (!track) return size === "big" ? <div className={`pt-6 ${sz.pad}`}><p className={note}>Nothing playing.</p><Start /></div> : <p className={`pt-6 text-white/60 ${sz.pad}`}>Lyrics show here when a song plays.</p>;
   if (loading && !value)
     return (
       <div role="status" className={`flex animate-pulse flex-col gap-4 pt-6 ${sz.pad}`}>

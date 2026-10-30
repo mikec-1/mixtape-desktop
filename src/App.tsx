@@ -295,12 +295,12 @@ function PlayerBar() {
       <div className="absolute inset-0 -z-10 rounded-2xl transition-opacity duration-500" style={{ opacity: track && !open ? 1 : 0, background: ((p) => `linear-gradient(to right, color-mix(in oklch, var(--color-accent-vivid) 22%, transparent) ${p}%, transparent calc(${p}% + 6%)), linear-gradient(to right, color-mix(in oklch, var(--color-accent-vivid) 9%, transparent) ${Math.min(100, p * 2)}%, transparent calc(${Math.min(100, p * 2)}% + 12%))`)(duration ? (time / duration) * 100 : 0) }} />
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)] items-center gap-6 py-2.5 pr-4 pl-2.5">
         <div onContextMenu={(e) => track && (e.preventDefault(), trackMenu(track))} className="flex min-w-0 items-center gap-3">
-          <button onClick={() => toggleSheet("playing")} aria-label="Now Playing" disabled={!track} className="press size-12 shrink-0 overflow-hidden rounded-lg bg-ink/[0.06] shadow-md shadow-black/15">
+          <button onClick={() => toggleSheet("playing")} aria-label="Now Playing" className={`press size-12 shrink-0 overflow-hidden rounded-lg ${track ? "bg-ink/[0.06] shadow-md shadow-black/15" : "ring-1 ring-ink/15 ring-inset"}`}>
             {track && <img src={art(track.thumb, 120)} alt="" className="size-full object-cover" />}
           </button>
           <div className="min-w-0 flex-1">
-            <div className="truncate font-semibold">{track ? <SongName t={track} /> : "Not playing"}</div>
-            <div aria-live="polite" className="truncate text-sm text-muted">{track && <>{error && <span title={error} className="font-semibold text-[#ff453a]">Unavailable · </span>}{track.explicit && <Explicit />}<Artists list={track.artists} /></>}</div>
+            <div className="truncate font-semibold">{track ? <SongName t={track} /> : "Nothing playing"}</div>
+            <div aria-live="polite" className="truncate text-sm text-muted">{!track ? "Pick something to play" : <>{error && <span title={error} className="font-semibold text-[#ff453a]">Unavailable · </span>}{track.explicit && <Explicit />}<Artists list={track.artists} /></>}</div>
             {track && !error && !open && <Peek track={track} />}
           </div>
           {track && <LikeButton track={track} />}
@@ -312,11 +312,11 @@ function PlayerBar() {
               <Shuffle size={17} />
               {shuffle === "smart" && <Sparkle size={9} className="absolute top-0.5 right-0.5 fill-current" />}
             </button>
-            <button onClick={prev} aria-label="Previous" className="press grid size-10 place-items-center rounded-full"><SkipBack size={20} className="fill-current" /></button>
-            <button onClick={toggle} aria-label={loading ? "Loading…" : paused ? "Play" : "Pause"} className="press grid size-10 place-items-center rounded-full bg-accent text-paper">
+            <button onClick={prev} aria-label="Previous" disabled={!track} className="press grid size-10 disabled:opacity-35 place-items-center rounded-full"><SkipBack size={20} className="fill-current" /></button>
+            <button onClick={toggle} aria-label={loading ? "Loading…" : paused ? "Play" : "Pause"} disabled={!track} className="press grid size-10 disabled:opacity-35 place-items-center rounded-full bg-accent text-paper">
               {loading ? <span className="spinner size-[18px]" /> : paused ? <Play size={18} className="ml-0.5 fill-current" /> : <Pause size={18} className="fill-current" />}
             </button>
-            <button onClick={next} aria-label="Next" className="press grid size-10 place-items-center rounded-full"><SkipForward size={20} className="fill-current" /></button>
+            <button onClick={next} aria-label="Next" disabled={!track} className="press grid size-10 disabled:opacity-35 place-items-center rounded-full"><SkipForward size={20} className="fill-current" /></button>
             <button onClick={cycleRepeat} aria-label={repeat === "one" ? "Repeat one" : repeat === "all" ? "Repeat all" : "Repeat"} aria-pressed={repeat !== "off"} title={repeat === "one" ? "Repeat One" : repeat === "all" ? "Repeat All" : "Repeat"} className={mode(repeat !== "off")}>
               {repeat === "one" ? <Repeat1 size={17} /> : <Repeat size={17} />}
             </button>

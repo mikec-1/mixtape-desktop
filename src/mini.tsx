@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Music, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
+import { Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import type { MiniState, Remote } from "./store";
 import { art } from "./yt";
 
@@ -38,8 +38,8 @@ export default function Mini() {
       className="group relative flex h-screen overflow-hidden rounded-[18px] bg-paper text-ink ring-1 ring-ink/10 ring-inset select-none"
       style={{ backgroundImage: "linear-gradient(to right, color-mix(in oklab, var(--color-accent) 30%, transparent), transparent 85%)" }}
     >
-      <div className="pointer-events-none grid aspect-square h-full shrink-0 place-items-center bg-ink/[0.08] text-muted">
-        {t?.thumb ? <img src={art(t.thumb, 300)} alt="" className="size-full object-cover" /> : <Music size={28} />}
+      <div className={`pointer-events-none aspect-square h-full shrink-0 ${t?.thumb ? "" : "ring-1 ring-ink/15 ring-inset"}`}>
+        {t?.thumb && <img src={art(t.thumb, 300)} alt="" className="size-full object-cover" />}
       </div>
       <div data-tauri-drag-region className="flex min-w-0 flex-1 flex-col justify-between py-3 pr-4 pl-4">
         <div data-tauri-drag-region className="min-w-0 pr-5">
@@ -48,7 +48,7 @@ export default function Mini() {
           {s?.line ? (
             <div key={s.line} data-tauri-drag-region className="animate-enter truncate text-[13px] font-semibold text-accent">{s.line}</div>
           ) : (
-            <div data-tauri-drag-region className="truncate text-[13px] text-muted">{t?.artists.map((a) => a.name).join(", ") || "Mixtape"}</div>
+            <div data-tauri-drag-region className="truncate text-[13px] text-muted">{t ? t.artists.map((a) => a.name).join(", ") : "Pick something in Mixtape"}</div>
           )}
         </div>
         <div className="flex items-center justify-center gap-3">

@@ -129,7 +129,7 @@ function matches(row: CsvTrack, c: Track) {
   return title.length >= 4 && (!row.secs || !secs || Math.abs(secs - row.secs) <= 15);
 }
 
-const NOISE = ["official video", "music video", "lyric video", "live", "cover", "remix", "sped up", "slowed", "reverb", "mashup", "intro", "trailer", "8d", "extended"];
+const NOISE = ["official video", "music video", "lyric video", "live", "cover", "remix", "sped up", "slowed", "reverb", "mashup", "intro", "trailer", "8d", "extended", "bass boosted", "nightcore"];
 const BOOTLEG = ["ai cover", "ai verse", "leak", "unreleased", "snippet", "bootleg", "fan made", "fanmade", "concept", "remake", "reimagined", "open verse", "added verse"];
 
 // Lower is better: search rank and length difference, Topic channels and audio uploads first, other people's uploads, covers and bootlegs last.
@@ -139,16 +139,25 @@ function score(row: CsvTrack, c: Track, rank: number) {
   let s = rank * 2 + (off ? off + (off > 20 ? 60 : 0) : 0);
   if (c.artists.some((a) => a.name.endsWith("- Topic"))) s -= 120;
   // Someone else's upload ("Drake Media", "FUEGO 95.9") goes after the artist's own, even their music video.
-  const mine = new Set(rowArtists(row.artist).map((a) => squash(norm(a))));
-  if (!c.artists.some((a) => mine.has(squash(norm(a.name).replace(/\s*-\s*topic$|vevo$/, ""))))) s += 150;
+  if (!own(row, c)) s += 150;
   if (/official audio|[([]audio[)\]]/.test(title)) s -= 40;
   for (const w of NOISE) if (title.includes(w) && !wanted.includes(w)) s += 40;
   for (const w of BOOTLEG) if (title.includes(w) && !wanted.includes(w)) s += 100;
   return s;
 }
 
+// Uploaded by one of the artists: their channel, Topic or VEVO.
+const own = (row: CsvTrack, c: Track) => {
+  const mine = new Set(rowArtists(row.artist).map((a) => squash(norm(a))));
+  return c.artists.some((a) => mine.has(squash(norm(a.name).replace(/\s*-\s*topic$|vevo$/, ""))));
+};
+
+// Another take of the song: a remix, sped-up, live or bass-boosted copy, unless that's the one wanted.
+const EDIT = /\b(?:remix|mix|edit|sped|slowed|reverb|nightcore|mashup|8d|extended|live|acoustic|boosted|loop|hour)\b/g;
+const edit = (row: CsvTrack, c: Track) => !!norm(c.title).match(EDIT)?.some((w) => !norm(row.title).includes(w));
+
 const best = (row: CsvTrack, cs: Track[]) =>
-  cs.map((c, i) => [c, score(row, c, i)] as const).filter(([c]) => matches(row, c)).sort((a, b) => a[1] - b[1])[0]?.[0];
+  cs.map((c, i) => [c, score(row, c, i)] as const).filter(([c]) => matches(row, c) && !edit(row, c)).sort((a, b) => a[1] - b[1])[0]?.[0];
 
 // Keeps the spreadsheet's names; uses YouTube's artists only when they're the same people, so the artist links work.
 function toTrack(row: CsvTrack, c: Track): Track {
@@ -186,22 +195,35 @@ export async function findSong(row: CsvTrack) {
   };
   // The ISRC and the plain song search go out together, as one or the other almost always hits.
   if (row.isrc) void get(steps[1]);
-  let guess: Track | undefined;
+  let guess: [Track, number] | undefined;
   for (const step of steps) {
     if (!step[1]) continue;
-    const hit = best(row, await get(step));
-    // Found by its artist: done. Found by a long title alone: keep it, but look on for the artist's own.
-    if (hit && byArtist(row, hit)) return toTrack(row, hit);
-    guess ??= hit;
+    const cs = await get(step), hit = best(row, cs);
+    if (!hit) continue;
+    // The artist's own copy: done. Anyone else's (a 113-view "DRAKE ONE DANCE" when YouTube Music hasn't the song)
+    // is kept while the other searches look for theirs or a better one; a long title alone comes last.
+    if (own(row, hit)) return toTrack(row, hit);
+    const s = score(row, hit, cs.indexOf(hit)) + (byArtist(row, hit) ? 0 : 1000);
+    if (!guess || s < guess[1]) guess = [hit, s];
   }
-  return guess && toTrack(row, guess);
+  return guess && toTrack(row, guess[0]);
 }
-// Every copy the searches turn up, likeliest first, for picking another when it plays the wrong version.
-export async function versions(t: Track) {
-  const row = rowOf(t), q = `${bareTitle(row.title)} ${rowArtists(row.artist)[0] ?? row.artist}`;
+// The song a track is of, for Wrong Version's searches. A fan upload ("Drake - Hotline Bling (Official Audio)" by
+// Drake Media, no album) is the song it's of.
+export function wanted(t: Track): CsvTrack {
+  const [, by, named] = (!t.album && !t.file && !/^(dz|sp|csv):/.test(t.id) && t.title.match(/^(.+?)\s+[-–]\s+(.+)$/)) || [];
+  return by ? { ...rowOf(t), artist: by, title: named.replace(/\s*[([](?:official\s*)?(?:audio|video|music\s*video|lyrics?(?:\s*video)?|visuali[sz]er)[)\]]/gi, "").trim() } : rowOf(t);
+}
+// Every copy of the song the searches turn up, likeliest first, for picking another when it plays the wrong
+// version. Only copies by the artist, and no remixes or sped-up takes, so the list ends on the song. A music video
+// runs longer than the song, so length doesn't rank them: the released song comes before the video.
+export async function versions(row: CsvTrack) {
+  row = { ...row, secs: undefined };
+  const q = `${bareTitle(row.title)} ${rowArtists(row.artist)[0] ?? row.artist}`;
   const got = await Promise.all([row.isrc ? searchKind(row.isrc, "song") : [], searchKind(q, "song"), searchKind(q, "video")].map((p) => Promise.resolve(p).catch(() => [] as Track[])));
   return [...new Map(got.flat().map((c) => [c.id, c])).values()]
-    .map((c, i) => [c, score(row, c, i) + (matches(row, c) ? 0 : 200)] as const)
+    .filter((c) => matches(row, c) && byArtist(row, c) && !edit(row, c))
+    .map((c, i) => [c, score(row, c, i)] as const)
     .sort((a, b) => a[1] - b[1])
     .slice(0, 8)
     .map(([c]) => c);

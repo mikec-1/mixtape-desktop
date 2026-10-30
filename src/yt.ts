@@ -446,7 +446,7 @@ export async function details(id: string) {
     if (!me) continue;
     const album = me.album ?? all.find((x) => x.album)?.album;
     const artists = withUnlinked(me.artists?.map((x) => ({ name: x.name, id: x.channel_id })) ?? [], artistLine(me.author));
-    return { album: album?.name, albumId: album?.id, duration: me.duration?.text || undefined, artists };
+    return { title: me.title.toString(), album: album?.name, albumId: album?.id, duration: me.duration?.text || undefined, artists };
   }
 }
 

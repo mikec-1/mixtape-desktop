@@ -15,7 +15,7 @@ import {
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, isRtl, lineNow, lookAgain, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
 import { albumByName, art, artist, artistByName, charts, collection as ytCollection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
-import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, pin, topSongs as dzTop, useOriginals, useVersions, withGuests, youtubeId } from "./deezer";
+import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, topSongs as dzTop, tryAnother, useOriginals, withGuests } from "./deezer";
 import { addFolder, canHaveFiles, fileTrack, guessTags, identify, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
 import { canSignIn, claimHandle, cleanHandle, deleteAccount, exportAll, fromLink, legal, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, unsynced, useAccount, useOwner, type Profile } from "./account";
@@ -24,7 +24,7 @@ import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCom
 import { version } from "../package.json";
 import appIcon from "../src-tauri/icons/128x128@2x.png";
 import { clearDiscordRpc, lastfmAuthFinish, lastfmAuthStart, lastfmSignOut } from "./scrobble";
-import { importLink, importPlaylistFile, isLink, pickPlaylists, sameSong, songOf, versions } from "./import";
+import { importLink, importPlaylistFile, isLink, pickPlaylists, sameSong, songOf } from "./import";
 import { connect, contents, disconnect, importSpotify, useSpotify } from "./spotify";
 
 // An album from Deezer (artist pages) or YouTube Music (search, Home).
@@ -345,7 +345,7 @@ export function trackMenu(t: Track, from?: { playlist: string; index: number } |
           ...(q < queue.length - 1 ? [{ text: "Move Down", icon: ArrowDown, action: () => moveInQueue(q, q + 1) }] : []),
           { text: "Remove from Queue", icon: ListX, action: () => removeFromQueue(q) },
         ]),
-    ...(t.file ? [] : [{ text: "Start Radio", icon: Radio, action: () => startRadio(t) }, { text: "Wrong Version? Re-resolve", icon: RefreshCw, action: () => useStore.setState({ dialog: { kind: "versions", track: t } }) }]),
+    ...(t.file ? [] : [{ text: "Start Radio", icon: Radio, action: () => startRadio(t) }, { text: "Wrong Version? Re-resolve", icon: RefreshCw, action: () => void tryAnother(t) }]),
     ...(t.file
       ? [
           { text: "Edit Song Info…", icon: PencilLine, action: () => useStore.setState({ dialog: { kind: "songs", paths: [t.file!], editing: true } }) },
@@ -2425,7 +2425,7 @@ function Modal({ label, onClose, className, children }: { label: string; onClose
 
 export function Dialogs() {
   const dialog = useStore((s) => s.dialog);
-  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "versions" ? <Versions d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : dialog?.kind === "saved" ? <SavedIn key={dialog.track.id} d={dialog} /> : dialog?.kind === "update" ? <UpdateNotes /> : dialog?.kind === "passed" ? <Passed /> : null;
+  return dialog?.kind === "edit" ? <LyricsEditor d={dialog} /> : dialog?.kind === "card" ? <LyricCard d={dialog} /> : dialog?.kind === "songs" ? <SongImport key={dialog.paths[0]} d={dialog} /> : dialog?.kind === "warn" ? <Warning d={dialog} /> : dialog?.kind === "link" ? <LinkImport /> : dialog?.kind === "spotify" ? <SpotifyImport /> : dialog?.kind === "saved" ? <SavedIn key={dialog.track.id} d={dialog} /> : dialog?.kind === "update" ? <UpdateNotes /> : dialog?.kind === "passed" ? <Passed /> : null;
 }
 const closeDialog = () => useStore.setState({ dialog: undefined });
 
@@ -2772,44 +2772,6 @@ function SongImport({ d }: { d: Extract<Dialog, { kind: "songs" }> }) {
 
 // Right-click → Wrong Version? Re-resolve: other copies of the song on YouTube (play one to check it). Picking one keeps
 // it for this song from then on.
-function Versions({ d }: { d: Extract<Dialog, { kind: "versions" }> }) {
-  const t = d.track, { data, loading } = useAsync(() => versions(t), [t.id]);
-  const [found, setNow] = useState<string>(), now = useVersions((s) => s.songs[t.id]?.id) ?? found;
-  useEffect(() => void youtubeId(t).then(setNow, () => {}), [t.id]);
-  return (
-    <Modal label="Pick the Right Version" onClose={closeDialog} className="flex max-h-[86vh] w-[min(520px,94vw)] flex-col">
-      <header className="px-6 pt-5">
-        <h2 className="text-xl font-bold tracking-tight">Pick the Right Version</h2>
-        <p className="truncate text-sm text-muted">{t.title} · {t.artists.map((a) => a.name).join(", ")}</p>
-      </header>
-      <div className="mt-3 grid min-h-0 flex-1 content-start gap-1.5 overflow-y-auto px-6">
-        {loading && <p className="text-sm text-muted">Searching…</p>}
-        {!loading && !data?.length && <p className="text-sm text-muted">No other versions found.</p>}
-        {data?.map((v) => {
-          const on = now === v.id;
-          return (
-            <div key={v.id} className={`group relative flex items-center gap-2.5 rounded-xl p-1.5 ${on ? "bg-accent/15 ring-1 ring-accent" : "bg-ink/[0.05] hover:bg-ink/[0.09]"}`}>
-              <button onClick={() => pin(t, v.id)} aria-pressed={on} aria-label={`Use ${v.title} by ${v.artists[0]?.name}`} className="hit" />
-              <button onClick={() => play([v], 0)} aria-label={`Play ${v.title}`} className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
-                <img src={art(v.thumb, 80)} alt="" className="absolute inset-0 size-full object-cover" />
-                <Play size={14} className="relative fill-white text-white opacity-0 drop-shadow group-hover:opacity-100" />
-              </button>
-              <div className="pointer-events-none min-w-0 flex-1 text-sm">
-                <div className="truncate font-semibold">{v.title}</div>
-                <div className="truncate text-muted">{[v.artists.map((a) => a.name).join(", "), v.album, v.duration].filter(Boolean).join(" · ")}</div>
-              </div>
-              {on && <Check size={16} className="pointer-events-none mr-1 shrink-0 text-accent" />}
-            </div>
-          );
-        })}
-      </div>
-      <footer className="flex justify-end px-6 py-4">
-        <button onClick={closeDialog} className={solid}>Done</button>
-      </footer>
-    </Modal>
-  );
-}
-
 // Your own lyrics for a song: plain text, or LRC ("[01:02.50] line") to sync them. While the song plays,
 // Stamp Line (⌘↩) puts its time on the line the cursor is in and moves to the next, so a song can be synced
 // by tapping along.

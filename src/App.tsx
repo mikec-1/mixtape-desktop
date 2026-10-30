@@ -464,7 +464,10 @@ function Toast() {
   const toast = useStore((s) => s.toast);
   const [last, setLast] = useState(toast);
   const [hold, setHold] = useState(false);
-  if (toast && toast !== last) setLast(toast);
+  const playing = useStore((s) => s.queue[s.index]?.id);
+  // A new toast starts unheld: the button that was pressed for it is gone without a blur.
+  if (toast && toast !== last) setLast(toast), setHold(false);
+  useEffect(() => void (toast?.for && playing !== toast.for && useStore.setState({ toast: undefined })), [toast, playing]);
   useEffect(() => {
     if (!toast || hold || toast.sticky) return;
     // Long enough to reach Undo; just news goes sooner.
@@ -472,6 +475,7 @@ function Toast() {
     return () => clearTimeout(t);
   }, [toast, hold]);
   const t = toast ?? last;
+  const close = <button onClick={() => useStore.setState({ toast: undefined })} aria-label="Close" className="press -mr-1 grid size-6 shrink-0 place-items-center rounded-[4px] text-black/40 hover:bg-black/[0.06] hover:text-black"><X size={15} /></button>;
 
   return (
     <div role="status" className="pointer-events-none fixed bottom-[110px] left-1/2 z-[60] -translate-x-1/2">
@@ -482,10 +486,10 @@ function Toast() {
           onPointerLeave={() => setHold(false)}
           onFocus={() => setHold(true)}
           onBlur={() => setHold(false)}
-          className={`flex w-max max-w-[min(460px,calc(100vw-32px))] items-center gap-3 rounded-[10px] bg-white py-2.5 pr-4 text-black shadow-xl shadow-black/25 ${t.thumb || t.sticky || t.warn ? "pl-2.5" : "pl-4"} ${
+          className={`flex w-max max-w-[min(460px,calc(100vw-32px))] items-center gap-3 rounded-[10px] bg-white text-black shadow-[0_12px_32px_-8px_rgba(0,0,0,0.5)] py-2.5 pr-4 ${t.thumb || t.sticky || t.warn ? "pl-2.5" : "pl-4"} ${
             toast
               ? "pointer-events-auto translate-y-0 scale-100 opacity-100 transition-[opacity,translate,scale] duration-400 ease-(--ease-out)"
-              : "translate-y-4 scale-95 opacity-0 transition-[opacity,translate,scale] duration-200 ease-in"
+              : "translate-y-2 scale-[0.97] opacity-0 transition-[opacity,translate,scale] duration-150 ease-(--ease-out)"
           }`}
         >
           {/* A new toast over a showing one swaps its contents in place. */}
@@ -498,18 +502,18 @@ function Toast() {
               {t.detail && <div className="truncate text-[13px] text-black/55">{t.detail}</div>}
             </div>
           </div>
-          {t.action || t.actions ? (
-            (t.actions ?? [t.action!]).map((a) => (
-              <button key={a.label} onClick={a.run} className="press shrink-0 text-[15px] font-bold text-accent hover:underline">
-                {a.label}
-              </button>
-            ))
-          ) : t.undo ? (
-            <button onClick={t.undo} className="press shrink-0 text-[15px] font-bold text-accent hover:underline">
-              Undo
+          {/* Several choices: round icon buttons in a row, the last one filled, as in Mixtape's "Right version?". */}
+          {t.actions?.map(({ label, icon: Icon, run }, i, all) => (
+            <button key={label} onClick={run} aria-label={label} title={label} className={`press -ml-1 grid size-8 shrink-0 place-items-center rounded-full transition-colors duration-100 ${i === all.length - 1 ? "bg-accent text-white hover:brightness-110" : "bg-black/[0.06] text-black/70 hover:bg-black/10 hover:text-black"}`}>
+              {Icon ? <Icon size={16} fill={i === all.length - 1 ? "currentColor" : "none"} /> : label}
             </button>
-          ) : null}
-          <button onClick={() => useStore.setState({ toast: undefined })} aria-label="Close" className="press -mr-1 grid size-6 shrink-0 place-items-center rounded-full text-black/40 hover:bg-black/[0.06] hover:text-black"><X size={15} /></button>
+          ))}
+          {(t.action || t.undo) && (
+            <button onClick={t.action?.run ?? t.undo} className="press shrink-0 text-[15px] font-bold text-accent hover:underline">
+              {t.action?.label ?? "Undo"}
+            </button>
+          )}
+          {close}
         </div>
       )}
     </div>

@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { LucideIcon } from "lucide-react";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { art, beats, details, edges, fetchAudio, hear, parseSecs, playAudio, radio, searchKind, credits, type Album, type Artist, type Quality, type Track } from "./yt";
@@ -49,7 +50,6 @@ type State = {
 export type Dialog =
   | { kind: "edit"; key: string; title: string; artist: string; text: string; track?: Track }
   | { kind: "card"; track: Track; pick: number[] }
-  | { kind: "versions"; track: Track }
   | { kind: "songs"; paths: string[]; editing?: boolean }
   | { kind: "warn"; title: string; text: string; yes: string; then: () => void }
   | { kind: "link" }
@@ -58,8 +58,9 @@ export type Dialog =
   | { kind: "update" }
   | { kind: "passed" };
 // Feedback for a library change: what happened, to what, and a way back.
-// ms: how long it stays (a card with choices to make stays longer); actions: more than one button.
-export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; actions?: { label: string; run: () => void }[]; ms?: number; sticky?: boolean; warn?: boolean };
+// ms: how long it stays (a card with choices to make stays longer); actions: more than one button, drawn as
+// round icon buttons; for: a song it's about, so it goes once another plays.
+export type Toast = { id: number; text: string; detail?: string; thumb?: string; undo?: () => void; action?: { label: string; run: () => void }; actions?: { label: string; icon?: LucideIcon; run: () => void }[]; ms?: number; sticky?: boolean; warn?: boolean; for?: string };
 
 // The queue and modes survive a relaunch; where you were in the track is in localStorage.resume.
 export const useStore = create<State>()(

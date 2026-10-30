@@ -1,10 +1,11 @@
 import { fetch } from "./http";
+import { ThumbsDown, ThumbsUp, Undo2 } from "lucide-react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { findSong, latin, rowOf, versions } from "./import";
+import { findSong, latin, rowOf, versions, wanted } from "./import";
 import { heard } from "./recognize";
 import { notify, patch, patchAll, replay } from "./store";
-import { parseSecs, type Artist, type Collection, type Track } from "./yt";
+import { details, parseSecs, type Artist, type Collection, type Track } from "./yt";
 
 // Albums saved from Deezer (when artist pages came from there) still open from it, as in Mixtape. A song
 // from here only goes to YouTube when it's played (youtubeId).
@@ -145,7 +146,8 @@ export function youtubeId(t: Track): Promise<string> {
 }
 const hear = (t: Track) => heard(t.file!, { title: t.title, artist: t.artists.map((a) => a.name).join(", "), feat: "", album: t.album ?? "" }).then((f) => f && findSong({ ...rowOf(t), title: f.edit.title, artist: [f.edit.artist, f.edit.feat].filter(Boolean).join(", "), album: f.edit.album, isrc: f.edit.isrc }), () => undefined);
 // A version you pick (Wrong Version…) is pinned and synced (account.ts version:<id>), so every computer plays
-// it; the ones you turned down are passed over by Try Another. Mixtape §4.
+// it; the ones you turned down are passed over by Try Another. As in Mixtape, the song keeps its own details, so
+// its searches always look for it and never drift to whatever the last copy was. Mixtape §4.
 type Version = { id: string; no?: string[] };
 export const useVersions = create<{ songs: Record<string, Version> }>()(persist(() => ({ songs: {} }), { name: "versions" }));
 useVersions.subscribe((s, was) => {
@@ -154,20 +156,47 @@ useVersions.subscribe((s, was) => {
     if (v !== was.songs[id]?.id) (v ? keep(id, v) : findAgain([id])), replay(id);
   }
 });
-export function pin(t: Track, yt: string) {
-  const was = found[t.id] ?? t.id, no = useVersions.getState().songs[t.id]?.no ?? [];
-  if (yt === was) return;
-  useVersions.setState((s) => ({ songs: { ...s.songs, [t.id]: { id: yt, no: [...new Set([...no, was])].filter((x) => x !== yt && !foundWhenPlayed(x)) } } }));
-  notify({ text: "Playing a different version", detail: `${t.title} · ${t.artists.map((a) => a.name).join(", ")}`, thumb: t.thumb, ms: 8000, actions: [...(foundWhenPlayed(was) ? [] : [{ label: "Go Back", run: () => pin(t, was) }]), { label: "Try Another", run: () => void tryAnother(t) }] });
+// YouTube songs an earlier Wrong Version renamed to the copy they played; each gets its own details back from
+// YouTube the next time it's looked for.
+const renamed = new Set<string>(JSON.parse(localStorage.renamed ?? "null") ?? Object.keys(useVersions.getState().songs).filter((id) => !foundWhenPlayed(id)));
+localStorage.renamed = JSON.stringify([...renamed]);
+// Once: copies turned down while searches drifted to other songs are forgotten, so the song's own come back.
+if (localStorage.unrejected !== "1") (localStorage.unrejected = 1), useVersions.setState((s) => ({ songs: Object.fromEntries(Object.entries(s.songs).map(([k, v]) => [k, { id: v.id }])) }));
+async function own(t: Track) {
+  const d = renamed.has(t.id) ? await details(t.id).catch(() => undefined) : undefined;
+  if (!d?.title) return t;
+  renamed.delete(t.id), (localStorage.renamed = JSON.stringify([...renamed]));
+  const p = { title: d.title, artists: d.artists, album: d.album, albumId: d.albumId, duration: d.duration ?? t.duration };
+  patch(t.id, p);
+  return { ...t, ...p };
 }
-// The next likeliest copy you haven't turned down. Once every one has been tried, back to the first.
-async function tryAnother(t: Track) {
-  const list = await versions(t).catch(() => []), no = useVersions.getState().songs[t.id]?.no ?? [];
-  const next = list.find((c) => c.id !== found[t.id] && !no.includes(c.id));
-  if (next) return pin(t, next.id);
-  if (!list[0]) return notify({ warn: true, text: "No other versions found" });
-  useVersions.setState((s) => ({ songs: { ...s.songs, [t.id]: { id: list[0].id } } }));
-  notify({ text: "That was every version", detail: "Back to the first one" });
+const use = (t: Track, id: string, no?: string[]) => useVersions.setState((s) => ({ songs: { ...s.songs, [t.id]: { id, no } } }));
+const ruledOut = (no: string[]) => [...new Set(no)].filter((x) => !foundWhenPlayed(x));
+export function pin(t: Track, v: Track) {
+  const was = found[t.id] ?? t.id, no = useVersions.getState().songs[t.id]?.no ?? [];
+  if (v.id === was) return;
+  use(t, v.id, ruledOut([...no, was]).filter((x) => x !== v.id));
+  notify({ text: "Right version?", detail: `${v.title} · ${v.artists.map((a) => a.name).join(", ")}`, thumb: v.thumb, sticky: true, actions: [...(foundWhenPlayed(was) ? [] : [{ label: "Go back to the earlier version", icon: Undo2, run: () => back(t, was) }]), { label: "Try another version", icon: ThumbsDown, run: () => void tryAnother(t) }, { label: "Keep this version", icon: ThumbsUp, run: () => notify({ text: `Keeping this version of “${t.title}”` }) }] });
+}
+// The earlier copy was better after all: the new one is ruled out and the old one plays again.
+function back(t: Track, was: string) {
+  const s = useVersions.getState().songs[t.id];
+  use(t, was, ruledOut([...(s?.no ?? []), ...(s ? [s.id] : [])]).filter((x) => x !== was));
+  notify({ text: `Back to the earlier version of “${t.title}”` });
+}
+// Wrong Version: the next likeliest copy you haven't turned down plays, with a card to go back or try
+// another, as in Mixtape. Once every one has been tried, back to the first.
+export async function tryAnother(t: Track) {
+  const no = useVersions.getState().songs[t.id]?.no ?? [];
+  notify({ text: no.length ? `Looking for another version of “${t.title}” (${no.length} ruled out)…` : `Finding a different source for “${t.title}”…`, thumb: t.thumb, sticky: true });
+  t = await own(t);
+  const list = await versions(wanted(t)).catch(() => []), now = found[t.id] ?? t.id;
+  const next = list.find((c) => c.id !== now && !no.includes(c.id));
+  if (next) return pin(t, next);
+  if (!list.length) return notify({ warn: true, text: "No other versions found" });
+  if (!list.some((c) => c.id !== now)) return notify({ text: `That's the only version we could find for “${t.title}”` });
+  use(t, list[0].id);
+  notify({ text: `That's every version we could find for “${t.title}”`, detail: "Back to the first one" });
 }
 // A YouTube song whose sound runs well over or under its listed length is another cut of it: YouTube Music's
 // albums sometimes point a song at its music video ("Isterichka": listed 3:42, heard 4:09). Its released
@@ -183,8 +212,9 @@ export async function releasedCut(t: Track, heard: number) {
 // Lets these be looked for again next time they play.
 export const findAgain = (ids: string[]) => (ids.forEach((id) => delete found[id]), (localStorage.youtubeIds = JSON.stringify(found)));
 // Once, after karaoke and instrumental copies stopped counting as matches, and again after other people's uploads
-// went behind the artist's own: every song not pinned is looked for again.
-if (localStorage.refound !== "2") (localStorage.refound = 2), findAgain(Object.keys(found).filter((id) => !useVersions.getState().songs[id]));
+// went behind the artist's own, and once more after other people's uploads stopped ending the search: every song
+// not pinned is looked for again.
+if (localStorage.refound !== "3") (localStorage.refound = 3), findAgain(Object.keys(found).filter((id) => !useVersions.getState().songs[id]));
 
 // Covers (and lengths) for songs that came without them (a CSV), by ISRC, three calls out at a time so
 // others still get in. The songs on screen go first (onScreen: replacing the last screen's) and are drawn

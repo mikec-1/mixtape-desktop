@@ -88,15 +88,26 @@ export async function signInWith(provider: "google" | "apple") {
   await (await import("@tauri-apps/plugin-opener")).openUrl(data.url);
   const back = new URLSearchParams(await invoke<string>("oauth_wait"));
   void (await import("@tauri-apps/api/window")).getCurrentWindow().setFocus().catch(() => {});
-  const code = back.get("code");
-  if (!code) throw new Error(back.get("error_description") ?? "Signing in didn’t finish");
-  const { error: failed } = await c.exchangeCodeForSession(code);
-  if (failed) throw failed;
+  await land("signed-in", async () => {
+    const code = back.get("code");
+    if (!code) throw new Error(back.get("error_description") ?? "Signing in didn’t finish");
+    const { data: d, error: failed } = await c.exchangeCodeForSession(code);
+    if (failed) throw failed;
+    return made(d.user);
+  });
 }
 // Signing in on the website instead (the app with a site to go to): the site's own sign-in page, opened
 // with the port this app listens on and a one-off state. Once you sign in there (or press Continue, if you
 // already were) it sends the session back to the listener (handBack), which checks the state.
 const SITE = import.meta.env.VITE_SHARE_URL?.replace(/\/$/, "");
+// Does what the browser came back for, then sends the browser on to the site's page saying how that went
+// (done.tsx): `page`, the one `work` names instead, or `page?error`. With no site, account.rs says it itself.
+export async function land(page: string, work: () => Promise<string | void>) {
+  const tell = (to: string, failed = false) => inApp && void invoke("oauth_done", { to: SITE ? `${SITE}/${to}` : null, failed }).catch(() => {});
+  try { tell((await work()) || page); } catch (e) { tell(`${page}?error`, true); throw e; }
+}
+// An account made in the last ten minutes is new: its sign-up, not a sign-in.
+const made = (u?: User | null) => (u && Date.parse(u.last_sign_in_at ?? "") - Date.parse(u.created_at) < 600_000 ? "signed-up" : undefined);
 export const viaBrowser = inApp && !!SITE;
 export async function signInInBrowser() {
   const c = await auth();
@@ -105,11 +116,14 @@ export async function signInInBrowser() {
   await (await import("@tauri-apps/plugin-opener")).openUrl(`${SITE}/?app=${port}&state=${state}`);
   const back = new URLSearchParams(await invoke<string>("oauth_wait"));
   void (await import("@tauri-apps/api/window")).getCurrentWindow().setFocus().catch(() => {});
-  if (back.get("error")) throw new Error(`The website couldn’t sign you in: ${back.get("error_description") ?? back.get("error")}`);
-  if (back.get("state") !== state) throw new Error("The website answered an older sign-in. Press Sign in again.");
-  if (!back.get("access_token") || !back.get("refresh_token")) throw new Error("The website didn’t send your account back. Press Sign in again.");
-  const { error } = await c.setSession({ access_token: back.get("access_token")!, refresh_token: back.get("refresh_token")! });
-  if (error) throw new Error(`Mixtape couldn’t use the website’s sign-in: ${error.message}`);
+  await land("signed-in", async () => {
+    if (back.get("error")) throw new Error(`The website couldn’t sign you in: ${back.get("error_description") ?? back.get("error")}`);
+    if (back.get("state") !== state) throw new Error("The website answered an older sign-in. Press Sign in again.");
+    if (!back.get("access_token") || !back.get("refresh_token")) throw new Error("The website didn’t send your account back. Press Sign in again.");
+    const { data, error } = await c.setSession({ access_token: back.get("access_token")!, refresh_token: back.get("refresh_token")! });
+    if (error) throw new Error(`Mixtape couldn’t use the website’s sign-in: ${error.message}`);
+    return made(data.user);
+  });
 }
 export const cancelBrowserSignIn = () => void invoke("oauth_start").catch(() => {}); // a new start gives up on the wait
 // The website's half: opened by the app (?app=<port>&state=…), it remembers that for this tab, through a

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fetch as appFetch, inApp } from "./http";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { table, useAccount } from "./account";
+import { land, table, useAccount } from "./account";
 import { addPlays, follow, idb, likedAs, newPlaylist, notify, plural, useLibrary } from "./store";
 import { bareTitle, importRows, pool, readLink } from "./import";
 import { length } from "./deezer";
@@ -56,9 +56,11 @@ export async function connect() {
     back = new URLSearchParams(await invoke<string>("oauth_wait"));
     void (await import("@tauri-apps/api/window")).getCurrentWindow().setFocus().catch(() => {});
   }
-  const code = back.get("code");
-  if (!code || back.get("state") !== state) throw new Error(back.get("error") === "access_denied" ? "You didn’t allow it on Spotify" : "Signing in didn’t finish");
-  await grant({ grant_type: "authorization_code", code, redirect_uri: REDIRECT, code_verifier: verifier });
+  await land("spotify/connected", async () => {
+    const code = back.get("code");
+    if (!code || back.get("state") !== state) throw new Error(back.get("error") === "access_denied" ? "You didn’t allow it on Spotify" : "Signing in didn’t finish");
+    await grant({ grant_type: "authorization_code", code, redirect_uri: REDIRECT, code_verifier: verifier });
+  });
   // Plays from before signing in come over with the import, if you pick them.
   useSpotify.setState({ name: (await api("/me")).display_name, lastPlay: Date.now(), at: Date.now() });
   void link().catch(() => {});

@@ -15,6 +15,8 @@ try {
   const label = "__TAURI_INTERNALS__" in window && (await import("@tauri-apps/api/window")).getCurrentWindow().label;
   // The web's Spotify sign-in popup, back from Spotify: its opener reads the address and closes it.
   if (window.opener && /[?&]state=/.test(location.search)) Root = () => null;
+  // Where a sign-in from the app sends the browser (done.tsx): no library, no sign-in wall.
+  else if (label === false && (await import("./done")).isDone(location.pathname)) Root = (await import("./done")).default;
   else if (label === "mini") Root = (await import("./mini")).default;
   else if (label === "bar") Root = (await import("./bar")).default;
   else {

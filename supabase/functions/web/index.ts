@@ -8,6 +8,7 @@ const HOSTS = /(^|\.)(youtube\.com|google\.com|googleapis\.com|ytimg\.com|deezer
 const key = crypto.subtle.importKey("raw", new TextEncoder().encode(Deno.env.get("RESOLVER_TOKEN")), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 const sign = async (vid: string, exp: string) => btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign("HMAC", await key, new TextEncoder().encode(`${vid}.${exp}`))))).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" })[c]!);
 const resolver = () => ({ base: Deno.env.get("RESOLVER_URL")!.replace(/\/+$/, ""), auth: { Authorization: `Bearer ${Deno.env.get("RESOLVER_TOKEN")}` } });
+const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 const DROP = ["host", "origin", "referer", "authorization", "apikey", "x-client-info", "cookie", "content-length"];
 
 Deno.serve(async (req) => {
@@ -46,7 +47,11 @@ Deno.serve(async (req) => {
   if (!target || new URL(target).protocol !== "https:" || !HOSTS.test(new URL(target).hostname)) return new Response("not allowed", { status: 403, headers: cors });
   const headers = new Headers(req.headers);
   for (const h of DROP) headers.delete(h);
-  const res = await fetch(target, { method: req.method, headers, body: req.method === "GET" ? undefined : await req.arrayBuffer() });
+  // YouTube's pages fail from here for Chrome 152 and up, so every call goes out as one known browser, like the desktop app's.
+  // ponytail: a pinned version; bump it if YouTube starts turning it away.
+  headers.set("user-agent", UA);
+  // A failed call answers with the reason (and CORS), so the browser sees it instead of a bare "Failed to fetch".
+  const res = await fetch(target, { method: req.method, headers, body: req.method === "GET" ? undefined : await req.arrayBuffer() }).catch((e) => new Response(String(e), { status: 502 }));
   const out = new Headers(cors);
   for (const h of ["content-type", "cache-control"]) res.headers.get(h) && out.set(h, res.headers.get(h)!);
   return new Response(res.body, { status: res.status, headers: out });

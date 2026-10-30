@@ -19,8 +19,9 @@ addEventListener("error", (e) => e.target instanceof HTMLImageElement && (e.targ
 addEventListener("load", (e) => e.target instanceof HTMLImageElement && e.target.style.visibility && (e.target.style.visibility = ""), true);
 
 // The welcome is for a new library: one that's already got things in it (from before it existed) skips it.
+// With accounts, the account decides once you're in (below): a new install's empty library says nothing about it.
 function firstLaunch() {
-  if (localStorage.onboarded || !useLibrary.persist.hasHydrated()) return false; // not read yet: can't tell
+  if (mustSignIn || localStorage.onboarded || !useLibrary.persist.hasHydrated()) return false; // not read yet: can't tell
   const l = useLibrary.getState();
   const fresh = !l.liked.length && !l.playlists.length && !l.saved.length && !l.followed.length && !useAccount.getState().user;
   if (!fresh) localStorage.onboarded = 1;

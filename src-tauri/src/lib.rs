@@ -98,6 +98,20 @@ async fn dance(app: tauri::AppHandle, id: String, frame: Vec<u8>) {
     let _ = (app, id, frame);
 }
 
+/// A small update (update.ts), downloaded while you listen and put in as the app quits, so it never stops a song.
+static STAGED: std::sync::Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>> = std::sync::Mutex::new(None);
+
+#[tauri::command]
+async fn stage_update(app: tauri::AppHandle, version: String) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let update = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?.ok_or("No update")?;
+    if update.version != version { return Err("Another version".into()) }
+    let bytes = update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    // On Windows the installer runs silently (installMode "quiet") and doesn't open the app again: you quit it.
+    *STAGED.lock().unwrap() = Some((update.restart_after_install(false), bytes));
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -123,7 +137,7 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = webview;
         })
-        .invoke_handler(tauri::generate_handler![float, popup, dance, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear, can_align, #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))] align::align_words])
+        .invoke_handler(tauri::generate_handler![float, stage_update, popup, dance, local::scan_music, local::allow_music, local::local_lyrics, local::read_text, offline::downloads_dir, offline::save_download, offline::delete_downloads, offline::downloads_size, account::oauth_start, account::oauth_wait, discord::discord_set, discord::discord_clear, can_align, #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))] align::align_words])
         .setup(|app| {
             // Built here rather than from config alone so downloads (Settings → Export) save to Downloads;
             // WKWebView cancels them without a handler.
@@ -167,6 +181,9 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 app.webview_windows().values().for_each(|w| sink(&w.as_ref().window()));
+                if let Some((update, bytes)) = STAGED.lock().unwrap().take() {
+                    let _ = update.install(bytes);
+                }
             }
             // Clicking the Dock icon brings back a window that's hidden (in the tray, or opened at login).
             #[cfg(target_os = "macos")]

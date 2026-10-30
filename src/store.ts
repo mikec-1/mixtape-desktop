@@ -39,7 +39,7 @@ type State = {
   loading: boolean;
   error: string;
   toast?: Toast;
-  update?: { version: string; notes?: string; run?: () => void }; // a new version, at the top of the window (update.ts); no run while it downloads
+  update?: { version: string; notes?: string; run?: () => void; done?: true }; // a new version, at the top of the window (update.ts); no run while it downloads, done once it went in (What's New)
   more?: "finding" | "none"; // Autoplay looking for similar songs, or finding none
 };
 // A modal over everything: the lyrics editor (for a song, by its key in lyrics.ts useMine; track when it's
@@ -952,6 +952,7 @@ type Settings = {
   menuBarFor: string[]; // the accounts that turned it on; it only shows while one of them is signed in
   listenBrainzToken: string; lastfmSessionKey: string; lastfmUsername: string; discordRpc: boolean;
   resumeQueue: boolean; pauseOnDevice: boolean; // Settings → Playback
+  autoUpdate: boolean; // Settings → About: small updates install as you quit (update.ts)
 };
 export type LyricsSource = "apple" | "lrclib" | "netease";
 const defaultCountry = () => {
@@ -973,7 +974,7 @@ export const useSettings = create<Settings>()(
       autoplay: true, reduceMotion: false, zoom: 1, lyricsOff: [], history: true, keymap: {}, loginHidden: false, closeToTray: false, menuBar: "off", menuBarFor: [],
       country: defaultCountry(),
       listenBrainzToken: "", lastfmSessionKey: "", lastfmUsername: "", discordRpc: false,
-      resumeQueue: true, pauseOnDevice: true,
+      resumeQueue: true, pauseOnDevice: true, autoUpdate: true,
     }),
     // Version 1: the menu bar player starts off, so it only appears once you turn it on.
     { name: "settings", version: 1, migrate: (s) => ({ ...(s as Settings), menuBar: "off", menuBarFor: [] }) },

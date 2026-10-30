@@ -2434,7 +2434,7 @@ function Warning({ d }: { d: Extract<Dialog, { kind: "warn" }> }) {
 const bullet = /^[-*•]\s+/;
 function UpdateNotes() {
   const update = useStore((s) => s.update);
-  if (!update?.run) return null;
+  if (!update?.run && !update?.done) return null;
   const run = update.run, lines = (update.notes ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
   const changes = lines.some((l) => bullet.test(l)) ? lines.filter((l) => bullet.test(l)).map((l) => l.replace(bullet, "")) : lines; // the tag's "Patch notes" title line repeats the heading
   return (
@@ -2442,16 +2442,18 @@ function UpdateNotes() {
       <div className="flex min-h-0 gap-4">
         <img src={appIcon} alt="" className="size-14 shrink-0 rounded-[12px]" />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <p className="text-[15px] font-semibold">Mixtape {update.version} is out</p>
-          <p className="mt-0.5 text-[13px] text-muted">You have {version}.</p>
+          <p className="text-[15px] font-semibold">{run ? `Mixtape ${update.version} is out` : `What's new in Mixtape ${update.version}`}</p>
+          <p className="mt-0.5 text-[13px] text-muted">{run ? `You have ${version}.` : "It went in as you quit."}</p>
           <ul className="mt-4 min-h-0 list-disc overflow-y-auto rounded-md border border-ink/10 py-3 pr-4 pl-8 text-sm leading-relaxed">
             {changes.map((c, i) => <li key={i}>{c}</li>)}
           </ul>
           {/* Squared-off like the note at the top of the window (App.tsx UpdateNotice), not the app's round pills. */}
           <div className="mt-5 flex items-center gap-2 text-[15px] font-semibold">
+            {run ? <>
             <button onClick={closeDialog} className="press h-9 rounded-lg bg-ink/[0.07] px-4 hover:bg-ink/[0.12]">Cancel</button>
             <button onClick={() => useStore.setState({ dialog: undefined, update: undefined })} className="press ml-auto h-9 rounded-lg bg-ink/[0.07] px-4 hover:bg-ink/[0.12]">Remind Me Later</button>
             <button autoFocus onClick={() => (closeDialog(), run())} className="press h-9 rounded-lg bg-accent px-4 text-paper">Update</button>
+            </> : <button autoFocus onClick={() => useStore.setState({ dialog: undefined, update: undefined })} className="press ml-auto h-9 rounded-lg bg-accent px-4 text-paper">Done</button>}
           </div>
         </div>
       </div>
@@ -3920,6 +3922,7 @@ const openLink = (url: string) => void (canHaveFiles ? import("@tauri-apps/plugi
 
 function About() {
   const owner = useOwner();
+  const autoUpdate = useSettings((s) => s.autoUpdate);
   const [update, setUpdate] = useState<string>();
   const look = () => (setUpdate("Checking…"), import("./update").then((u) => u.checkForUpdate()).then(setUpdate, () => setUpdate("Couldn't check. Try again later.")));
   return (
@@ -3940,6 +3943,13 @@ function About() {
           {owner && <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={quiet}>Show the Welcome Again</button>}
         </div>
       </div>
+      {canHaveFiles && (
+        <div className={`${card} mt-8`}>
+          <Row label="Update Automatically" detail={autoUpdate ? "Small updates install as you quit Mixtape. New features still ask first." : "Every update asks first"}>
+            <Switch label="Update Automatically" on={autoUpdate} onChange={(autoUpdate) => useSettings.setState({ autoUpdate })} />
+          </Row>
+        </div>
+      )}
       <section className="mt-8">
         <h3 className={`${subhead} mb-1`}>Licences</h3>
         <p className="mb-3 text-xs text-muted">Mixtape is built on these open-source projects. Thank you.</p>

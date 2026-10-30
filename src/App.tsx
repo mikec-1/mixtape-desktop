@@ -427,7 +427,7 @@ function Offline() {
 // Closing it hides it till the next launch, or Settings → About.
 function UpdateNotice() {
   const update = useStore((s) => s.update);
-  if (!update) return null;
+  if (!update || update.done) return null;
   return (
     <div role="status" className="relative flex w-max max-w-[min(460px,calc(100vw-32px))] animate-enter flex-col items-center gap-2.5 rounded-[10px] bg-white px-10 py-3 text-black shadow-xl shadow-black/25">
       <div className="max-w-full truncate text-[15px] font-semibold">{update.run ? `Mixtape ${update.version} is out` : `Updating to ${update.version}…`}</div>

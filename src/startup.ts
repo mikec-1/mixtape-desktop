@@ -15,8 +15,12 @@ import { audio, cycleRepeat, fillUpNext, lyricNow, next, prev, spectrum, subscri
 const win = getCurrentWindow();
 if (!(await win.isVisible()) && !useSettings.getState().loginHidden) void win.show();
 
-// A new version, looked for once the window is up (update.ts). Not in dev, which has no release to compare.
-if (!import.meta.env.DEV) setTimeout(() => void import("./update").then((u) => u.checkForUpdate()).catch(() => {}), 5000);
+// A new version, looked for once the window is up and every 6 hours after (update.ts). Not in dev, which has no release to compare.
+if (!import.meta.env.DEV) {
+  const look = () => void import("./update").then((u) => u.checkForUpdate()).catch(() => {});
+  setTimeout(look, 5000), setInterval(look, 6 * 3600_000);
+  void import("./update").then((u) => u.sayUpdated());
+}
 
 const show = () => void win.show().then(() => win.setFocus());
 const isMac = /Mac/.test(navigator.userAgent);

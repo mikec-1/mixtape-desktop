@@ -100,6 +100,8 @@ export async function signInWith(provider: "google" | "apple") {
 // with the port this app listens on and a one-off state. Once you sign in there (or press Continue, if you
 // already were) it sends the session back to the listener (handBack), which checks the state.
 const SITE = import.meta.env.VITE_SHARE_URL?.replace(/\/$/, "");
+// The privacy policy and terms (legal.tsx), on the website: from the app, the live site's.
+export const legal = (page: "privacy" | "terms") => (inApp ? `${SITE ?? "https://www.mixtaped.tech"}/${page}` : `/${page}`);
 // Does what the browser came back for, then sends the browser on to the site's page saying how that went
 // (done.tsx): `page`, the one `work` names instead, or `page?error`. With no site, account.rs says it itself.
 export async function land(page: string, work: () => Promise<string | void>) {

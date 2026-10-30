@@ -449,7 +449,10 @@ export async function addPlays(add: Play[]) {
 export function clearHistory(quiet?: boolean) {
   void kv("readwrite", (s) => s.clear(), "plays");
   useHistory.setState({ recent: [] });
-  if (!quiet) notify({ text: "History Cleared" });
+  if (quiet) return; // signing out: the account's plays aren't yours to clear here
+  notify({ text: "History Cleared" });
+  // And the Spotify plays the server fetched for it (spotify_history), so they're gone there too.
+  void import("./account").then(({ table, useAccount }) => { const id = useAccount.getState().user?.id; if (id) return table(`spotify_plays?user_id=eq.${id}`, { method: "DELETE" }); }).catch(() => {});
 }
 
 const onlineChange = (cb: () => void) => (addEventListener("online", cb), addEventListener("offline", cb), () => (removeEventListener("online", cb), removeEventListener("offline", cb)));

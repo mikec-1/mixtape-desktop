@@ -4,7 +4,7 @@ import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
-import { type LucideIcon, ArrowDown, ArrowUp, Ban, CircleCheck, CircleMinus, CirclePlus, Eye, FolderInput, FolderPlus, HeartOff, ImageOff, Import, ListEnd, ListMinus, ListPlus, ListStart, ListX, Lock, PinOff, RefreshCw, UserMinus, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MessageSquare, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X } from "lucide-react";
+import { type LucideIcon, ArrowDown, ArrowUp, Ban, CircleCheck, CircleMinus, CirclePlus, Eye, FolderInput, FolderPlus, HeartOff, ImageOff, Import, ListEnd, ListMinus, ListPlus, ListStart, ListX, Lock, PinOff, RefreshCw, UserMinus, TriangleAlert, ChevronRight, ListMusic, SlidersHorizontal, SunMoon, LockKeyhole, Command, CodeXml, LifeBuoy, MessageSquare, MicVocal, UserRound, LibraryBig, Power, ArrowDownToLine, Disc3, Link2, ArrowUpDown, Trash2, AudioLines, BadgeCheck, CircleArrowDown, Clock3, CaseSensitive, Check, ChevronDown, Copy, Download, Link, Ellipsis, EyeOff, Folder as FolderIcon, GripVertical, HardDrive, Heart, History as HistoryIcon, ImageDown, ImagePlus, Languages, LayoutGrid, List, Maximize2, Music, PencilLine, Pin, Play, Minus, Pause, Plus, Quote, Radio, Search as SearchIcon, Shuffle, Sparkle, Upload, UserCheck, UserPlus, X, Shield, FileText } from "lucide-react";
 import { Menu, Submenu, type MenuOptions } from "@tauri-apps/api/menu";
 import {
   EQ_BANDS, EQ_PRESETS, addToPlaylist, canAlign, audio, back, go, clearHistory, fill as fillIn, clearQueue, deleteFolder, deletePlaylist, describePlaylist, duplicatePlaylist, enqueue, firstPlayable, jump, libraryKey, moveInQueue,
@@ -18,7 +18,7 @@ import { albumByName, art, artist, artistByName, charts, collection as ytCollect
 import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, pin, topSongs as dzTop, useOriginals, useVersions, withGuests, youtubeId } from "./deezer";
 import { addFolder, canHaveFiles, fileTrack, guessTags, identify, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
-import { canSignIn, claimHandle, cleanHandle, deleteAccount, exportAll, fromLink, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, unsynced, useAccount, useOwner, type Profile } from "./account";
+import { canSignIn, claimHandle, cleanHandle, deleteAccount, exportAll, fromLink, legal, playlistLink, profileLink, publicProfile, setProfile, sharedLink, sharedPlaylist, signOut, syncNow, unsynced, useAccount, useOwner, type Profile } from "./account";
 import { SignIn, useFree } from "./signin";
 import { bind, comboFrom, comboOf, KEYS, resetKeys, ZOOMS, setRecording, showCombo } from "./keys";
 import { version } from "../package.json";
@@ -3895,7 +3895,7 @@ function Privacy() {
           <Switch label="Send Crash Reports" on={crashes} onChange={(on) => (on ? void import("./crash").then((c) => c.turnOn()) : useSettings.setState({ crashReports: false }))} />
         </Row>
       </div>
-      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">{crashes ? "Besides crash reports, Mixtape" : "Mixtape"} sends nothing about you anywhere. Your history and settings never leave this computer; with an account, only your library syncs.</p>
+      <p className="mt-6 max-w-xl text-xs leading-relaxed text-muted">Mixtape has no ads or tracking. Your history and settings stay on this computer, and with an account your library syncs. Searches and songs go to the services that have them, like YouTube Music, and plays go to Last.fm or ListenBrainz once you connect them. <button onClick={() => openLink(legal("privacy"))} className="underline underline-offset-2 hover:text-ink">Privacy Policy</button></p>
     </>
   );
 }
@@ -3970,6 +3970,8 @@ function About() {
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           <button onClick={() => openLink("https://github.com/mikec-1/mixtape-desktop")} className={quiet}><CodeXml size={15} /> GitHub</button>
           <button onClick={() => openLink("https://github.com/mikec-1/mixtape-desktop/issues")} className={quiet}><LifeBuoy size={15} /> Report a Problem</button>
+          <button onClick={() => openLink(legal("privacy"))} className={quiet}><Shield size={15} /> Privacy Policy</button>
+          <button onClick={() => openLink(legal("terms"))} className={quiet}><FileText size={15} /> Terms of Use</button>
           <button onClick={() => void import("./crash").then((c) => c.feedback())} className={quiet}><MessageSquare size={15} /> Send Feedback</button>
           {owner && <button onClick={() => ((sessionStorage.welcome = 1), location.reload())} className={quiet}>Show the Welcome Again</button>}
         </div>

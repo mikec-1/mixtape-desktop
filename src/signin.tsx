@@ -1,6 +1,6 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { claimHandle, cleanHandle, handleFree, setProfile, cancelBrowserSignIn, enterCode, handBack, handingOff, resendSignUp, sendCode, signInInBrowser, signInWith, signInWithPassword, signOut, signUp, useAccount, viaBrowser } from "./account";
+import { claimHandle, cleanHandle, handleFree, setProfile, cancelBrowserSignIn, enterCode, handBack, handingOff, resendSignUp, sendCode, signInInBrowser, signInWith, signInWithPassword, signOut, signUp, useAccount, viaBrowser, inApp, legal } from "./account";
 
 // Signing in: email and password, or Google. Making an account then asks for the
 // 6-digit code Supabase emails to confirm the address ({{ .Token }} in its "Confirm signup" template).
@@ -22,6 +22,9 @@ const say = (e: unknown) => {
   if (/started again/i.test(m)) return ""; // you pressed Cancel
   return m ? (/[.!?]$/.test(m) ? m : m + ".") : "Something went wrong. Try again."; // say what actually happened
 };
+
+// A link that opens in your browser from the app, and in a new tab on the web.
+const out = (url: string) => ({ href: url, target: "_blank", rel: "noopener", onClick: (e: { preventDefault(): void }) => void (inApp && (e.preventDefault(), import("@tauri-apps/plugin-opener").then((o) => o.openUrl(url)))) });
 
 export function SignIn({ poster = false }: { poster?: boolean }) {
   const [mode, setMode] = useState<Mode>("in");
@@ -188,6 +191,7 @@ export function SignIn({ poster = false }: { poster?: boolean }) {
         </svg>
         {busy === "google" ? "Finish in your browser…" : "Continue with Google"}
       </button>
+      <p className={`mt-5 text-xs leading-relaxed ${s.quiet}`}>By continuing, you agree to the <a {...out(legal("terms"))} className={s.link}>Terms of Use</a> and acknowledge the <a {...out(legal("privacy"))} className={s.link}>Privacy Policy</a>.</p>
     </div>
   );
 }

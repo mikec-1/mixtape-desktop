@@ -2080,7 +2080,10 @@ type Words = { words: Word[]; groups: Group[] };
 function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: Track; lyrics: ReturnType<typeof useLyrics>; extras: Extras; live: boolean; size?: keyof typeof SIZES }) {
   const { value, loading } = lyrics;
   const at = useLine(value);
-  const ahead = useLine(value, LEAD);
+  const still = useSettings((s) => s.lyricsStill);
+  // Reduce Lyric Motion: the lines move as one block, as the line lights up rather than before it (it read as two moves).
+  const early = useLine(value, LEAD);
+  const ahead = still ? at : early;
   const box = useRef<HTMLDivElement>(null);
   const held = useRef(0); // when you last scrolled by hand: the view leaves you there for five seconds
   const [scrolling, setScrolling] = useState(false);
@@ -2093,7 +2096,6 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
   // Not while the song's own word timings are on their way: a guess runs ahead of a pause ("Uh, … Been
   // dreaming"), then jumps back when they land.
   const estimate = useSettings((s) => s.lyricsWords) && !lyrics.timing;
-  const still = useSettings((s) => s.lyricsStill);
 
   // The lines around the one being sung, as words: their own timings when they have them (and show their
   // own words, not a romanisation); otherwise, unless Settings says not to, spread by the words' lengths.
@@ -2121,9 +2123,9 @@ function LyricLines({ track, lyrics, extras, live, size = "panel" }: { track?: T
     if (!live || !root || !value) return void (shown.current = null);
     const el = synced && Date.now() - held.current >= 5000 ? root.querySelector<HTMLElement>(`[data-line="${Math.max(0, ahead)}"]`) : null;
     // The same song's lyrics changing (its words found, or moved to fit the song) glide too.
-    const glide = shown.current === track?.id && !still;
+    const glide = shown.current === track?.id;
     shown.current = track?.id ?? null;
-    cascade(root, el, Math.max(0, ahead), motion.current, glide);
+    cascade(root, el, Math.max(0, ahead), motion.current, glide, still);
   });
 
   // The line being sung, every frame while playing and again on a pause or seek: the fill, each word's
@@ -2362,13 +2364,13 @@ function breathe(el: HTMLElement, start: number, end: number, now: number, still
 // it springs from where it was on screen to where it now is, each a beat (50 ms) after the one before.
 // Where it was counts its spring so far and any change of layout since the last render: as in am-lyrics,
 // heights change at once and the springs carry the move. Only translate is animated, which the GPU runs
-// on its own. glide false: just jump.
+// on its own. glide false: just jump. together: every line at once, no beat between them (Spotify's scroll).
 type Spring = { anim: Animation; pos: number; vel: number; delay: number };
 type Motion = { springs: Map<Element, Spring>; tops: WeakMap<Element, number>; width: number };
 let unit: { offset: number; p: number; v: number }[] | undefined;
 const springFrames = (pos: number, vel: number) =>
   (unit ??= Array.from({ length: 97 }, (_, f) => ({ offset: f / 96, p: f === 96 ? 0 : sampleSpring(1, 0, (1.2 * f) / 96, 10).position, v: f === 96 ? 0 : sampleSpring(0, 1, (1.2 * f) / 96, 10).position }))).map(({ offset, p, v }) => ({ offset, translate: `0 ${pos * p + vel * v}px` }));
-function cascade(root: HTMLElement, el: HTMLElement | null, ref: number, m: Motion, glide: boolean) {
+function cascade(root: HTMLElement, el: HTMLElement | null, ref: number, m: Motion, glide: boolean, together = false) {
   const { springs } = m;
   const items = [...root.querySelectorAll<HTMLElement>("[data-line]")];
   const known = glide && root.clientWidth === m.width; // no resize since, so the old places still hold
@@ -2396,7 +2398,7 @@ function cascade(root: HTMLElement, el: HTMLElement | null, ref: number, m: Moti
     const pos = pose.position + delta + moved[i];
     const top = item.offsetTop;
     if (Math.abs(i - ref) > 20 || (!poses[i] && (top + item.offsetHeight < lo || top > hi)) || (Math.abs(pos) < 0.1 && Math.abs(pose.velocity) < 0.1)) return;
-    const wait = retarget ? pose.delay : Math.max(0, Math.min(4, delta >= 0 ? i - ref : ref - i)) * 0.05;
+    const wait = retarget ? pose.delay : together ? 0 : Math.max(0, Math.min(4, delta >= 0 ? i - ref : ref - i)) * 0.05;
     const anim = item.animate(springFrames(pos, pose.velocity), { duration: 1200, delay: wait * 1000, fill: "both", easing: "linear" });
     const s = { anim, pos, vel: pose.velocity, delay: wait };
     springs.set(item, s);
@@ -3477,7 +3479,7 @@ function LyricsPane() {
             <Switch label="Word by Word on Every Song" on={lyricsWords} onChange={(lyricsWords) => set({ lyricsWords })} />
           </Row>
         )}
-        <Row label="Reduce Lyric Motion" detail={lyricsStill ? "Lines jump to the one being sung, and words stay put" : "Lines glide and words move, whatever the system’s Reduce Motion is set to"}>
+        <Row label="Reduce Lyric Motion" detail={lyricsStill ? "Lines scroll together to the one being sung, and words stay put" : "Lines glide and words move, whatever the system’s Reduce Motion is set to"}>
           <Switch label="Reduce Lyric Motion" on={lyricsStill} onChange={(lyricsStill) => set({ lyricsStill })} />
         </Row>
         <Row label="Moving Lyrics Background" detail={lyricsDrift ? "The artwork’s colours drift behind the lyrics, whatever Reduce Motion is set to" : "The artwork’s colours stay still behind the lyrics"}>

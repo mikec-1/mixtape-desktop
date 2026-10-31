@@ -140,30 +140,48 @@ const toVideos = (items: YTNodes.MusicTwoRowItem[] = []): Track[] =>
 
 // A search reply's list, and one shelf (Albums, Artists…) of an "all kinds" reply.
 const searchItems = (r: YTMusic.Search) => r.contents?.filterType(YTNodes.MusicShelf).flatMap((x) => x.contents.filterType(YTNodes.MusicResponsiveListItem)) ?? [];
-const shelfItems = (r: YTMusic.Search, title: string) =>
-  r.contents?.filterType(YTNodes.MusicShelf).find((x) => x.title.toString().toLowerCase() === title)?.contents.filterType(YTNodes.MusicResponsiveListItem) ?? [];
+// The "All" search's results of one kind. YouTube Music used to group them in titled shelves and now sends one
+// flat list of single items, so both are read and sorted by kind (the top result's related uploads are left out).
+const ofKind = (r: YTMusic.Search, kind: string) =>
+  [...(r.contents?.filterType(YTNodes.MusicShelf) ?? []), ...(r.contents?.filterType(YTNodes.ItemSection) ?? [])].flatMap((x) => x.contents?.filterType(YTNodes.MusicResponsiveListItem) ?? []).filter((x) => x.item_type === kind);
+
+// Something a search found, to open (an artist or album) or play (a song): the top result and the suggestions.
+export type Hit = { id: string; title: string; sub: string; thumb?: string; track?: Track };
+const toHits = (items: YTNodes.MusicResponsiveListItem[]): Hit[] =>
+  items.flatMap((x) =>
+    x.item_type === "artist" ? toArtists([x]).map((a) => ({ id: a.id, title: a.name, sub: "Artist", thumb: a.thumb }))
+    : x.item_type === "album" || x.item_type === "playlist" ? toAlbums([x]).map((a) => ({ id: a.id, title: a.title, sub: [a.kind ?? "Album", a.by].filter(Boolean).join(" • "), thumb: a.thumb }))
+    : toTracks([x]).map((t) => ({ id: t.id, title: t.title, sub: [x.item_type === "video" ? "Video" : "Song", t.artists.map((a) => a.name).join(", ")].join(" • "), thumb: t.thumb, track: t })),
+  );
 
 export async function search(query: string) {
   const music = (await yt).music;
   const [songs, all] = await Promise.all([music.search(query, { type: "song" }), music.search(query)]);
-  // The "top result" card; only artists get the big treatment for now.
+  const found = toTracks(searchItems(songs));
+  // The "top result" card: an artist or album opens, a song or video plays. Its subtitle reads "Song • Drake • Views • 2:53".
   const card = all.contents?.firstOfType(YTNodes.MusicCardShelf);
-  const id: string | undefined = card?.on_tap?.payload?.browseId;
-  const top = card && id?.startsWith("UC")
-    ? { id, name: card.title.toString(), about: card.subtitle.toString().split(" • ").pop(), thumb: card.thumbnail?.contents?.[0]?.url }
-    : undefined;
+  const { browseId, videoId } = (card?.on_tap?.payload ?? {}) as { browseId?: string; videoId?: string };
+  const sub = card?.subtitle.toString() ?? "";
+  const linked = card?.subtitle.runs?.flatMap((r) => { const id = (r as { endpoint?: { payload?: { browseId?: string } } }).endpoint?.payload?.browseId; return id?.startsWith("UC") ? [{ name: r.text, id }] : []; }) ?? [];
+  const thumb = card?.thumbnail?.contents?.[0]?.url;
+  const track: Track | undefined = videoId ? (found.find((t) => t.id === videoId) ?? { id: videoId, title: card!.title.toString(), artists: withUnlinked(linked, artistLine(sub)), thumb, duration: sub.split(" • ").find((p) => /^\d+:\d\d/.test(p)) }) : undefined;
+  const top: Hit | undefined = card && (browseId || videoId) ? { id: (browseId ?? videoId)!, title: card.title.toString(), sub, thumb, track } : undefined;
   return {
     top,
-    songs: toTracks(searchItems(songs)),
-    albums: toAlbums(shelfItems(all, "albums")),
-    artists: toArtists(shelfItems(all, "artists")),
+    songs: found,
+    albums: toAlbums(ofKind(all, "album")),
+    artists: toArtists(ofKind(all, "artist")),
+    playlists: toAlbums(ofKind(all, "playlist")),
   };
 }
 
 type Kinds = { song: Track[]; video: Track[]; album: Album[]; playlist: Album[]; artist: SearchArtist[] };
 export async function searchKind<K extends keyof Kinds>(query: string, type: K): Promise<Kinds[K]> {
   const items = searchItems(await (await yt).music.search(query, { type }));
-  return (type === "song" || type === "video" ? toTracks(items) : type === "artist" ? toArtists(items) : toAlbums(items)) as Kinds[K];
+  if (type !== "artist") return (type === "song" || type === "video" ? toTracks(items) : toAlbums(items)) as Kinds[K];
+  // YouTube Music finds only a few artists by name, so the first one's "Fans might also like" follow, as on Spotify.
+  const found = toArtists(items), fans = found[0] ? (await artist(found[0].id).catch(() => undefined))?.fans ?? [] : [];
+  return [...found, ...fans.filter((f) => !found.some((a) => a.id === f.id))] as Kinds[K];
 }
 
 // Plain YouTube, for uploads that aren't on YouTube Music (remixes, sped-up versions, live sets).
@@ -178,10 +196,14 @@ export async function searchYouTube(query: string): Promise<Track[]> {
   }));
 }
 
-export async function suggestions(query: string): Promise<string[]> {
-  if (!query.trim()) return [];
+// What the search box suggests as you type: a few artists, albums and songs, then completed searches.
+export async function suggestions(query: string): Promise<{ hits: Hit[]; text: string[] }> {
   const sections = await (await yt).music.getSearchSuggestions(query).catch(() => []);
-  return [...new Set(sections.flatMap((s) => s.contents.filterType(YTNodes.SearchSuggestion).map((c) => c.suggestion.toString())))];
+  const all = sections.flatMap((s) => [...s.contents]);
+  return {
+    hits: toHits(all.filter((c): c is YTNodes.MusicResponsiveListItem => c.is(YTNodes.MusicResponsiveListItem))),
+    text: [...new Set(all.flatMap((c) => (c.is(YTNodes.SearchSuggestion) ? [c.suggestion.toString()] : [])))],
+  };
 }
 
 export type Shelf = { title: string; tracks: Track[]; albums: Album[]; artists?: SearchArtist[] };

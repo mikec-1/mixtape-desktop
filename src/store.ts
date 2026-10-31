@@ -559,7 +559,7 @@ const failed = new Map<string, number>();
 export function warm(t: Track) {
   if (t.file || cache.has(t.id) || busy >= (useSettings.getState().ahead >= 5 ? 3 : 2) || Date.now() - (failed.get(t.id) ?? 0) < 300_000 || unavailable(t)) return;
   busy++;
-  fetchCached(t).catch(() => failed.set(t.id, Date.now())).finally(() => (busy--, prefetch()));
+  return fetchCached(t).catch(() => failed.set(t.id, Date.now())).finally(() => (busy--, prefetch()));
 }
 // The songs ahead in the queue, as many as Settings says. Ones already fetched are touched, so songs
 // you only rested on drop out of the cache before them.

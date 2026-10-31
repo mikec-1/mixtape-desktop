@@ -14,7 +14,7 @@ import {
   type Dialog, type Library as LibraryData, type LibraryFilter, type LibraryKind, type LibrarySort, type Play as PlayRow, type TrackSort, type View,
 } from "./store";
 import { asText, estimateWords, forgetLyrics, groups, isRtl, lineNow, lookAgain, lrcTime, lyricsNow, nudgeLyrics, removeMine, sampleSpring, saveMine, songKey, springProgress, titleOf, translateTarget, useExtras, useLine, useLyrics, useMine, useTiming, wordProgress, type Group, type Lyrics, type Word } from "./lyrics";
-import { albumByName, art, artist, artistByName, charts, collection as ytCollection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Artist, type SearchArtist, type Track } from "./yt";
+import { albumByName, art, artist, artistByName, charts, collection as ytCollection, discography, newReleases, parseSecs, topSongs, home, lastHome, search, searchKind, suggestions, type Album, type Hit, type Artist, type SearchArtist, type Track } from "./yt";
 import { album as deezerAlbum, covers as coversFor, findAgain, isDeezer, original, topSongs as dzTop, tryAnother, useOriginals, withGuests } from "./deezer";
 import { addFolder, canHaveFiles, fileTrack, guessTags, identify, localTracks, lookUp, addedFiles, removeFiles, removeFolder, rescan, useLocal, useLocalTracks, type SongEdit } from "./local";
 import { canDownload, download, downloadedSize, listTracks, progress, removeAllDownloads, removeDownload, forgetArt, useOffline } from "./offline";
@@ -66,14 +66,28 @@ const genres = [
   ["Latin", "#1e3264"],
 ] as const;
 
-const TABS = { all: "All", songs: "Songs", videos: "Videos", albums: "Albums", artists: "Artists", playlists: "Playlists" };
-const KINDS = { songs: "song", videos: "video", albums: "album", artists: "artist", playlists: "playlist" } as const;
+const TABS = { all: "All", songs: "Songs", albums: "Albums", artists: "Artists", playlists: "Playlists" };
+const KINDS = { songs: "song", albums: "album", artists: "artist", playlists: "playlist" } as const;
 const rememberTrack = (t: Track) => addRecentSearch({ id: t.id, kind: "track", title: t.title, subtitle: t.artists.map((a) => a.name).join(", "), thumb: t.thumb, track: t });
+// A top result or suggestion: a song plays (then its radio), an artist or album opens.
+const openHit = (h: Hit) =>
+  h.track ? (rememberTrack(h.track), startRadio(h.track))
+  : h.id.startsWith("UC") ? (addRecentSearch({ id: h.id, kind: "artist", title: h.title, thumb: h.thumb }), open({ name: "artist", id: h.id, by: h.title }))
+  : (addRecentSearch({ id: h.id, kind: "album", title: h.title, subtitle: h.sub.split(" • ").slice(1).join(", ") || undefined, thumb: h.thumb }), open({ name: "collection", id: h.id }));
+
+// The pill picked last and each search's results, so coming back to Search, or to a pill, draws at once.
+// ponytail: in memory for this launch only, the last 50.
+let lastTab: keyof typeof TABS = "all";
+const kept = new Map<string, unknown>();
+const keep = <T,>(key: string, v: T) => (kept.set(key, v), kept.size > 50 && kept.delete(kept.keys().next().value!), v);
+type Found = Awaited<ReturnType<typeof search>>;
+type Items = (Track & Album & SearchArtist)[];
 
 export function Search() {
   const query = useStore((s) => s.query);
-  const [term, setTerm] = useState("");
-  const [tab, setTab] = useState<keyof typeof TABS>("all");
+  const [term, setTerm] = useState(() => query.trim());
+  const [tab, pickTab] = useState(lastTab);
+  const setTab = (t: keyof typeof TABS) => (pickTab((lastTab = t)));
   const [pick, setPick] = useState(-1);
   const [typing, setTyping] = useState(false);
   const recents = useRecentSearches((s) => s.items);
@@ -83,24 +97,44 @@ export function Search() {
   }, [query]);
   const online = useOnline(); // a search that failed offline runs again on reconnect
   const ok = term && !fromLink(term);
-  const found = useAsync(() => (ok && tab === "all" ? search(term) : undefined), [term, tab, online]);
-  // Which tab they're for: the last tab's results stay up while the next tab's load, and aren't its kind.
-  const kind = useAsync(() => (ok && tab !== "all" ? (searchKind(term, KINDS[tab]) as Promise<(Track & Album & SearchArtist)[]>).then((items) => ({ tab, items })) : undefined), [term, tab, online]);
-  const { error, loading } = tab === "all" ? found : kind;
-  const sugs = useAsync(() => (typing && query.trim() ? suggestions(query) : undefined), [typing && query]).data ?? [];
+  const key = `${tab}:${term}`;
+  // Tagged with its pill: the last pill's results stay up while the next one's load, and aren't its kind.
+  const { data, error, loading } = useAsync(() => (ok && !kept.has(key) ? (tab === "all" ? search(term) : searchKind(term, KINDS[tab])).then((v) => ({ tab, v: keep(key, v) })) : undefined), [key, online]);
+  const shown = kept.get(key) ?? (data?.tab === tab ? data.v : undefined);
+  const all = tab === "all" ? (shown as Found | undefined) : undefined;
+  const list = tab !== "all" ? (shown as Items | undefined) : undefined;
+  const sugs = useAsync(() => (typing && query.trim() ? suggestions(query) : undefined), [typing && query]).data;
+  const options: (Hit | string)[] = typing && sugs ? [...sugs.hits.slice(0, 3), ...sugs.text.slice(0, 6)] : [];
   // A Mixtape link pasted in opens what it's for.
   useEffect(() => {
     const view = fromLink(query);
     if (view) useStore.setState({ query: "" }), open(view);
   }, [query]);
   const go = (q: string) => (useStore.setState({ query: q }), setTerm(q), setTyping(false), addRecentSearch({ id: q.toLowerCase(), kind: "query", title: q }));
+  const choose = (o: Hit | string) => (typeof o === "string" ? go(o) : (setTyping(false), openHit(o)));
   // A song picked from results plays alone, then its radio (Mixtape §9), not the rest of the results.
   const playFrom = (list: Track[]) => (i: number) => (rememberTrack(list[i]), startRadio(list[i]));
-  const all = tab === "all" ? found.data : undefined;
-  const list = kind.data?.tab === tab ? kind.data.items : undefined;
+  const more = (t: keyof typeof TABS) => <button onClick={(e) => (e.currentTarget.closest("main > div")?.scrollTo({ top: 0 }), setTab(t))} className="press text-sm font-semibold text-muted hover:text-ink">Show all</button>;
   const top = all?.top;
+  // The top 3 songs start fetching, one after another so the queue's own fetches still get through: almost every pick.
+  const first = (all ? [top?.track, ...all.songs] : tab === "songs" ? (list as Track[] | undefined) ?? [] : []).filter((t): t is Track => !!t).slice(0, 3);
+  useEffect(() => {
+    let gone = false;
+    void (async () => { for (const t of first) if (!gone) await browsing(t); })();
+    return () => void (gone = true);
+  }, [first.map((t) => t.id).join()]);
+  // An artist on top fills the rows from their page, as on Spotify: their albums, and their "Fans might also like"
+  // rather than strangers who share the name (and it warms the page for the click).
+  const byArtist = !!top && !top.track && top.id.startsWith("UC");
+  const page = useAsync(() => (byArtist ? loadArtist(top!.id, top!.title).page : undefined), [byArtist && top!.id]).data;
+  const artists = !all ? [] : !byArtist ? all.artists : page?.fans.length ? page.fans : page ? all.artists.filter((a) => a.id !== top!.id) : [];
+  const albums = !all ? [] : [...all.albums, ...(byArtist && page ? page.albums.filter((a) => !all.albums.some((b) => b.id === a.id)) : [])];
   // The first songs found get their titles as released (deezer.ts original).
   useEffect(() => void original((all?.songs ?? (tab === "songs" ? list : undefined) ?? []).slice(0, 10)), [all, list, tab]);
+  const typed = query.toLowerCase();
+  // A typed search that led to a card you opened (typed "drake", opened Drake) shows only as the card.
+  const things = recents.filter((r) => r.kind !== "query"), queries = recents.filter((r) => r.kind === "query" && !things.some((x) => x.title.toLowerCase() === r.id));
+  const forget = (id: string) => useRecentSearches.setState((s) => ({ items: s.items.filter((x) => x.id !== id) }));
 
   return (
     <div className="animate-enter px-8 pt-14">
@@ -111,10 +145,10 @@ export function Search() {
           value={query}
           onChange={(e) => (useStore.setState({ query: e.target.value }), setTyping(true), setPick(-1))}
           onKeyDown={(e) => {
-            const n = typing ? sugs.length : 0;
+            const n = options.length;
             if (n && (e.key === "ArrowDown" || e.key === "ArrowUp")) e.preventDefault(), setPick((i) => (i + (e.key === "ArrowDown" ? 1 : n - 1 + (i < 0 ? 1 : 0))) % n);
             else if (n && e.key === "Escape") e.stopPropagation(), setTyping(false);
-            else if (e.key === "Enter" && query.trim()) go(sugs[pick] && typing ? sugs[pick] : query.trim());
+            else if (e.key === "Enter" && query.trim()) options[pick] !== undefined ? choose(options[pick]) : go(query.trim());
           }}
           placeholder="Search"
           aria-label="Search"
@@ -123,13 +157,29 @@ export function Search() {
           spellCheck={false}
           className="room w-full bg-transparent text-display outline-none placeholder:text-ink"
         />
-        {typing && sugs.length > 0 && (
+        {options.length > 0 && (
           <div role="listbox" className="absolute top-full left-0 z-50 mt-2 w-full max-w-xl overflow-hidden rounded-2xl bg-paper py-1.5 shadow-2xl ring-1 ring-ink/10">
-            {sugs.slice(0, 8).map((s, i) => (
-              <button key={s} role="option" aria-selected={i === pick} onMouseDown={(e) => (e.preventDefault(), go(s))} onMouseEnter={() => setPick(i)} className={`flex w-full items-center gap-3.5 px-4 py-2.5 text-left font-medium ${i === pick ? "bg-ink/[0.07]" : ""}`}>
-                <SearchIcon size={15} className="shrink-0 text-muted" />
-                <span className="truncate">{s}</span>
-              </button>
+            {options.map((o, i) => (
+              <Fragment key={typeof o === "string" ? o : o.id}>
+                {typeof o === "string" && typeof options[i - 1] === "object" && <div className="mx-4 my-1.5 h-px bg-ink/10" />}
+                <button role="option" aria-selected={i === pick} onMouseDown={(e) => (e.preventDefault(), choose(o))} onMouseEnter={() => setPick(i)} className={`flex w-full items-center gap-3.5 px-4 text-left ${typeof o === "string" ? "py-2.5" : "py-2"} ${i === pick ? "bg-ink/[0.07]" : ""}`}>
+                  {typeof o === "string" ? (
+                    <>
+                      <SearchIcon size={15} className="shrink-0 text-muted" />
+                      {/* What you typed stays plain; the rest of the suggestion is bold, as on Spotify. */}
+                      <span className="truncate">{o.toLowerCase().startsWith(typed) ? <>{o.slice(0, typed.length)}<b className="font-bold">{o.slice(typed.length)}</b></> : <b className="font-bold">{o}</b>}</span>
+                    </>
+                  ) : (
+                    <>
+                      <img src={art(o.thumb, 96)} alt="" className={`size-10 shrink-0 bg-ink/[0.06] object-cover ${o.id.startsWith("UC") ? "rounded-full" : "rounded-md"}`} />
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold">{o.title}</span>
+                        <span className="block truncate text-sm text-muted">{o.sub}</span>
+                      </span>
+                    </>
+                  )}
+                </button>
+              </Fragment>
             ))}
           </div>
         )}
@@ -147,29 +197,42 @@ export function Search() {
         <>
           {recents.length > 0 && (
             <Section title="Recent Searches" action={<button onClick={() => useRecentSearches.setState({ items: [] })} className="press text-sm font-semibold text-muted hover:text-ink">Clear</button>}>
-              <div className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:none]">
-                {recents.map((r) => (
-                  <div key={r.id} className="group relative w-36 shrink-0">
-                    <button
-                      onClick={() => (r.kind === "query" ? go(r.title) : r.kind === "artist" ? open({ name: "artist", id: r.id, by: r.title }) : r.kind === "album" ? open({ name: "collection", id: r.id }) : r.track && startRadio(r.track))}
-                      className="press block w-full text-left"
-                    >
-                      <div className={`grid aspect-square place-items-center overflow-hidden bg-ink/[0.06] text-muted ${r.kind === "artist" ? "rounded-full" : "rounded-xl"}`}>
-                        {r.thumb ? <img src={art(r.thumb, 300)} alt="" className="size-full object-cover" /> : <SearchIcon size={28} />}
-                      </div>
-                      <div className="mt-2 truncate font-semibold">{r.title}</div>
-                      <div className="truncate text-sm text-muted">{r.subtitle ?? { query: "Search", artist: "Artist", album: "Album", track: "Song" }[r.kind]}</div>
-                    </button>
-                    <button
-                      onClick={() => useRecentSearches.setState((s) => ({ items: s.items.filter((x) => x.id !== r.id) }))}
-                      aria-label={`Remove ${r.title}`}
-                      className="press absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
+              {/* What you typed is a pill; what you opened from the results is a card. */}
+              {queries.length > 0 && (
+                <div className={`flex flex-wrap gap-2 ${things.length ? "mb-6" : ""}`}>
+                  {queries.map((r) => (
+                    <span key={r.id} className="flex h-9 items-center rounded-full bg-ink/[0.07] transition-colors hover:bg-ink/[0.12]">
+                      <button onClick={() => go(r.title)} className="press h-full max-w-64 truncate pr-1 pl-4 text-sm font-semibold">{r.title}</button>
+                      <button onClick={() => forget(r.id)} aria-label={`Remove ${r.title}`} className="press mr-1.5 grid size-6 place-items-center rounded-full text-muted hover:bg-ink/10 hover:text-ink"><X size={13} /></button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {things.length > 0 && (
+                <div className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:none]">
+                  {things.map((r) => (
+                    <div key={r.id} className="group relative w-36 shrink-0">
+                      <button
+                        onClick={() => (r.kind === "artist" ? open({ name: "artist", id: r.id, by: r.title }) : r.kind === "album" ? open({ name: "collection", id: r.id }) : r.track && startRadio(r.track))}
+                        className="press block w-full text-left"
+                      >
+                        <div className={`grid aspect-square place-items-center overflow-hidden bg-ink/[0.06] text-muted ${r.kind === "artist" ? "rounded-full" : "rounded-xl"}`}>
+                          {r.thumb && <img src={art(r.thumb, 300)} alt="" className="size-full object-cover" />}
+                        </div>
+                        <div className="mt-2 truncate font-semibold">{r.title}</div>
+                        <div className="truncate text-sm text-muted">{r.subtitle ?? { query: "Search", artist: "Artist", album: "Album", track: "Song" }[r.kind]}</div>
+                      </button>
+                      <button
+                        onClick={() => forget(r.id)}
+                        aria-label={`Remove ${r.title}`}
+                        className="press absolute top-1.5 right-1.5 grid size-7 place-items-center rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Section>
           )}
           <Section title="Browse All">
@@ -189,31 +252,54 @@ export function Search() {
         <div aria-busy={loading} className={`transition-opacity duration-200 ${loading ? "opacity-40" : ""}`}>
           {all ? (
             <>
-              {top && (
-                <button onClick={() => (addRecentSearch({ id: top.id, kind: "artist", title: top.name, thumb: top.thumb }), open({ name: "artist", id: top.id, by: top.name }))} {...warm(top)} className="group mt-10 flex items-center gap-6 text-left">
-                  <div className="size-32 shrink-0 overflow-hidden rounded-full bg-ink/[0.06]">
-                    <img src={art(top.thumb, 400)} alt="" className="size-full object-cover" />
-                  </div>
-                  <div>
-                    <div className="text-5xl font-extrabold tracking-[-0.04em]">{top.name}</div>
-                    <div className="mt-2 text-muted">{top.about}</div>
-                  </div>
-                </button>
-              )}
-              <Section title="Songs">
-                <TrackList tracks={all.songs} onPlay={playFrom(all.songs)} />
-              </Section>
-              {all.albums.length > 0 && <Section title="Albums"><Albums items={all.albums} remember /></Section>}
-              {all.artists.length > 0 && <Section title="Artists"><ArtistCards items={all.artists} remember /></Section>}
+              {/* Spotify's layout: the top result beside the first songs, then a row of each kind. */}
+              <div className={`grid gap-x-6 ${top ? "@3xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]" : ""}`}>
+                {top && <Section title="Top Result"><TopResult hit={top} /></Section>}
+                {all.songs.length > 0 && (
+                  <Section title="Songs" action={more("songs")}>
+                    <TrackList tracks={all.songs.slice(0, 4)} header={false} noAlbum={!!top} onPlay={playFrom(all.songs)} />
+                  </Section>
+                )}
+              </div>
+              {artists.length > 0 && <Section title="Artists" action={more("artists")}><ArtistCards items={artists} remember /></Section>}
+              {albums.length > 0 && <Section title="Albums" action={more("albums")}><Albums items={albums} remember /></Section>}
+              {all.playlists.length > 0 && <Section title="Playlists" action={more("playlists")}><Albums items={all.playlists} remember /></Section>}
             </>
           ) : !list?.length ? (
             <p className="mt-8 text-muted">No {TABS[tab].toLowerCase()} found for “{term}”.</p>
           ) : (
             <div className="mt-6">
-              {tab === "songs" || tab === "videos" ? <TrackList tracks={list} onPlay={playFrom(list)} /> : tab === "artists" ? <ArtistCards items={list} grid remember /> : <Albums items={list} grid remember />}
+              {tab === "songs" ? <TrackList tracks={list} onPlay={playFrom(list)} /> : tab === "artists" ? <ArtistCards items={list} grid remember /> : <Albums items={list} grid remember />}
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// The big card for the best match: round art for an artist, square for the rest, and a play button for what plays.
+function TopResult({ hit }: { hit: Hit }) {
+  const artist = hit.id.startsWith("UC"), [kind, ...rest] = hit.sub.split(" • ");
+  const playable = hit.track || !artist;
+  return (
+    <div className="group relative rounded-2xl bg-ink/[0.05] p-5 transition-colors duration-200 hover:bg-ink/[0.09]">
+      <button onClick={() => openHit(hit)} {...(hit.track ? warmSong(hit.track) : artist ? warm({ id: hit.id, name: hit.title }) : {})} className="press block w-full text-left">
+        <img src={art(hit.thumb, 400)} alt="" className={`size-24 bg-ink/[0.06] object-cover shadow-lg shadow-black/20 ${artist ? "rounded-full" : "rounded-xl"}`} />
+        <div className="mt-5 truncate text-[32px] leading-tight font-extrabold tracking-[-0.03em]">{hit.title}</div>
+        <div className="mt-1.5 flex min-w-0 items-center gap-2 text-sm text-muted">
+          <span className="shrink-0 rounded-full bg-ink/10 px-2.5 py-0.5 text-xs font-semibold text-ink">{kind}</span>
+          <span className="truncate">{rest.join(" • ")}</span>
+        </div>
+      </button>
+      {playable && (
+        <button
+          onClick={() => (hit.track ? openHit(hit) : playCollection(hit.id))}
+          aria-label={`Play ${hit.title}`}
+          className="absolute right-5 bottom-5 grid size-12 translate-y-1 place-items-center rounded-full bg-white text-black opacity-0 shadow-lg shadow-black/25 transition-[opacity,translate,scale] duration-200 ease-(--ease-out) group-hover:translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 active:scale-95"
+        >
+          <Play size={20} className="ml-0.5 fill-current" />
+        </button>
       )}
     </div>
   );
@@ -4134,8 +4220,8 @@ export function QueuePanel() {
 // reorder; times: when each was played (History), shown in place of its length; header false: without
 // the header (an artist's few top songs). plain: an album's own songs, numbered, without covers or album.
 // Hidden songs and blocked artists' are dimmed.
-type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number[], to: number) => void; times?: number[]; added?: boolean; header?: boolean; onPlay?: (i: number) => void };
-function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, added, header = true, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
+type TrackListProps = { tracks: Track[]; numbered?: boolean; plain?: boolean; playlist?: string; from?: string; origin?: number[]; onMove?: (from: number[], to: number) => void; times?: number[]; added?: boolean; header?: boolean; noAlbum?: boolean; onPlay?: (i: number) => void };
+function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, times, added, header = true, noAlbum, onPlay = (i) => play(tracks, i, from) }: TrackListProps) {
   const current = useStore((s) => s.queue[s.index]), on = (t: Track) => !!current && sameSong(current, t);
   useLibrary((s) => s.hidden), useLibrary((s) => s.blocked), useOnline(), useMissing((s) => s.songs); // re-dim as they change
   const saved = useOffline((s) => s.songs);
@@ -4291,7 +4377,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
   };
   const num = numbered || plain;
   // Which of Title, Album and Date Added show (by their place in trackCols), and the grid they make.
-  const flex = [0, ...(plain ? [] : [1]), ...(added ? [2] : [])];
+  const flex = [0, ...(plain || noAlbum ? [] : [1]), ...(added ? [2] : [])];
   const grid = { gridTemplateColumns: `${num ? "28px " : ""}${flex.map((c) => `minmax(0,${cols[c]}fr)`).join(" ")} 32px 56px` };
   return (
     <>
@@ -4340,7 +4426,7 @@ function TrackList({ tracks, numbered, plain, playlist, from, origin, onMove, ti
                 </div>
                 {gone(t) && <Unavailable />}
               </div>
-              {!plain && (
+              {!plain && !noAlbum && (
                 <div className={`min-w-0 truncate text-sm text-muted ${dim ? "opacity-45" : ""}`}>
                   {t.album && <button onClick={() => goToAlbum(t)} className="relative max-w-full truncate text-left hover:text-ink hover:underline">{t.album}</button>}
                 </div>

@@ -8,6 +8,9 @@ export const webHeaders = (bearer = anon) => ({ apikey: anon, authorization: `Be
 
 export const fetch: typeof globalThis.fetch = inApp ? tauriFetch : async (input, init) => {
   const req = new Request(input, init);
+  // LRCLIB lets browsers ask it directly, and limits each address: through the function every listener
+  // shares one address, and it turns them away as busy.
+  if (req.url.startsWith("https://lrclib.net/")) return globalThis.fetch(req);
   const headers = new Headers(req.headers);
   for (const [k, v] of Object.entries(webHeaders())) headers.set(k, v);
   return globalThis.fetch(`${web}?u=${encodeURIComponent(req.url)}`, { method: req.method, headers, body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(), signal: req.signal });

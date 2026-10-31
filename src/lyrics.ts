@@ -76,7 +76,9 @@ const print = (r: Hit) => (r.syncedLyrics ?? r.plainLyrics ?? "").split(/\r?\n/)
 async function lrclibApi<T>(path: "get" | "search", q: Record<string, string>): Promise<T | undefined> {
   const go = () => http(`https://lrclib.net/api/${path}?${new URLSearchParams(q)}`, { headers: LRCLIB, signal: timeout() });
   let r = await go();
-  if (r.status === 503 || r.status === 429) r = await new Promise((ok) => setTimeout(ok, 1000 * Math.min(5, +(r.headers.get("Retry-After") ?? 0) || 1))).then(go); // busy, or too many asks
+  // Busy, or too many asks: asked again after 1, 2 and 3 s, since its busy spells come in bursts that
+  // outlast one short wait.
+  for (let i = 1; i <= 3 && (r.status === 503 || r.status === 429); i++) r = await new Promise((ok) => setTimeout(ok, 1000 * Math.min(5, +(r.headers.get("Retry-After") ?? 0) || i))).then(go);
   if (r.status === 404) return undefined;
   if (!r.ok) throw new Error(`LRCLIB: ${r.status}`);
   return r.json();
@@ -581,6 +583,15 @@ const SPELLED = /^[\p{Script=Latin}\p{Script=Cyrillic}\p{N}\p{P}\p{S}\s]*$/u;
 const CYRILLIC = Object.fromEntries([..."абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"].map((c, i) => [c, "A B V G D E YO ZH Z I Y K L M N O P R S T U F H TS CH SH SHCH - Y - E YU YA I YI YE G".split(" ")[i].replace("-", "")]));
 const letters = (w: string) => w.toLowerCase().replace(/[а-яёіїєґ]/g, (c) => CYRILLIC[c]).normalize("NFKD").replace(/\p{M}/gu, "").replace(/[’‘`]/g, "'").toUpperCase().replace(/[^A-Z']/g, "");
 const hash = (lines: Line[]) => [...lines.map((l) => `${l.time}${l.text}`).join("\n")].reduce((h, c) => (h * 31 + c.codePointAt(0)!) | 0, 0) >>> 0;
+// On the web the same aligner runs in a worker (align.ts), kept for the next song so the model loads once.
+type Aligned = [number, ([number, number][] | null)[], boolean];
+let worker: Worker | undefined, asked = 0;
+const answers = new Map<number, (r: { ok?: Aligned; error?: string }) => void>();
+const alignHere = (pcm: Float32Array, lines: unknown, alt?: unknown) => new Promise<Aligned>((ok, no) => {
+  if (!worker) (worker = new Worker(new URL("./align.ts", import.meta.url), { type: "module" })).onmessage = ({ data }) => (answers.get(data.id)?.(data), answers.delete(data.id));
+  answers.set(++asked, (r) => (r.ok ? ok(r.ok) : no(new Error(r.error))));
+  worker.postMessage({ id: asked, pcm, lines, alt }, [pcm.buffer]);
+});
 async function align(t: Track, l: Lyrics, key: string, fetched: boolean): Promise<(Word[] | null)[]> {
   const kept = await idbGet<{ by: number; words: (Word[] | null)[] }>(key).catch(() => undefined);
   if (kept) return slide(t, l, kept, fetched);
@@ -597,7 +608,9 @@ async function align(t: Track, l: Lyrics, key: string, fetched: boolean): Promis
     const buf = await new OfflineAudioContext(1, 1, 16000).decodeAudioData(await songBytes(t));
     const pcm = new Float32Array(buf.length);
     for (let c = 0; c < buf.numberOfChannels; c++) buf.getChannelData(c).forEach((v, i) => (pcm[i] += v / buf.numberOfChannels));
-    const [slid, got, alt] = await invoke<[number, ([number, number][] | null)[], boolean]>("align_words", new Uint8Array(pcm.buffer), { headers: { "x-lines": JSON.stringify(shown.send), ...(other?.want.length && { "x-alt": JSON.stringify(other.send) }) } });
+    const [slid, got, alt] = "__TAURI_INTERNALS__" in window
+      ? await invoke<Aligned>("align_words", new Uint8Array(pcm.buffer), { headers: { "x-lines": JSON.stringify(shown.send), ...(other?.want.length && { "x-alt": JSON.stringify(other.send) }) } })
+      : await alignHere(pcm, shown.send, other?.want.length ? other.send : undefined);
     // The song fit the other copy clearly better: it's what this song shows from now on, its words kept under it.
     if (alt) {
       ({ want, parts } = other!);
@@ -642,9 +655,15 @@ export function useLyrics(t?: Track, words = false) {
   // the same recording): ask again under this one.
   const name = t && songKey(t);
   useEffect(() => void (t && !mine && fetched.value === null && missed.get(heard(t)) !== name && lookAgain(t)), [fetched.value, name]);
+  // A source busy for longer than find waits (LRCLIB often is): asked again by itself every 10 s while it's on screen.
+  useEffect(() => {
+    if (!fetched.failed) return;
+    const id = setTimeout(() => navigator.onLine && fetched.retry(), 10000);
+    return () => clearTimeout(id);
+  }, [fetched.failed]);
   const base = mine ? fromMine(mine) : fetched.value;
   // Aligned before the timing nudge, so nudging shifts the found words instead of looking again in the wrong place.
-  const want = useSettings((s) => s.lyricsWords) && words && "__TAURI_INTERNALS__" in window && !!t && !!base?.synced;
+  const want = useSettings((s) => s.lyricsWords) && words && !!t && !!base?.synced;
   const key = want ? `words:v5:${heard(t!)}:${hash(base!.lines)}` : undefined;
   const aligned = useResult(key, () => align(t!, base!, key!, !mine));
   const value = timed(withWords(base, aligned.value), by);
@@ -659,10 +678,10 @@ export const lyricsNow = (t: Track, raw = false) => {
   return raw ? l : timed(l, useTiming.getState().songs[songKey(t)]);
 };
 
-// The next song's lyrics load while this one plays, so they're there the moment it starts.
+// This song's lyrics load before you press play (the one left up at launch too), and the next song's while
+// this one plays, so they're there the moment it starts.
 useStore.subscribe((s, was) => {
-  const t = s.queue[s.index + 1];
-  if (t && (s.index !== was.index || s.queue !== was.queue)) fetchOnce(`lyrics:${heard(t)}`, () => stored(t));
+  if (s.index !== was.index || s.queue !== was.queue) for (const t of [s.queue[s.index], s.queue[s.index + 1]]) if (t) fetchOnce(`lyrics:${heard(t)}`, () => stored(t));
 });
 
 // The mini player shows the line being sung (store.ts sends it along), unless Settings turned that off:
